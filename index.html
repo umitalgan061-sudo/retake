@@ -1,1 +1,771 @@
-/api/documents/doc_8c7d11ca502141d48a77e0d171e44c38
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Retake — AI Face Swap</title>
+  <style>
+    :root { --bg:#0b0d12; --card:#13161f; --fg:#e8ecf4; --muted:#7a849a; --acc:#00d4aa; --acc2:#6366f1; --err:#ff4d6a; --warn:#ffb84d; --border:#232836; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html,body{height:100%}
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;background:var(--bg);color:var(--fg);line-height:1.5;display:flex;flex-direction:column;min-height:100vh}
+    a{color:var(--acc);text-decoration:none}a:hover{text-decoration:underline}
+    header{padding:1rem 1.25rem;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;gap:1rem;flex-wrap:wrap}
+    header h1{font-size:1.25rem;font-weight:700;letter-spacing:-0.02em;display:flex;align-items:center;gap:.5rem}
+    header h1 svg{width:28px;height:28px}
+    .status{display:flex;align-items:center;gap:.5rem;font-size:.75rem;padding:.25rem .6rem;border-radius:999px;background:var(--card);border:1px solid var(--border)}
+    .status.ok{border-color:var(--acc);color:var(--acc)}
+    .status.err{border-color:var(--err);color:var(--err)}
+    .status.wip{border-color:var(--warn);color:var(--warn)}
+    main{flex:1;padding:1.5rem 1.25rem;max-width:980px;width:100%;margin:0 auto;display:grid;gap:1.25rem}
+    .panel{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:1.25rem;display:grid;gap:1rem}
+    .panel h2{font-size:.875rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+    .dropzone{border:2px dashed var(--border);border-radius:10px;padding:2rem;text-align:center;cursor:pointer;transition:border-color .2s,background .2s}
+    .dropzone:hover,.dropzone.active{border-color:var(--acc);background:rgba(0,212,170,.05)}
+    .dropzone input{display:none}
+    .dropzone svg{width:48px;height:48px;color:var(--muted);margin-bottom:.75rem}
+    .dropzone p{color:var(--muted);font-size:.875rem}
+    .preview{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:.75rem}
+    .preview-item{position:relative;aspect-ratio:1;border-radius:8px;overflow:hidden;background:#0e1117;border:1px solid var(--border)}
+    .preview-item img{width:100%;height:100%;object-fit:cover}
+    .preview-item .badge{position:absolute;top:.35rem;right:.35rem;background:rgba(0,0,0,.7);color:var(--acc);font-size:.625rem;padding:.1rem .35rem;border-radius:4px;font-weight:600}
+    .controls{display:flex;flex-wrap:wrap;gap:.75rem;align-items:center}
+    .control-group{display:flex;flex-direction:column;gap:.25rem;min-width:140px}
+    .control-group label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+    select,input[type=range]{appearance:none;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--fg);padding:.5rem .75rem;font-size:.8125rem}
+    select:focus,input[type=range]:focus{outline:none;border-color:var(--acc)}
+    input[type=range]{width:100%;height:6px;padding:0;-webkit-appearance:none}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:var(--acc);cursor:pointer;border:none;transition:transform .15s}
+    input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.15)}
+    input[type=range]::-moz-range-thumb{width:16px;height:16px;border-radius:50%;background:var(--acc);cursor:pointer;border:none}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;padding:.6rem 1.25rem;border-radius:10px;font-weight:600;font-size:.875rem;cursor:pointer;border:none;transition:transform .1s,opacity .2s,background .2s}
+    .btn:active{transform:scale(.98)}
+    .btn:disabled{opacity:.5;cursor:not-allowed}
+    .btn-primary{background:linear-gradient(135deg,var(--acc),var(--acc2));color:#051014}
+    .btn-primary:hover{filter:brightness(1.08)}
+    .btn-ghost{background:transparent;color:var(--fg);border:1px solid var(--border)}
+    .btn-ghost:hover{background:var(--bg);border-color:var(--acc)}
+    .result{display:none;grid-template-columns:1fr 1fr;gap:1rem;align-items:start}
+    .result.visible{display:grid}
+    .canvas-wrap{position:relative;background:#0e1117;border-radius:10px;overflow:hidden;border:1px solid var(--border);aspect-ratio:1}
+    .canvas-wrap canvas{width:100%;height:100%;display:block}
+    .canvas-wrap .overlay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:.8125rem;pointer-events:none}
+    .log{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.7rem;color:var(--muted);max-height:180px;overflow:auto;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.75rem;white-space:pre-wrap;line-height:1.6}
+    .log .ts{color:#4a5368}
+    .log .ok{color:var(--acc)}
+    .log .err{color:var(--err)}
+    .log .warn{color:var(--warn)}
+    .toast{position:fixed;bottom:1.25rem;right:1.25rem;padding:.75rem 1rem;background:var(--card);border:1px solid var(--border);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.4);display:flex;align-items:center;gap:.5rem;transform:translateY(120px);opacity:0;transition:transform .3s,opacity .3s;z-index:100}
+    .toast.show{transform:translateY(0);opacity:1}
+    .toast.ok{border-color:var(--acc)}
+    .toast.err{border-color:var(--err)}
+    .toast.warn{border-color:var(--warn)}
+    footer{padding:1rem 1.25rem;color:var(--muted);font-size:.7rem;text-align:center;border-top:1px solid var(--border)}
+    @media (max-width:720px){.result{grid-template-columns:1fr}.controls{flex-direction:column;align-items:stretch}.control-group{width:100%}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      Retake
+    </h1>
+    <div class="status wip" id="modelStatus">Model yükleniyor…</div>
+  </header>
+  <main>
+    <section class="panel" aria-labelledby="refTitle">
+      <h2 id="refTitle">Referans Yüzler (20 adet, depodan yükleniyor)</h2>
+      <div class="preview" id="refPreview" role="list" aria-label="Referans yüz önizlemeleri"></div>
+      <div class="log" id="refLog" aria-live="polite"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="targetTitle">
+      <h2 id="targetTitle">Hedef Fotoğraf</h2>
+      <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="Hedef fotoğraf seç veya sürükle bırak">
+        <input type="file" id="fileInput" accept="image/*" capture="environment" />
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <p>Hedef fotoğrafı buraya sürükleyin veya tıklayın</p>
+        <p style="margin-top:.5rem;font-size:.7rem;color:var(--muted)">JPG, PNG, WebP — Maks 20 MB</p>
+      </div>
+      <div class="preview" id="targetPreview" style="display:none" role="list" aria-label="Hedef fotoğraf önizlemesi"></div>
+    </section>
+
+    <section class="panel" aria-labelledby="ctrlTitle">
+      <h2 id="ctrlTitle">Ayarlar</h2>
+      <div class="controls">
+        <div class="control-group">
+          <label>Benzerlik Eşiği</label>
+          <input type="range" id="simThreshold" min="0.3" max="0.9" step="0.05" value="0.55" />
+          <span id="simVal" style="font-size:.75rem;color:var(--muted)">0.55</span>
+        </div>
+        <div class="control-group">
+          <label>Blend Oranı</label>
+          <input type="range" id="blendRatio" min="0.5" max="1.0" step="0.05" value="0.85" />
+          <span id="blendVal" style="font-size:.75rem;color:var(--muted)">0.85</span>
+        </div>
+        <div class="control-group">
+          <label>Mesh Kalitesi</label>
+          <select id="meshQuality">
+            <option value="fast">Hızlı (Delaunay)</option>
+            <option value="balanced" selected>Dengeli</option>
+            <option value="high">Yüksek (Poisson)</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>Poz Düzeltme</label>
+          <select id="poseCorrection">
+            <option value="none">Yok</option>
+            <option value="affine" selected>Affine</option>
+            <option value="perspective">Perspektif</option>
+          </select>
+        </div>
+        <div class="control-group">
+          <label>Çıktı Formatı</label>
+          <select id="outputFormat">
+            <option value="png" selected>PNG (şeffaf)</option>
+            <option value="jpeg">JPEG</option>
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:.75rem;flex-wrap:wrap;margin-top:.5rem">
+        <button class="btn btn-primary" id="processBtn" disabled>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 9 2 9"/></svg>
+          İşle ve Yüz Değiştir
+        </button>
+        <button class="btn btn-ghost" id="downloadBtn" style="display:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          İndir
+        </button>
+        <button class="btn btn-ghost" id="shareBtn" style="display:none">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.58" y2="10.49"/></svg>
+          Paylaş
+        </button>
+        <button class="btn btn-ghost" id="clearBtn" style="margin-left:auto">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+          Temizle
+        </button>
+      </div>
+    </section>
+
+    <section class="panel" aria-labelledby="resTitle">
+      <h2 id="resTitle">Sonuç</h2>
+      <div class="result" id="result" role="region" aria-label="Yüz değişimi sonucu">
+        <div class="canvas-wrap">
+          <canvas id="outCanvas"></canvas>
+          <div class="overlay" id="outOverlay">Sonuç bekleniyor…</div>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="dbgCanvas"></canvas>
+          <div class="overlay" id="dbgOverlay">Debug: mesh / landmark</div>
+        </div>
+      </div>
+      <div class="log" id="procLog" aria-live="polite"></div>
+    </section>
+  </main>
+  <footer>
+    Retake v2.0 • MediaPipe Face Landmarker + Delaunay/Poisson Warp + WebGL2 Blend • 20 referans yüz (depo) • Çalışma tamamen tarayıcıda
+  </footer>
+  <div class="toast" id="toast" role="alert" aria-live="assertive"></div>
+
+  <script type="module">
+  // ===== Yardımcı =====
+  const $ = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => [...r.querySelectorAll(s)];.
+  const log = (el, msg, cls='') => { el.insertAdjacentHTML('beforeend', `<div><span class="ts">[${new Date().toLocaleTimeString()}]</span> <span class="${cls}">${msg}</span></div>`); el.scrollTop = el.scrollHeight; };
+  const toast = (msg, type='ok') => { const t = $('#toast'); t.textContent = msg; t.className = 'toast ' + type + ' show'; setTimeout(() => t.classList.remove('show'), 3000); };
+  const setStatus = (msg, type='wip') => { const s = $('#modelStatus'); s.textContent = msg; s.className = 'status ' + type; };
+
+  // ===== State =====
+  let faceLandmarker = null;
+  let refEmbeddings = []; // {name, landmarks[], descriptor[]}
+  let targetImg = null;
+  let targetLandmarks = null;
+  let outBlob = null;
+
+  // ===== 1. MediaPipe Face Landmarker yükle =====
+  async function initFaceLandmarker() {
+    setStatus('MediaPipe yükleniyor…', 'wip');
+    try {
+      const { FaceLandmarker, FilesetResolver } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
+      const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+      faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+        baseOptions: { modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate: 'GPU' },
+        runningMode: 'IMAGE',
+        numFaces: 10,
+        outputFaceBlendshapes: false,
+        outputFacialTransformationMatrixes: true
+      });
+      setStatus('Model hazır ✓', 'ok');
+      log($('#refLog'), 'MediaPipe Face Landmarker yüklendi (GPU delegate)', 'ok');
+      loadReferenceFaces();
+    } catch (e) {
+      console.error(e);
+      setStatus('Model hatası: ' + e.message, 'err');
+      log($('#refLog'), 'Model yükleme hatası: ' + e.message, 'err');
+      toast('Model yüklenemedi, sayfayı yenileyin', 'err');
+    }
+  }
+
+  // ===== 2. 20 referans yüzü depodan çek ve landmark çıkar =====
+  async function loadReferenceFaces() {
+    const preview = $('#refPreview');
+    const logEl = $('#refLog');
+    preview.innerHTML = '';
+    log(logEl, 'Referans yüzler indiriliyor…');
+    try {
+      // GitHub raw URL'leri
+      const base = 'https://raw.githubusercontent.com/umitalgan061-sudo/retake/main/reference-faces/';
+      const listRes = await fetch('https://api.github.com/repos/umitalgan061-sudo/retake/contents/reference-faces');
+      if (!listRes.ok) throw new Error('GitHub API hatası: ' + listRes.status);
+      const files = await listRes.json();
+      const imgFiles = files.filter(f => f.type === 'file' && /\.(jpe?g|png|webp)$/i.test(f.name));
+      if (imgFiles.length === 0) throw new Error('Referans klasöründe görsel yok');
+      log(logEl, `${imgFiles.length} referans dosyası bulundu`, 'ok');
+
+      for (const f of imgFiles) {
+        const url = base + f.name;
+        const img = await loadImage(url);
+        const lm = await detectLandmarks(img);
+        if (!lm) { log(logEl, `${f.name}: Yüz bulunamadı`, 'warn'); continue; }
+        const desc = computeDescriptor(lm);
+        refEmbeddings.push({ name: f.name, landmarks: lm, descriptor: desc });
+        addRefPreview(url, lm.length);
+        log(logEl, `${f.name}: ✓ (${lm.length} landmark)`, 'ok');
+      }
+      if (refEmbeddings.length === 0) throw new Error('Hiçbir referans yüz işlenemedi');
+      $('#processBtn').disabled = false;
+      toast(`${refEmbeddings.length} referans yüz hazır`, 'ok');
+    } catch (e) {
+      console.error(e);
+      log(logEl, 'Referans yükleme hatası: ' + e.message, 'err');
+      toast('Referans yüzler yüklenemedi', 'err');
+    }
+  }
+
+  function addRefPreview(url, count) {
+    const div = document.createElement('div');
+    div.className = 'preview-item';
+    div.innerHTML = `<img src="${url}" alt="" loading="lazy" /><span class="badge">${count} pt</span>`;
+    $('#refPreview').appendChild(div);
+  }
+
+  // ===== Görsel yardımcıları =====
+  function loadImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error('Görsel yüklenemedi: ' + src));
+      img.src = src;
+    });
+  }
+
+  async function detectLandmarks(img) {
+    if (!faceLandmarker) return null;
+    const mpImage = await createImageBitmap(img);
+    const res = faceLandmarker.detect(mpImage);
+    if (!res.faceLandmarks || res.faceLandmarks.length === 0) return null;
+    // İlk yüzü al, normalize et (0-1 arası) -> piksele çevir
+    const lm = res.faceLandmarks[0];
+    const w = img.width, h = img.height;
+    return lm.map(p => ({ x: p.x * w, y: p.y * h, z: p.z * w }));
+  }
+
+  // Basit descriptor: 468 landmark -> 128 boyut (PCA yerine özet istatistik)
+  function computeDescriptor(landmarks) {
+    // Merkez
+    const cx = landmarks.reduce((s,p)=>s+p.x,0)/landmarks.length;
+    const cy = landmarks.reduce((s,p)=>s+p.y,0)/landmarks.length;
+    // Normalize + histogram benzeri özet
+    const vec = [];
+    for (let i=0;i<landmarks.length;i+=4) {
+      const p = landmarks[i];
+      vec.push((p.x-cx)/cx, (p.y-cy)/cy);
+    }
+    // 128 boyuta pad/truncate
+    while (vec.length < 128) vec.push(0);
+    return vec.slice(0,128);
+  }
+
+  function cosineSim(a,b) {
+    let dot=0, na=0, nb=0;
+    for(let i=0;i<a.length;i++){ dot+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
+    return dot/(Math.sqrt(na)*Math.sqrt(nb)+1e-8);
+  }
+
+  // ===== 3. Hedef fotoğraf işleme =====
+  $('#fileInput').addEventListener('change', e => handleTargetFile(e.target.files[0]));
+  const dz = $('#dropzone');
+  ['dragenter','dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('active'); }));
+  ['dragleave','drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('active'); }));
+  dz.addEventListener('drop', e => handleTargetFile(e.dataTransfer.files[0]));
+  dz.addEventListener('click', () => $('#fileInput').click());
+  dz.addEventListener('keydown', e => { if(e.key==='Enter'||e.key===' ') $('#fileInput').click(); });
+
+  async function handleTargetFile(file) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) { toast('Sadece görsel dosyası', 'warn'); return; }
+    if (file.size > 20*1024*1024) { toast('Dosya çok büyük (max 20MB)', 'warn'); return; }
+    const url = URL.createObjectURL(file);
+    targetImg = await loadImage(url);
+    URL.revokeObjectURL(url);
+    $('#dropzone').style.display = 'none';
+    const pv = $('#targetPreview');
+    pv.style.display = 'grid';
+    pv.innerHTML = `<div class="preview-item"><img src="${url}" alt="" /><span class="badge">Hedef</span></div>`;
+    log($('#procLog'), `Hedef yüklendi: ${targetImg.width}x${targetImg.height}`, 'ok');
+    targetLandmarks = await detectLandmarks(targetImg);
+    if (!targetLandmarks) { toast('Hedef fotoğrafında yüz bulunamadı', 'err'); log($('#procLog'), 'Yüz bulunamadı', 'err'); return; }
+    log($('#procLog'), `Hedef landmark: ${targetLandmarks.length}`, 'ok');
+    $('#processBtn').disabled = refEmbeddings.length === 0;
+  }
+
+  // ===== 4. En iyi referans eşleşmesi =====
+  function findBestMatch(targetDesc) {
+    let best = null, bestSim = -1;
+    const thresh = parseFloat($('#simThreshold').value);
+    for (const ref of refEmbeddings) {
+      const sim = cosineSim(targetDesc, ref.descriptor);
+      if (sim > bestSim) { bestSim = sim; best = ref; }
+    }
+    return { ref: best, similarity: bestSim, pass: bestSim >= thresh };
+  }
+
+  // ===== 5. Delaunay Triangulation =====
+  function delaunayTriangulation(points) {
+    // Basit Bowyer-Watson (sadece 2D x,y)
+    const pts = points.map((p,i) => ({...p, id:i}));
+    const superTri = [
+      {x:-1e9,y:-1e9,id:-1},{x:1e9,y:-1e9,id:-2},{x:0,y:1e9,id:-3}
+    ];
+    let triangles = [superTri];
+    for (const p of pts) {
+      const bad = [];
+      for (const t of triangles) {
+        if (circumcircleContains(t, p)) bad.push(t);
+      }
+      const edgeCount = {};
+      for (const t of bad) {
+        for (let i=0;i<3;i++) {
+          const a=t[i].id, b=t[(i+1)%3].id;
+          const key = a<b?`${a},${b}`:`${b},${a}`;
+          edgeCount[key] = (edgeCount[key]||0)+1;
+        }
+      }
+      triangles = triangles.filter(t => !bad.includes(t));
+      for (const [key,count] of Object.entries(edgeCount)) {
+        if (count===1) {
+          const [a,b]=key.split(',').map(Number);
+          const pa = a>=0?pts.find(x=>x.id===a):superTri.find(x=>x.id===a);
+          const pb = b>=0?pts.find(x=>x.id===b):superTri.find(x=>x.id===b);
+          triangles.push([pa,pb,p]);
+        }
+      }
+    }
+    return triangles.filter(t => t.every(v => v.id >= 0)).map(t => t.map(v => v.id));
+  }
+
+  function circumcircleContains(tri, p) {
+    const [a,b,c] = tri;
+    const ax=a.x, ay=a.y, bx=b.x, by=b.y, cx=c.x, cy=c.y;
+    const dx=p.x, dy=p.y;
+    const det = (ax-dx)*((by-dy)*(cx*cx+cy*cy-dx*dx-dy*dy)-(cy-dy)*(bx*bx+by*by-dx*dx-dy*dy))
+              -(ay-dy)*((ax-dx)*(cx*cx+cy*cy-dx*dx-dy*dy)-(cx-dx)*(bx*bx+by*by-dx*dx-dy*dy))
+              +((ax-dx)*(by-dy)-(ay-dy)*(bx-dx))*(bx*bx+by*by-cx*cx-cy*cy);
+    // Yön: CCW ise >0 içinde
+    const orient = (bx-ax)*(cy-ay)-(by-ay)*(cx-ax);
+    return orient > 0 ? det > 0 : det < 0;
+  }
+
+  // ===== 6. Affine warp per triangle =====
+  function affineWarp(srcCanvas, srcPts, dstPts, triangles, outW, outH) {
+    const ctx = srcCanvas.getContext('2d');
+    const srcData = ctx.getImageData(0,0,srcCanvas.width,srcCanvas.height);
+    const out = document.createElement('canvas');
+    out.width = outW; out.height = outH;
+    const octx = out.getContext('2d');
+    const outData = octx.createImageData(outW, outH);
+    const srcW = srcCanvas.width, srcH = srcCanvas.height;
+
+    for (const tri of triangles) {
+      const [i1,i2,i3] = tri;
+      const s1=srcPts[i1], s2=srcPts[i2], s3=srcPts[i3];
+      const d1=dstPts[i1], d2=dstPts[i2], d3=dstPts[i3];
+      // Bounding box
+      const minX=Math.max(0,Math.floor(Math.min(d1.x,d2.x,d3.x)));
+      const maxX=Math.min(outW,Math.ceil(Math.max(d1.x,d2.x,d3.x)));
+      const minY=Math.max(0,Math.floor(Math.min(d1.y,d2.y,d3.y)));
+      const maxY=Math.min(outH,Math.ceil(Math.max(d1.y,d2.y,d3.y)));
+      // Affine matris: src -> dst
+      const A = [
+        [s1.x, s2.x, s3.x],
+        [s1.y, s2.y, s3.y],
+        [1,     1,     1    ]
+      ];
+      const Bx = [d1.x, d2.x, d3.x];
+      const By = [d1.y, d2.y, d3.y];
+      const invA = invert3(A);
+      if (!invA) continue;
+      const coeffX = mulMatVec(invA, Bx);
+      const coeffY = mulMatVec(invA, By);
+      for (let y=minY;y<maxY;y++) {
+        for (let x=minX;x<maxX;x++) {
+          // Barycentric test in dst
+          const w1 = ((d2.y-d3.y)*(x-d3.x)+(d3.x-d2.x)*(y-d3.y))/((d2.y-d3.y)*(d1.x-d3.x)+(d3.x-d2.x)*(d1.y-d3.y));
+          const w2 = ((d3.y-d1.y)*(x-d3.x)+(d1.x-d3.x)*(y-d3.y))/((d2.y-d3.y)*(d1.x-d3.x)+(d3.x-d2.x)*(d1.y-d3.y));
+          const w3 = 1-w1-w2;
+          if (w1<0||w2<0||w3<0) continue;
+          const sx = w1*s1.x + w2*s2.x + w3*s3.x;
+          const sy = w1*s1.y + w2*s2.y + w3*s3.y;
+          if (sx<0||sx>=srcW||sy<0||sy>=srcH) continue;
+          // Bilinear sample
+          const x0=Math.floor(sx), x1=Math.min(x0+1,srcW-1);
+          const y0=Math.floor(sy), y1=Math.min(y0+1,srcH-1);
+          const dx=sx-x0, dy=sy-y0;
+          const i00=(y0*srcW+x0)*4, i10=(y0*srcW+x1)*4, i01=(y1*srcW+x0)*4, i11=(y1*srcW+x1)*4;
+          const di=(y*outW+x)*4;
+          for(let c=0;c<4;c++){
+            outData.data[di+c] =
+              (1-dx)*(1-dy)*srcData.data[i00+c] +
+              dx*(1-dy)*srcData.data[i10+c] +
+              (1-dx)*dy*srcData.data[i01+c] +
+              dx*dy*srcData.data[i11+c];
+          }
+        }
+      }
+    }
+    octx.putImageData(outData,0,0);
+    return out;
+  }
+
+  function invert3(m) {
+    const [[a,b,c],[d,e,f],[g,h,i]] = m;
+    const det = a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+    if (Math.abs(det) < 1e-6) return null;
+    const invDet = 1/det;
+    return [
+      [(e*i-f*h)*invDet, (c*h-b*i)*invDet, (b*f-c*e)*invDet],
+      [(f*g-d*i)*invDet, (a*i-c*g)*invDet, (c*d-a*f)*invDet],
+      [(d*h-e*g)*invDet, (b*g-a*h)*invDet, (a*e-b*d)*invDet]
+    ];
+  }
+
+  function mulMatVec(m, v) {
+    return [m[0][0]*v[0]+m[0][1]*v[1]+m[0][2]*v[2], m[1][0]*v[0]+m[1][1]*v[1]+m[1][2]*v[2], m[2][0]*v[0]+m[2][1]*v[1]+m[2][2]*v[2]];
+  }
+
+  // ===== 7. Poisson Blend (iteratif Laplace) =====
+  async function poissonBlend(srcCanvas, maskCanvas, dstCanvas, iterations=20) {
+    const w = dstCanvas.width, h = dstCanvas.height;
+    const srcCtx = srcCanvas.getContext('2d');
+    const maskCtx = maskCanvas.getContext('2d');
+    const dstCtx = dstCanvas.getContext('2d');
+    const srcData = srcCtx.getImageData(0,0,w,h);
+    const maskData = maskCtx.getImageData(0,0,w,h);
+    let dstData = dstCtx.getImageData(0,0,w,h);
+    // Maske içi piksel indeksleri
+    const inside = [];
+    for(let y=0;y<h;y++) for(let x=0;x<w;x++) if(maskData.data[(y*w+x)*4+3]>128) inside.push(y*w+x);
+    if(inside.length===0) return dstCanvas;
+    // Iteratif Gauss-Seidel
+    for(let it=0;it<iterations;it++){
+      const newData = new Uint8ClampedArray(dstData.data);
+      for(const idx of inside){
+        const y = Math.floor(idx/w), x = idx%w;
+        let sumR=0,sumG=0,sumB=0,count=0;
+        const neighbors=[[x-1,y],[x+1,y],[x,y-1],[x,y+1]];
+        for(const [nx,ny] of neighbors){
+          if(nx<0||nx>=w||ny<0||ny>=h) continue;
+          const nIdx=ny*w+nx;
+          if(maskData.data[nIdx*4+3]>128){
+            sumR+=dstData.data[nIdx*4]; sumG+=dstData.data[nIdx*4+1]; sumB+=dstData.data[nIdx*4+2];
+            count++;
+          }else{
+            // Sınır: kaynak piksel
+            sumR+=srcData.data[nIdx*4]; sumG+=srcData.data[nIdx*4+1]; sumB+=srcData.data[nIdx*4+2];
+            count++;
+          }
+        }
+        if(count>0){
+          newData[idx*4] = sumR/count;
+          newData[idx*4+1] = sumG/count;
+          newData[idx*4+2] = sumB/count;
+          newData[idx*4+3] = 255;
+        }
+      }
+      dstData.data.set(newData);
+    }
+    dstCtx.putImageData(dstData,0,0);
+    return dstCanvas;
+  }
+
+  // ===== 8. WebGL2 Blend (GPU) =====
+  const glsl = {
+    vert: `#version 300 es
+    in vec2 aPos; in vec2 aUv; out vec2 vUv; void main(){ vUv=aUv; gl_Position=vec4(aPos,0,1); }`,
+    frag: `#version 300 es
+    precision highp float;
+    in vec2 vUv;
+    uniform sampler2D uBase; uniform sampler2D uOverlay; uniform float uBlend; uniform int uMode;
+    out vec4 outColor;
+    void main(){
+      vec4 base=texture(uBase,vUv); vec4 ov=texture(uOverlay,vUv);
+      float a=ov.a*uBlend;
+      vec3 res;
+      if(uMode==0) res=mix(base.rgb,ov.rgb,a); // normal
+      else if(uMode==1) res=base.rgb*(1.0-a)+ov.rgb*a; // linear
+      else res=base.rgb+ov.rgb*a; // add
+      outColor=vec4(res,base.a);
+    }`
+  };
+  async function webglBlend(baseCanvas, overlayCanvas, blend, mode=0) {
+    const canvas = document.createElement('canvas');
+    canvas.width = baseCanvas.width; canvas.height = baseCanvas.height;
+    const gl = canvas.getContext('webgl2', {alpha:true, premultipliedAlpha:false});
+    if(!gl) return cpuBlend(baseCanvas, overlayCanvas, blend);
+    const prog = createProgram(gl, glsl.vert, glsl.frag);
+    if(!prog) return cpuBlend(baseCanvas, overlayCanvas, blend);
+    const buf = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,0,0, 1,-1,1,0, -1,1,0,1, 1,1,1,1]), gl.STATIC_DRAW);
+    const vao = gl.createVertexArray(); gl.bindVertexArray(vao);
+    const aPos=gl.getAttribLocation(prog,'aPos'), aUv=gl.getAttribLocation(prog,'aUv');
+    gl.enableVertexAttribArray(aPos); gl.vertexAttribPointer(aPos,2,gl.FLOAT,false,16,0);
+    gl.enableVertexAttribArray(aUv); gl.vertexAttribPointer(aUv,2,gl.FLOAT,false,16,8);
+    const uBase=gl.getUniformLocation(prog,'uBase'), uOverlay=gl.getUniformLocation(prog,'uOverlay'), uBlend=gl.getUniformLocation(prog,'uBlend'), uMode=gl.getUniformLocation(prog,'uMode');
+    const texBase=createTex(gl,baseCanvas), texOverlay=createTex(gl,overlayCanvas);
+    gl.useProgram(prog); gl.bindVertexArray(vao);
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, texBase); gl.uniform1i(uBase,0);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, texOverlay); gl.uniform1i(uOverlay,1);
+    gl.uniform1f(uBlend, blend); gl.uniform1i(uMode, mode);
+    gl.viewport(0,0,canvas.width,canvas.height); gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    return canvas;
+  }
+  function createProgram(gl, vs, fs) {
+    const v=gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(v,vs); gl.compileShader(v);
+    if(!gl.getShaderParameter(v,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(v));return null;}
+    const f=gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(f,fs); gl.compileShader(f);
+    if(!gl.getShaderParameter(f,gl.COMPILE_STATUS)){console.error(gl.getShaderInfoLog(f));return null;}
+    const p=gl.createProgram(); gl.attachShader(p,v); gl.attachShader(p,f); gl.linkProgram(p);
+    if(!gl.getProgramParameter(p,gl.LINK_STATUS)){console.error(gl.getProgramInfoLog(p));return null;}
+    return p;
+  }
+  function createTex(gl, canvas) {
+    const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,canvas);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    return t;
+  }
+  function cpuBlend(base, overlay, blend) {
+    const out=document.createElement('canvas'); out.width=base.width; out.height=base.height;
+    const ctx=out.getContext('2d');
+    ctx.drawImage(base,0,0);
+    ctx.globalAlpha=blend; ctx.drawImage(overlay,0,0);
+    return out;
+  }
+
+  // ===== 9. Ana işlem akışı =====
+  $('#processBtn').addEventListener('click', async () => {
+    if (!targetImg || !targetLandmarks || refEmbeddings.length===0) return;
+    const btn = $('#processBtn');
+    btn.disabled = true; btn.innerHTML = `<svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10" stroke-opacity="0.25"/><path d="M12 2a10 10 0 0 1 10 10" stroke-opacity="1"><animateTransform attributeName="transform" type="rotate" from="0 12 12" to="360 12 12" dur="1s" repeatCount="indefinite"/></path></svg> İşleniyor…`;
+    $('#result').classList.add('visible');
+    $('#outOverlay').textContent = 'Yüz eşleştiriliyor…';
+    log($('#procLog'), 'İşlem başladı', 'ok');
+
+    try {
+      // 1. Target descriptor
+      const targetDesc = computeDescriptor(targetLandmarks);
+      // 2. En iyi eşleşme
+      const { ref, similarity, pass } = findBestMatch(targetDesc);
+      if (!pass) { throw new Error(`En iyi eşleşme (${similarity.toFixed(3)}) eşik (${$('#simThreshold').value}) altında`); }
+      log($('#procLog'), `Eşleşme: ${ref.name} (sim=${similarity.toFixed(3)})`, 'ok');
+      toast(`Eşleşme: ${ref.name} (${(similarity*100).toFixed(1)}%)`, 'ok');
+
+      // 3. Referans görselini yükle
+      $('#outOverlay').textContent = 'Referans yükleniyor…';
+      const refImg = await loadImage('https://raw.githubusercontent.com/umitalgan061-sudo/retake/main/reference-faces/' + ref.name);
+
+      // 4. Hedef canvas
+      const w = targetImg.width, h = targetImg.height;
+      const targetCanvas = document.createElement('canvas'); targetCanvas.width=w; targetCanvas.height=h;
+      const tctx = targetCanvas.getContext('2d'); tctx.drawImage(targetImg,0,0);
+
+      // 5. Referans canvas (aynı boyuta ölçekle)
+      const refCanvas = document.createElement('canvas'); refCanvas.width=w; refCanvas.height=h;
+      const rctx = refCanvas.getContext('2d');
+      // Referans yüzü hedef yüzün bounding box'ına sığdır
+      const refBbox = getBBox(ref.landmarks);
+      const tgtBbox = getBBox(targetLandmarks);
+      const scale = Math.min(tgtBbox.w/refBbox.w, tgtBbox.h/refBbox.h) * 1.1;
+      const dx = tgtBbox.cx - refBbox.cx*scale;
+      const dy = tgtBbox.cy - refBbox.cy*scale;
+      rctx.save(); rctx.translate(dx,dy); rctx.scale(scale,scale); rctx.drawImage(refImg,0,0); rctx.restore();
+
+      // 6. Poz düzeltme (affine/perspective)
+      $('#outOverlay').textContent = 'Poz düzeltiliyor…';
+      const poseMode = $('#poseCorrection').value;
+      let alignedRefCanvas = refCanvas;
+      if (poseMode !== 'none') {
+        alignedRefCanvas = await alignPose(refCanvas, ref.landmarks, targetLandmarks, poseMode, w, h);
+      }
+
+      // 7. Mesh warp
+      $('#outOverlay').textContent = 'Mesh warp uygulanıyor…';
+      const quality = $('#meshQuality').value;
+      const triangles = delaunayTriangulation(targetLandmarks);
+      let warped;
+      if (quality === 'high') {
+        // Poisson için maske hazırla
+        const maskCanvas = createFaceMask(targetLandmarks, w, h);
+        warped = await poissonBlend(alignedRefCanvas, maskCanvas, targetCanvas, 30);
+      } else {
+        warped = affineWarp(alignedRefCanvas, ref.landmarks, targetLandmarks, triangles, w, h);
+        if (quality === 'balanced') {
+          const maskCanvas = createFaceMask(targetLandmarks, w, h);
+          warped = await poissonBlend(warped, maskCanvas, targetCanvas, 15);
+        }
+      }
+
+      // 8. Blend
+      $('#outOverlay').textContent = 'Blend ediliyor…';
+      const blend = parseFloat($('#blendRatio').value);
+      const outCanvas = await webglBlend(targetCanvas, warped, blend, 0);
+
+      // 9. Sonuç çiz
+      const outCtx = $('#outCanvas').getContext('2d');
+      $('#outCanvas').width = w; $('#outCanvas').height = h;
+      outCtx.drawImage(outCanvas,0,0);
+      $('#outOverlay').style.display = 'none';
+
+      // Debug canvas: landmark + mesh
+      drawDebug($('#dbgCanvas'), targetLandmarks, triangles, w, h);
+      $('#dbgOverlay').style.display = 'none';
+
+      // Blob için
+      outBlob = await new Promise(r => outCanvas.toBlob(r, $('#outputFormat').value==='png'?'image/png':'image/jpeg', 0.95));
+      $('#downloadBtn').style.display = 'inline-flex';
+      $('#shareBtn').style.display = 'inline-flex';
+      log($('#procLog'), 'İşlem tamamlandı ✓', 'ok');
+      toast('Yüz değişimi tamamlandı', 'ok');
+    } catch (e) {
+      console.error(e);
+      log($('#procLog'), 'Hata: ' + e.message, 'err');
+      toast('Hata: ' + e.message, 'err');
+      $('#outOverlay').textContent = 'Hata: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.innerHTML = `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 9 2 9"/></svg> İşle ve Yüz Değiştir`;
+    }
+  });
+
+  function getBBox(pts) {
+    let minX=1e9,maxX=-1e9,minY=1e9,maxY=-1e9;
+    for(const p of pts){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+    return {x:minX,y:minY,w:maxX-minX,h:maxY-minY,cx:(minX+maxX)/2,cy:(minY+maxY)/2};
+  }
+
+  function createFaceMask(landmarks, w, h) {
+    const c=document.createElement('canvas'); c.width=w; c.height=h;
+    const ctx=c.getContext('2d');
+    const hull = convexHull(landmarks.map(p=>[p.x,p.y]));
+    ctx.fillStyle='#fff'; ctx.beginPath();
+    ctx.moveTo(hull[0][0],hull[0][1]);
+    for(let i=1;i<hull.length;i++) ctx.lineTo(hull[i][0],hull[i][1]);
+    ctx.closePath(); ctx.fill();
+    return c;
+  }
+
+  function convexHull(points) {
+    points = [...points].sort((a,b)=>a[0]-b[0]||a[1]-b[1]);
+    const cross = (o,a,b)=>(a[0]-o[0])*(b[1]-o[1])-(a[1]-o[1])*(b[0]-o[0]);
+    const lower=[]; for(const p of points){ while(lower.length>=2&&cross(lower[lower.length-2],lower[lower.length-1],p)<=0) lower.pop(); lower.push(p); }
+    const upper=[]; for(let i=points.length-1;i>=0;i--){ const p=points[i]; while(upper.length>=2&&cross(upper[upper.length-2],upper[upper.length-1],p)<=0) upper.pop(); upper.push(p); }
+    return [...lower.slice(0,-1),...upper.slice(0,-1)];
+  }
+
+  async function alignPose(srcCanvas, srcLm, dstLm, mode, w, h) {
+    // 3 landmark ile affine (sol göz, sağ göz, burun ucu ~ 33, 263, 1)
+    const idx = [33, 263, 1];
+    const s = idx.map(i=>srcLm[i]), d = idx.map(i=>dstLm[i]);
+    if (mode === 'affine') {
+      const out = document.createElement('canvas'); out.width=w; out.height=h;
+      const octx = out.getContext('2d');
+      // Affine matris: src -> dst
+      const A = [[s[0].x,s[1].x,s[2].x],[s[0].y,s[1].y,s[2].y],[1,1,1]];
+      const Bx = [d[0].x,d[1].x,d[2].x], By = [d[0].y,d[1].y,d[2].y];
+      const invA = invert3(A);
+      if (!invA) return srcCanvas;
+      const cx = mulMatVec(invA, Bx), cy = mulMatVec(invA, By);
+      octx.setTransform(cx[0],cx[1],cx[2],cy[0],cy[1],cy[2]);
+      octx.drawImage(srcCanvas,0,0);
+      return out;
+    } else { // perspective - basit 4 köşe
+      return srcCanvas; // perspective için daha karmaşık, şimdilik affine
+    }
+  }
+
+  function drawDebug(canvas, landmarks, triangles, w, h) {
+    canvas.width=w; canvas.height=h;
+    const ctx=canvas.getContext('2d');
+    ctx.fillStyle='#0e1117'; ctx.fillRect(0,0,w,h);
+    // Triangles
+    ctx.strokeStyle='rgba(0,212,170,0.3)'; ctx.lineWidth=0.5;
+    for(const tri of triangles){
+      ctx.beginPath();
+      ctx.moveTo(landmarks[tri[0]].x, landmarks[tri[0]].y);
+      ctx.lineTo(landmarks[tri[1]].x, landmarks[tri[1]].y);
+      ctx.lineTo(landmarks[tri[2]].x, landmarks[tri[2]].y);
+      ctx.closePath(); ctx.stroke();
+    }
+    // Landmarks
+    ctx.fillStyle='#00d4aa';
+    for(const p of landmarks){ ctx.beginPath(); ctx.arc(p.x,p.y,1.5,0,Math.PI*2); ctx.fill(); }
+  }
+
+  // ===== 10. İndir / Paylaş / Temizle =====
+  $('#downloadBtn').addEventListener('click', () => {
+    if (!outBlob) return;
+    const url = URL.createObjectURL(outBlob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `retake-${Date.now()}.${$('#outputFormat').value}`;
+    a.click(); URL.revokeObjectURL(url);
+    toast('İndirildi', 'ok');
+  });
+
+  $('#shareBtn').addEventListener('click', async () => {
+    if (!outBlob) return;
+    const file = new File([outBlob], `retake.${$('#outputFormat').value}`, {type:outBlob.type});
+    if (navigator.share && navigator.canShare({files:[file]})) {
+      await navigator.share({files:[file], title:'Retake Sonucu'});
+      toast('Paylaşıldı', 'ok');
+    } else {
+      toast('Paylaşım desteklenmiyor', 'warn');
+    }
+  });
+
+  $('#clearBtn').addEventListener('click', () => {
+    targetImg = null; targetLandmarks = null; outBlob = null;
+    $('#dropzone').style.display = 'flex';
+    $('#targetPreview').style.display = 'none'; $('#targetPreview').innerHTML = '';
+    $('#result').classList.remove('visible');
+    $('#outOverlay').style.display = 'flex'; $('#outOverlay').textContent = 'Sonuç bekleniyor…';
+    $('#dbgOverlay').style.display = 'flex';
+    $('#downloadBtn').style.display = 'none';
+    $('#shareBtn').style.display = 'none';
+    $('#procLog').innerHTML = '';
+    $('#fileInput').value = '';
+    toast('Temizlendi', 'ok');
+  });
+
+  // Slider değer göster
+  $('#simThreshold').addEventListener('input', e => $('#simVal').textContent = parseFloat(e.target.value).toFixed(2));
+  $('#blendRatio').addEventListener('input', e => $('#blendVal').textContent = parseFloat(e.target.value).toFixed(2));
+
+  // Başlat
+  initFaceLandmarker();
+  </script>
+</body>
+</html>

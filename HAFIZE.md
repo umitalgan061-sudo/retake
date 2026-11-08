@@ -1,0 +1,3 @@
+# Proje hedefi
+
+Tek sayfalık, mobil uyumlu bir Retake uygulaması. Özellikler: 1) Büyük, dokunmatik/klavye dostu "Tekrar" düğmesi (Space/Enter ile tetiklenir). 2) Geçen süreyi gösteren kronometre (saniye hassasiyetinde). 3) Kaç kez tekrarlandığını sayan sayaç. 4) Her tur için not/özlü görüş alanı (isteğe bağlı, yerel depolama). 5) Oturum kaydet/yükle (localStorage). 6) Karanlık/açık tema. 7) Sesli bip opsiyonu (her tekrar başında). 8) PWA manifest ile "Uygulamaya Ekle" desteği. 9) Klavye kısayolları: Space=Tekrar, R=Sıfırla, N=Yeni Not. 10) Erişilebilirlik: ARIA etiketleri, odak halka, yüksek kontrast. Hepsini tek bir index.html içinde (CSS/JS inline), bağımlılık yok, hızlı yüklenir.

@@ -240,9 +240,12 @@ struct ContentView: View {
             } else {
                 LazyVGrid(columns: columns, spacing: 12) {
                     ForEach(viewModel.referenceFaces) { face in
-                        ReferenceFaceTile(face: face) {
-                            Task { await viewModel.removeReference(face) }
-                        }
+                        ReferenceFaceTile(
+                            face: face,
+                            isSelected: viewModel.selectedReferenceID == face.id,
+                            onSelect: { viewModel.selectReference(face) },
+                            onDelete: { Task { await viewModel.removeReference(face) } }
+                        )
                     }
                 }
             }
@@ -316,25 +319,34 @@ struct ContentView: View {
 
 private struct ReferenceFaceTile: View {
     let face: ReferenceFace
+    let isSelected: Bool
+    let onSelect: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         VStack(spacing: 5) {
             ZStack(alignment: .topTrailing) {
-                Group {
-                    if let image = UIImage(contentsOfFile: face.url.path) {
-                        Image(uiImage: image)
-                            .resizable()
-                            .scaledToFill()
-                    } else {
-                        RoundedRectangle(cornerRadius: 11)
-                            .fill(Color.white.opacity(0.08))
-                            .overlay(Image(systemName: "person.crop.square").foregroundStyle(.secondary))
+                Button(action: onSelect) {
+                    Group {
+                        if let image = UIImage(contentsOfFile: face.url.path) {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFill()
+                        } else {
+                            RoundedRectangle(cornerRadius: 11)
+                                .fill(Color.white.opacity(0.08))
+                                .overlay(Image(systemName: "person.crop.square").foregroundStyle(.secondary))
+                        }
                     }
+                    .frame(height: 88)
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 11))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 11)
+                            .stroke(isSelected ? Color.mint : Color.clear, lineWidth: 3)
+                    )
                 }
-                .frame(height: 88)
-                .frame(maxWidth: .infinity)
-                .clipShape(RoundedRectangle(cornerRadius: 11))
+                .buttonStyle(.plain)
 
                 Button(action: onDelete) {
                     Image(systemName: "xmark.circle.fill")
@@ -348,6 +360,11 @@ private struct ReferenceFaceTile: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+            if isSelected {
+                Text("Kaynak yüz")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(.mint)
+            }
         }
     }
 }

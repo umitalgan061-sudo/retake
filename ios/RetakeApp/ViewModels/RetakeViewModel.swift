@@ -82,6 +82,20 @@ final class RetakeViewModel: ObservableObject {
         }
     }
 
+    func installModelBundle(from url: URL) async {
+        guard !isBusy else { return }
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            try await assetStore.installCompiledModel(from: url)
+            refreshModelInspection()
+            statusMessage = "Model paketi kopyalandı. Dosyanın yüklenmesi ve model sözleşmesi ayrıca doğrulanmalıdır."
+        } catch {
+            statusMessage = "Model içe aktarılamadı: \(error.localizedDescription)"
+        }
+    }
+
     func loadTarget(_ item: PhotosPickerItem?) async {
         guard let item else { return }
         guard !isBusy else { return }

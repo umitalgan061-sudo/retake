@@ -1,86 +1,68 @@
-# Retake — ücretsiz NVIDIA Worker kurulumu
+# Retake — Cloudflare Worker ve yerel NVIDIA anahtarı
 
-Bu depo, Firebase Hosting'de yalnızca `retake06` sitesini kullanmaya devam eder. NVIDIA istekleri Firebase Functions yerine Cloudflare Workers Free üzerinden iletilir. Firebase projesini Spark planında tutmak için Cloud Functions deploy edilmez.
+Firebase Hosting, mevcut `hafize-23465` projesinde Spark planında kalır. NVIDIA API trafiği Cloudflare Workers Free üzerinden gider; Firebase Functions kullanılmaz.
 
-## Mimari ve ücretsiz kotalar
+## İstenen kullanım: parola yok, API anahtarı dosyada
 
-- Firebase Hosting: mevcut `hafize-23465` projesinde Spark planı.
-- NVIDIA proxy: Cloudflare Workers Free.
-- NVIDIA API anahtarı: yalnızca Cloudflare Worker Secret.
-- Kullanıcı erişimi: Worker üzerinde doğrulanan özel parola; 12 saatlik imzalı oturum.
-- Görsel aktarımı: tarayıcı PNG dosyasını doğrudan Worker'a gönderir; Base64'e çevrilmez. Worker, NVIDIA NVCF asset akışını kullanır ve başarılı/başarısız işlem sonrasında geçici asset'i silmeyi dener.
-- Worker CPU işlemi hafif tutulur; NVIDIA ağ isteği beklenirken Cloudflare CPU kotası tüketilmez.
+- Retake uygulamasında kullanıcı girişi veya ek parola yok.
+- NVIDIA anahtarını depo kökündeki yerel `.dev.vars` dosyasına bir kez yaz.
+- `.dev.vars` Git tarafından yok sayılır; GitHub'a commit edilmez.
+- `npm run deploy:worker` komutu dosyadaki anahtarı alır, Worker kodunu dağıtır ve anahtarı Cloudflare Secret olarak aktarır. Anahtar Worker koduna veya tarayıcıya konmaz.
+- `.dev.vars` yerel/özel kaynak dosyadır. Canlı Worker anahtarı Cloudflare'ın şifrelenmiş Secret alanından okur; deploy betiği dosyadaki değeri otomatik olarak Secret'a aktarır.
 
-Cloudflare Workers Free güncel limitleri: 100.000 istek/gün, istek başına 10 ms CPU ve 128 MB bellek. NVIDIA Developer Program, API Catalog'daki uygun hosted NIM endpoint'lerine prototipleme için ücretsiz erişim sunar; fakat model/endpoint bazında kullanılabilirlik, hız sınırı ve kota değişebilir. Önemli: NVIDIA kataloğunda FLUX.1-Kontext-dev şu anda "Downloadable" olarak listeleniyor, "Free Endpoint" olarak işaretli değil. Bu nedenle ücretsiz API anahtarının bu model için NVIDIA-hosted inference erişimi verdiği garanti değildir. İlgili endpoint hesabında etkin değilse 403/404 alınabilir; bu durumda bu modelin NVIDIA üzerinde ücretsiz hosted kullanımı mümkün olmayabilir. Ücretsiz erişim, sınırsız kullanım garantisi değildir.
+## Kurulum
 
-## İlk kurulum (Codespaces terminali)
-
-1. Codespaces terminalinde Wrangler kurulum onayına `y` yaz.
-2. Cloudflare hesabın yoksa ücretsiz hesap aç: https://dash.cloudflare.com/sign-up
-3. Giriş yap:
-
+### 1) Cloudflare girişi
 ```bash
 npx --yes wrangler@latest login
 ```
-
 Tarayıcıda Cloudflare hesabına izin ver.
 
-4. Worker'ı ilk kez dağıt:
-
+### 2) NVIDIA anahtarı dosyası
+Depo kökünde:
 ```bash
-npx --yes wrangler@latest deploy
+cp .dev.vars.example .dev.vars
 ```
+VS Code Explorer'dan `.dev.vars` dosyasını aç. `NVIDIA_API_KEY=nvapi-YOUR_KEY_HERE` satırındaki yer tutucuyu kendi NVIDIA API anahtarınla değiştir. Dosyayı kaydet. Anahtarı terminale veya sohbete yapıştırma.
 
-Terminal, `https://retake-nvidia-edit.<hesap-adin>.workers.dev` biçiminde Worker adresini gösterecek.
+> Dosya `.gitignore` içindedir. `git status` çıktısında görünmemelidir. `.dev.vars` dosyasını hiçbir şekilde GitHub'a gönderme.
 
-5. NVIDIA API anahtarını sunucu tarafında Secret olarak ekle:
-
+### 3) Worker kodu ve anahtarı tek komutla dağıt
 ```bash
-npx --yes wrangler@latest secret put NVIDIA_API_KEY
+npm run deploy:worker
 ```
+Bu komut sırasıyla Worker kodunu dağıtır ve `.dev.vars` içindeki NVIDIA anahtarını Wrangler stdin üzerinden `NVIDIA_API_KEY` Worker Secret olarak kaydeder. Hassas anahtarı terminal çıktısına yazdırmaz. `wrangler secret put` gizli değerin stdin'den aktarılmasını destekler.
 
-Komutun istediği alana NVIDIA API anahtarını yapıştır. Anahtarı GitHub'a, `.env` dosyasına, HTML'e veya bana gönderme.
+İlk seferde Wrangler'ın npm paketi için onay sorması hâlinde `y` yazabilirsin. Daha sonra `workers.dev` adresi terminalde görünür.
 
-6. Retake için uzun ve benzersiz bir erişim parolası oluştur:
-
-```bash
-npx --yes wrangler@latest secret put RETAKE_ACCESS_PASSWORD
-```
-
-Bu parolayı yalnızca Retake'te giriş yaparken sen kullanacaksın. En az 24 karakterlik, başka yerde kullanmadığın bir parola seç. Worker parola değerini Git'e yazmaz. Başarılı girişten sonra 12 saat geçerli, imzalı bir oturum belirteci tarayıcı sekmesinin sessionStorage alanında tutulur.
-
-7. Bana `wrangler deploy` çıktısındaki tam `workers.dev` adresini gönder. Bu adres gizli değildir; NVIDIA API anahtarı veya Retake erişim parolasını gönderme. Adresi `index.html` içindeki `retake-ai-base` ayarına bağlayıp Firebase Hosting dağıtımı için kesin komutu verebilirim.
-
-## Hosting dağıtımı
-
-Worker URL'si uygulamaya eklendikten sonra Codespaces terminalinde:
-
+### 4) Site bağlantısı
+Dağıtım sonunda oluşan tam `https://retake-nvidia-edit.<hesap-adin>.workers.dev` adresini al. Bu adres gizli değildir. `index.html` içindeki `retake-ai-base` değerine bu adres bağlanacak. Ardından yalnızca Retake Hosting'i dağıt:
 ```bash
 npx --yes firebase-tools@latest deploy --only hosting:retake06 --project hafize-23465
 ```
+Diğer yedi Firebase Hosting sitesi hedeflenmez. Firebase Spark planında kalır; Firebase Functions dağıtılmaz.
 
-Bu komut yalnızca `retake06` Hosting hedefini yayımlar. Diğer yedi Hosting sitesi hedeflenmez. Firebase Spark planında kalınır; Firebase Functions dağıtılmaz.
+## Erişim ve güvenlik uyarısı
 
-## Güvenlik
+Kullanıcı parolası kaldırılmıştır. Worker, tarayıcı CORS için yalnızca `retake06.web.app` ve `retake06.firebaseapp.com` origin'lerine izin verir ve yardımcı olarak IP başına 15 dakikada 5 düzenleme sınırı uygular.
 
-- NVIDIA anahtarı tarayıcıya gönderilmez.
-- Worker API'si yalnızca `retake06.web.app` ve `retake06.firebaseapp.com` origin'lerine CORS izni verir.
-- Origin kontrolüne ek olarak Worker parola doğrulaması ve 12 saatlik imzalı Bearer oturumu uygular.
-- Oturum açma denemeleri ve düzenleme çağrıları için yardımcı IP tabanlı sınırlar bulunur. Bu bellek içi sınır global bir WAF/rate-limit kuralının yerini tutmaz.
-- NVIDIA'ya görsel gönderiminden önce uygulama açık onay ister.
-- Worker yalnızca PNG panosunu kabul eder (en fazla 10 MB). Orijinal hedef fotoğrafın tamamı gönderilmez.
-- NVIDIA geçici asset'i işlem sonunda silinmeye çalışılır. Silme başarısız olursa NVIDIA'nın saklama koşulları geçerli olabilir.
-- Bu, kişisel uygulama için erişim bariyeridir; XSS riskine karşı tarayıcı ve hesap güvenliği yine önemlidir.
+**CORS bir kimlik doğrulama yöntemi değildir.** Herhangi biri Workers URL'sini öğrenip doğrudan HTTP istemcisiyle çağrı yapabilir veya Origin başlığını taklit edebilir. Kullanıcı parolası istemediğin için Worker endpoint'i fiilen herkese açık bir API haline gelir. Bellek içi hız sınırı dağıtık veya güçlü bir kötüye kullanım önlemi değildir. NVIDIA ücretsiz kotan kötüye kullanılabilir veya tükenebilir. Parolasız kullanımın kaçınılmaz riski budur.
 
-## 20 kayıtlı referans görseli
+NVIDIA API anahtarı yine de tarayıcıda, HTML/JS'de veya GitHub'da yer almaz; yalnızca Cloudflare Secret'ta saklanır. NVIDIA'ya görsel gönderilmeden önce uygulama açık onay ister. Worker hedef crop + referans panosunu kabul eder, maksimum 10 MB, ve NVIDIA geçici asset'ini işlem sonunda silmeyi dener.
 
-Bu değişiklik mevcut referans veri kaynağını otomatik taşımaz. Hafize'deki `img_...` kayıtları sahibinin oturumuyla korunan yerel SQLite/API verisindedir; herkese açık `retake06.web.app` bunlara doğrudan ulaşamaz. 20 fotoğrafı özel ve erişim kontrollü bir depoya bir defalık aktaracak ayrı işlem tamamlanana kadar uygulamadaki referans havuzu yüklenmeyebilir. Fotoğrafları public GitHub deposuna veya Hosting içine koyma.
+## Ücretsiz kullanım notları
+
+Cloudflare Workers Free planında günlük ve CPU limitleri vardır. NVIDIA API Catalog'da ücretsiz hosted erişim model bazında değişir. FLUX.1-Kontext-dev katalogda `Downloadable` olarak listelendiğinden, NVIDIA API key bu hosted endpoint'e erişim garantisi vermez. İlk gerçek düzenleme çağrısı ile 403/404/422 yanıtlarını kontrol et.
+
+## 20 kayıtlı yüz referansı
+
+Bu değişiklik 20 Hafize görselini taşımaz. Eski `img_...` kayıtları Hafize'nin yerel/oturum korumalı SQLite görsel deposunda. `retake06.web.app` yerel SQLite veritabanına erişemez. Referansları özel depoya güvenli biçimde taşıyan ayrı bir aktarım adımı gerekir; fotoğrafları GitHub'a veya public Hosting'e kopyalama.
 
 ## Sorun giderme
 
-- `RETAKE_ACCESS_PASSWORD Worker Secret olarak tanımlanmamış`: `wrangler secret put RETAKE_ACCESS_PASSWORD` komutunu tekrar çalıştır.
-- `NVIDIA_API_KEY Worker Secret olarak tanımlanmamış`: NVIDIA secret'ını ekle.
-- NVIDIA 401/403: API anahtarını, `invoke_function` yetkisini ve hosted endpoint erişimini doğrula.
-- NVIDIA 404/422: bu endpoint NVIDIA hesabında etkin olmayabilir veya endpoint girdiyi desteklemiyor olabilir.
-- NVIDIA 402/429: NVIDIA tarafındaki kota, ücretsiz erişim veya hız sınırı uygulanmıştır.
-- Cloudflare 10 ms CPU aşımı: Worker kodunda görsel base64 dönüştürme veya büyük JSON ayrıştırma ekleme; mevcut akış görseli ikili veri olarak geçirir ve NVIDIA yanıtını akış olarak tarayıcıya döndürür.
+- `NVIDIA_API_KEY Worker Secret olarak tanımlanmamış`: `.dev.vars` satırını kontrol edip `npm run deploy:worker` çalıştır.
+- `401`: NVIDIA API anahtarı geçersiz veya süresi dolmuş olabilir.
+- `403`: NVIDIA anahtarının `invoke_function` yetkisini ve hosted endpoint erişimini kontrol et.
+- `404/422`: FLUX.1-Kontext-dev bu hesapta hosted API olarak açık olmayabilir.
+- `402/429`: NVIDIA kota, hız sınırı veya ücretsiz erişim limiti.
+- `npm run deploy:worker` Cloudflare oturumu istiyorsa önce `npx --yes wrangler@latest login` çalıştır.

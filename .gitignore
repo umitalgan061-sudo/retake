@@ -13,3 +13,7 @@ DerivedData/
 *.xcuserstate
 *.xccheckout
 *.xcscmblueprint
+
+# Local files imported into the native iOS project during development
+/ios/RetakeApp/Resources/Models/
+/ios/RetakeApp/Resources/ReferenceFaces/

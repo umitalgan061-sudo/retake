@@ -5,7 +5,8 @@ import {
   NVIDIA_BOARD_HEIGHT,
   getFaceCropRect,
   createFaceAlphaMask,
-  createNvidiaEditPrompt
+  createNvidiaEditPrompt,
+  imageDataUrlFromNvidiaResponse
 } from "../src/nvidia-pipeline.js";
 
 test("uses a supported 1568 by 1024 NVIDIA image board", () => {
@@ -42,4 +43,17 @@ test("prompt explicitly distinguishes target and twenty identity references", ()
   assert.match(prompt, /LEFT PANEL/);
   assert.match(prompt, /RIGHT PANEL/);
   assert.match(prompt, /eyes are clearly closed/i);
+});
+
+
+test("normalizes NVIDIA base64 image responses in the browser", () => {
+  assert.equal(
+    imageDataUrlFromNvidiaResponse({ artifacts: [{ base64: "AQID" }] }),
+    "data:image/png;base64,AQID"
+  );
+  assert.equal(
+    imageDataUrlFromNvidiaResponse({ images: [{ b64_json: "data:image/webp;base64,AQID" }] }),
+    "data:image/webp;base64,AQID"
+  );
+  assert.throws(() => imageDataUrlFromNvidiaResponse({ artifacts: [] }), /base64 görsel çıktısı/);
 });

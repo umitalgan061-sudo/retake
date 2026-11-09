@@ -11,7 +11,8 @@ import {
   NVIDIA_TARGET_PANEL_WIDTH,
   getFaceCropRect,
   createFaceAlphaMask,
-  createNvidiaEditPrompt
+  createNvidiaEditPrompt,
+  imageDataUrlFromNvidiaResponse
 } from "./src/nvidia-pipeline.js";
 import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 
@@ -710,11 +711,12 @@ async function runNvidiaFaceEdit() {
       const detail = payload.error || ("NVIDIA API " + response.status + " yanıtı verdi.");
       throw new Error(detail);
     }
-    if (typeof payload.imageDataUrl !== "string" || !payload.imageDataUrl.startsWith("data:image/")) {
+    const imageDataUrl = payload.imageDataUrl || imageDataUrlFromNvidiaResponse(payload);
+    if (typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
       throw new Error("NVIDIA geçerli bir görsel çıktısı döndürmedi.");
     }
 
-    const generated = await loadImage(await (await fetch(payload.imageDataUrl)).blob());
+    const generated = await loadImage(await (await fetch(imageDataUrl)).blob());
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
     const resultUrl = createObjectURL(resultBlob);

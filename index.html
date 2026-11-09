@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f0f1a" />
-  <meta name="description" content="Face Swap - Yapay zeka ile 20 referans yüzden birini seçip kameranızdaki yüzü anında değiştirin" />
-  <title>Face Swap</title>
+  <meta name="description" content="Retake geometrik yüz önizleme prototipi. Gerçek AI Face Swap veya çevrimdışı iOS motoru değildir." />
+  <title>Retake — Geometrik Önizleme</title>
   <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiRmFjZSBTd2FwIiwic2hvcnRfbmFtZSI6IkZhY2UgU3dhcCIsInN0YXJ0X3VybCI6Ii8iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMGYwZjFhIiwidGhlbWVfY29sb3IiOiIjMGYwZjFhIiwiaWNvbnMiOlt7InNyYyI6ImRhdGE6aW1hZ2Uvc3ZnK3htbDtiYXNlNjQsUEhOMGNtbHdWR1Z1ZEdWeWJtVjBJR052Ym5SbGNpQmhkR1VnYzJOc2RYTmxjaUF3Y0NJN0NnbHdJZ29nWW1WbmNtRjBaWE1nWTI5dFpXNHhMM0ErQ2c9PSJ9XSwic2NyZWVuX29yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJwcmVmZXJyZWRfb3JpZW50YXRpb24iOiJwb3J0cmFpdCJ9" />
   <style>
     :root {
@@ -56,6 +56,16 @@
       flex-direction: column;
       min-height: 100vh;
       transition: background 0.3s, color 0.3s;
+    }
+    .prototype-banner {
+      padding: 0.55rem 1rem;
+      background: #332b1c;
+      color: #f4d58a;
+      border-bottom: 1px solid #5a4824;
+      font-size: 0.78rem;
+      line-height: 1.4;
+      text-align: center;
+      flex-shrink: 0;
     }
     .app {
       display: flex;
@@ -260,7 +270,7 @@
 <body>
   <div class="app">
     <header>
-      <h1>Face Swap</h1>
+      <h1>Retake</h1>
       <div class="header-actions">
         <button class="icon-btn" id="cameraFlipBtn" aria-label="Kamerayı çevir" title="Kamerayı çevir">🔄</button>
         <button class="icon-btn" id="themeBtn" aria-label="Tema değiştir" title="Tema değiştir">🌙</button>
@@ -614,10 +624,13 @@
 
     // --- CAPTURE & DOWNLOAD ---
     captureBtn.addEventListener('click', () => {
-      if (!lastSwappedImage) {
-        lastSwappedImage = canvas.toDataURL('image/png');
+      if (!canvas.width || !canvas.height) {
+        showToast('Henüz kaydedilecek bir görüntü yok.');
+        return;
       }
-      showToast('Fotoğraf çekildi! İndir butonuyla kaydedin.');
+      // Her çekimde güncel canvas görüntüsünü al; önceki fotoğrafı tekrar kullanma.
+      lastSwappedImage = canvas.toDataURL('image/png');
+      showToast('Güncel görüntü kaydedildi. İndirebilirsiniz.');
       downloadBtn.disabled = false;
     });
 

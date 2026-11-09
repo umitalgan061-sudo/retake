@@ -60,6 +60,9 @@ async function hmacKey(password) {
 }
 
 export async function createSessionToken(password, now = Date.now()) {
+  if (typeof password !== "string" || encoder.encode(password).length < 24) {
+    throw new Error("RETAKE_ACCESS_PASSWORD en az 24 karakter olmalı.");
+  }
   const expiresAt = now + SESSION_TTL_MS;
   const key = await hmacKey(password);
   const signature = await crypto.subtle.sign("HMAC", key, encoder.encode("retake06-session:" + expiresAt));
@@ -260,6 +263,9 @@ export default {
     if (path === "/auth" && request.method === "POST") {
       if (!env.RETAKE_ACCESS_PASSWORD) {
         return jsonResponse({ error: "RETAKE_ACCESS_PASSWORD Worker Secret olarak tanımlanmamış." }, 503, cors);
+      }
+      if (encoder.encode(env.RETAKE_ACCESS_PASSWORD).length < 24) {
+        return jsonResponse({ error: "RETAKE_ACCESS_PASSWORD en az 24 karakter olmalı." }, 503, cors);
       }
       if (!allowedByRateLimit(authAttempts, clientAddress(request), 8)) {
         return jsonResponse({ error: "Çok fazla giriş denemesi. 15 dakika sonra tekrar dene." }, 429, cors);

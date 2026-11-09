@@ -1,23 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import worker, { createSessionToken, verifySessionToken } from "../worker/index.js";
+import worker from "../worker/index.js";
 
-const password = "a-unique-retake-test-password-that-is-long";
 const env = {
-  RETAKE_ACCESS_PASSWORD: password,
   NVIDIA_API_KEY: "test-only-nvidia-key",
   RETAKE_ALLOWED_ORIGINS: "https://retake06.web.app,https://retake06.firebaseapp.com"
 };
 
-test("creates a signed session token that expires after twelve hours", async () => {
-  const now = 1_800_000_000_000;
-  const token = await createSessionToken(password, now);
-  assert.equal(await verifySessionToken(token, password, now + 1), true);
-  assert.equal(await verifySessionToken(token, password, now + 12 * 60 * 60 * 1000 + 1), false);
-  assert.equal(await verifySessionToken(token, "wrong-password", now + 1), false);
-});
-
-test("rejects a request from an unapproved web origin", async () => {
+test("rejects browser requests from an unapproved origin", async () => {
   const request = new Request("https://retake-nvidia-edit.example.workers.dev/status", {
     method: "GET",
     headers: { Origin: "https://unapproved.example" }
@@ -26,27 +16,56 @@ test("rejects a request from an unapproved web origin", async () => {
   assert.equal(response.status, 403);
 });
 
-test("requires a private session token for status and editing", async () => {
+test("reports NVIDIA secret configuration without requiring a user login", async () => {
   const request = new Request("https://retake-nvidia-edit.example.workers.dev/status", {
     method: "GET",
     headers: { Origin: "https://retake06.web.app" }
   });
   const response = await worker.fetch(request, env);
-  assert.equal(response.status, 401);
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.configured, true);
+  assert.equal(response.headers.get("Access-Control-Allow-Origin"), "https://retake06.web.app");
 });
 
-test("authenticates the personal password and returns an expiring token", async () => {
-  const request = new Request("https://retake-nvidia-edit.example.workers.dev/auth", {
+test("reports an unconfigured NVIDIA secret without a login flow", async () => {
+  const request = new Request("https://retake-nvidia-edit.example.workers.dev/status", {
+    method: "GET",
+    headers: { Origin: "https://retake06.web.app" }
+  });
+  const response = await worker.fetch(request, {
+    RETAKE_ALLOWED_ORIGINS: env.RETAKE_ALLOWED_ORIGINS
+  });
+  assert.equal(response.status, 200);
+  const payload = await response.json();
+  assert.equal(payload.configured, false);
+});
+
+test("requires explicit image consent for edit requests", async () => {
+  const request = new Request("https://retake-nvidia-edit.example.workers.dev/edit", {
     method: "POST",
     headers: {
       Origin: "https://retake06.web.app",
-      "Content-Type": "application/json"
+      "Content-Type": "image/png"
     },
-    body: JSON.stringify({ password })
+    body: new Uint8Array([137,80,78,71,13,10,26,10])
   });
   const response = await worker.fetch(request, env);
-  assert.equal(response.status, 200);
+  assert.equal(response.status, 400);
   const payload = await response.json();
-  assert.equal(typeof payload.token, "string");
-  assert.equal(await verifySessionToken(payload.token, password), true);
+  assert.match(payload.error, /açık onay/);
+});
+
+test("rejects non-PNG editing input", async () => {
+  const request = new Request("https://retake-nvidia-edit.example.workers.dev/edit", {
+    method: "POST",
+    headers: {
+      Origin: "https://retake06.web.app",
+      "Content-Type": "image/jpeg",
+      "X-Retake-Consent": "true"
+    },
+    body: new Uint8Array([1,2,3])
+  });
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 415);
 });

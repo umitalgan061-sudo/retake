@@ -1,661 +1,130 @@
-<!DOCTYPE html>
-<html lang="tr">
+<!doctype html>
+<html lang="tr" data-theme="dark">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f0f1a" />
-  <meta name="description" content="Retake geometrik yüz önizleme prototipi. Gerçek AI Face Swap veya çevrimdışı iOS motoru değildir." />
-  <title>Retake — Geometrik Önizleme</title>
-  <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiRmFjZSBTd2FwIiwic2hvcnRfbmFtZSI6IkZhY2UgU3dhcCIsInN0YXJ0X3VybCI6Ii8iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMGYwZjFhIiwidGhlbWVfY29sb3IiOiIjMGYwZjFhIiwiaWNvbnMiOlt7InNyYyI6ImRhdGE6aW1hZ2Uvc3ZnK3htbDtiYXNlNjQsUEhOMGNtbHdWR1Z1ZEdWeWJtVjBJR052Ym5SbGNpQmhkR1VnYzJOc2RYTmxjaUF3Y0NJN0NnbHdJZ29nWW1WbmNtRjBaWE1nWTI5dFpXNHhMM0ErQ2c9PSJ9XSwic2NyZWVuX29yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJwcmVmZXJyZWRfb3JpZW50YXRpb24iOiJwb3J0cmFpdCJ9" />
-  <style>
-    :root {
-      --bg: #0f0f1a;
-      --fg: #eaeaea;
-      --muted: #888;
-      --accent: #00d4aa;
-      --accent-dim: #00b894;
-      --danger: #ff4757;
-      --card: #1a1a2e;
-      --border: #2a2a4a;
-      --focus: #00d4aa;
-      --overlay: rgba(15, 15, 26, 0.9);
-    }
-    @media (prefers-color-scheme: light) {
-      :root {
-        --bg: #f0f0f5;
-        --fg: #1a1a2e;
-        --muted: #666;
-        --accent: #00a88a;
-        --accent-dim: #00967a;
-        --danger: #e03e4e;
-        --card: #ffffff;
-        --border: #ddd;
-        --focus: #00a88a;
-        --overlay: rgba(240, 240, 245, 0.95);
-      }
-    }
-    [data-theme="light"] {
-      --bg: #f0f0f5;
-      --fg: #1a1a2e;
-      --muted: #666;
-      --accent: #00a88a;
-      --accent-dim: #00967a;
-      --danger: #e03e4e;
-      --card: #ffffff;
-      --border: #ddd;
-      --focus: #00a88a;
-      --overlay: rgba(240, 240, 245, 0.95);
-    }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; }
-    body {
-      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: var(--bg);
-      color: var(--fg);
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-      transition: background 0.3s, color 0.3s;
-    }
-    .prototype-banner {
-      padding: 0.55rem 1rem;
-      background: #332b1c;
-      color: #f4d58a;
-      border-bottom: 1px solid #5a4824;
-      font-size: 0.78rem;
-      line-height: 1.4;
-      text-align: center;
-      flex-shrink: 0;
-    }
-    .app {
-      display: flex;
-      flex-direction: column;
-      height: 100vh;
-      max-width: 100vw;
-      overflow: hidden;
-    }
-    header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 0.75rem 1rem;
-      background: var(--card);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      z-index: 10;
-    }
-    h1 { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.02em; }
-    .header-actions { display: flex; gap: 0.5rem; align-items: center; }
-    .icon-btn {
-      background: var(--bg);
-      border: 1px solid var(--border);
-      color: var(--fg);
-      width: 40px;
-      height: 40px;
-      border-radius: 10px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 1.1rem;
-      transition: border-color 0.2s, background 0.2s;
-    }
-    .icon-btn:hover { border-color: var(--accent); }
-    .icon-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-    main {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      position: relative;
-      overflow: hidden;
-    }
-    #videoContainer {
-      position: relative;
-      width: 100%;
-      flex: 1;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      background: #000;
-    }
-    #videoContainer video,
-    #videoContainer canvas {
-      position: absolute;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    #videoContainer video { z-index: 1; transform: scaleX(-1); }
-    #videoContainer canvas { z-index: 2; pointer-events: none; }
-    .status-overlay {
-      position: absolute;
-      top: 1rem;
-      left: 50%;
-      transform: translateX(-50%);
-      background: var(--overlay);
-      backdrop-filter: blur(8px);
-      border: 1px solid var(--border);
-      border-radius: 20px;
-      padding: 0.5rem 1rem;
-      font-size: 0.85rem;
-      color: var(--muted);
-      white-space: nowrap;
-      z-index: 5;
-      transition: opacity 0.3s;
-    }
-    .status-overlay.hidden { opacity: 0; pointer-events: none; }
-    .status-overlay.active { color: var(--accent); }
-    .face-selector {
-      position: absolute;
-      bottom: 0;
-      left: 0;
-      right: 0;
-      background: linear-gradient(180deg, transparent, var(--overlay) 30%, var(--card));
-      backdrop-filter: blur(12px);
-      padding: 1rem 1rem 2rem;
-      z-index: 10;
-    }
-    .selector-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 0.75rem;
-      padding: 0 0.5rem;
-    }
-    .selector-title { font-size: 0.85rem; color: var(--muted); font-weight: 500; }
-    .face-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-      gap: 0.5rem;
-      max-height: 140px;
-      overflow-y: auto;
-      padding: 0 0.5rem 0.5rem;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
-    }
-    .face-grid::-webkit-scrollbar { height: 6px; }
-    .face-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-    .face-option {
-      position: relative;
-      aspect-ratio: 1;
-      border-radius: 12px;
-      overflow: hidden;
-      cursor: pointer;
-      border: 2px solid transparent;
-      transition: border-color 0.2s, transform 0.15s, box-shadow 0.2s;
-      background: var(--bg);
-    }
-    .face-option:hover { transform: scale(1.05); border-color: var(--accent); }
-    .face-option.selected { border-color: var(--accent); box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent); }
-    .face-option img {
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-    }
-    .face-option .check {
-      position: absolute;
-      bottom: 4px;
-      right: 4px;
-      width: 20px;
-      height: 20px;
-      background: var(--accent);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 12px;
-      color: #0d1b17;
-      opacity: 0;
-      transform: scale(0.5);
-      transition: opacity 0.2s, transform 0.2s;
-    }
-    .face-option.selected .check { opacity: 1; transform: scale(1); }
-    .controls {
-      display: flex;
-      gap: 0.5rem;
-      padding: 0.75rem 1rem;
-      background: var(--card);
-      border-top: 1px solid var(--border);
-      flex-shrink: 0;
-      flex-wrap: wrap;
-      justify-content: center;
-    }
-    .btn {
-      padding: 0.6rem 1.2rem;
-      font-size: 0.9rem;
-      font-weight: 600;
-      border: none;
-      border-radius: 10px;
-      cursor: pointer;
-      transition: transform 0.1s, opacity 0.2s, box-shadow 0.2s;
-      touch-action: manipulation;
-    }
-    .btn:active { transform: scale(0.97); }
-    .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-    .btn-primary { background: var(--accent); color: #0d1b17; box-shadow: 0 2px 8px rgba(0, 212, 170, 0.3); }
-    .btn-primary:hover { background: var(--accent-dim); }
-    .btn-secondary { background: var(--bg); color: var(--fg); border: 1px solid var(--border); }
-    .btn-secondary:hover { border-color: var(--accent); }
-    .btn-danger { background: var(--danger); color: white; }
-    .btn-danger:hover { opacity: 0.9; }
-    .toast {
-      position: fixed;
-      bottom: 8rem;
-      left: 50%;
-      transform: translateX(-50%) translateY(100px);
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 0.75rem 1.5rem;
-      font-size: 0.9rem;
-      z-index: 100;
-      opacity: 0;
-      transition: transform 0.3s, opacity 0.3s;
-      box-shadow: 0 8px 32px rgba(0,0,0,0.3);
-    }
-    .toast.show { transform: translateX(-50%) translateY(0); opacity: 1; }
-    @media (max-width: 480px) {
-      .face-grid { grid-template-columns: repeat(5, 1fr); }
-      .face-option { min-width: 64px; }
-      h1 { font-size: 1.1rem; }
-      .btn { padding: 0.5rem 1rem; font-size: 0.85rem; }
-    }
-    @media (max-width: 360px) {
-      .face-grid { grid-template-columns: repeat(4, 1fr); }
-    }
-  </style>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0d12">
+  <meta name="description" content="Retake kişisel fotoğraf stüdyosu. Fotoğraflarını cihazında incele, yüzleri seç ve referanslarını yerel olarak yönet.">
+  <meta name="color-scheme" content="dark light">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>Retake — Kişisel Fotoğraf Stüdyosu</title>
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/retake.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
-  <div class="app">
-    <header>
-      <h1>Retake</h1>
-      <div class="header-actions">
-        <button class="icon-btn" id="cameraFlipBtn" aria-label="Kamerayı çevir" title="Kamerayı çevir">🔄</button>
-        <button class="icon-btn" id="themeBtn" aria-label="Tema değiştir" title="Tema değiştir">🌙</button>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Retake ana sayfa">
+        <span class="brand-mark" aria-hidden="true">R</span>
+        <span class="brand-copy"><strong>RETAKE</strong><small>PERSONAL PHOTO STUDIO</small></span>
+      </a>
+      <div class="topbar-actions">
+        <span class="device-pill"><span class="pulse-dot"></span> Cihazında çalışır</span>
+        <button class="icon-button" id="installButton" type="button" hidden aria-label="Uygulamayı yükle" title="Uygulamayı yükle">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" /></svg>
+        </button>
+        <button class="icon-button" id="themeButton" type="button" aria-label="Açık temaya geç" title="Tema değiştir">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        </button>
       </div>
     </header>
-    <main>
-      <div id="videoContainer">
-        <video id="video" autoplay playsinline muted aria-hidden="true"></video>
-        <canvas id="outputCanvas" aria-hidden="true"></canvas>
-        <div id="statusOverlay" class="status-overlay">Model yükleniyor...</div>
-      </div>
-      <div class="face-selector" id="faceSelector">
-        <div class="selector-header">
-          <span class="selector-title">Referans Yüzler (20)</span>
-          <span id="selectedCount" style="font-size:0.8rem;color:var(--accent)">Seçili: -</span>
+
+    <main class="main-content">
+      <section class="intro-row">
+        <div>
+          <p class="eyebrow">KİŞİSEL ÇALIŞMA ALANI <span class="eyebrow-line"></span></p>
+          <h1>Fotoğrafını hazırla.<br><span>Kontrol sende kalsın.</span></h1>
+          <p class="intro-copy">Hedef fotoğrafını ekle, değiştirmek istediğin yüzü seç ve kendi referans kitaplığını oluştur.</p>
         </div>
-        <div class="face-grid" id="faceGrid" role="listbox" aria-label="Referans yüz seçenekleri"></div>
+        <div class="intro-meta">
+          <span class="meta-label">ÇALIŞMA MODU</span>
+          <strong><span class="status-led"></span> Yerel işlem</strong>
+          <small>Fotoğrafların sunucuya yüklenmez.</small>
+        </div>
+      </section>
+
+      <div class="workspace-grid">
+        <div class="workflow-column">
+          <section class="panel target-panel" aria-labelledby="targetTitle">
+            <div class="panel-heading">
+              <div class="step-heading"><span class="step-number">01</span><div><h2 id="targetTitle">Hedef fotoğraf</h2><p>Yüz seçmek istediğin fotoğrafı ekle.</p></div></div>
+              <span class="panel-tag">HEDEF GÖRSEL</span>
+            </div>
+            <input id="targetInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp">
+            <div id="targetDropzone" class="dropzone" tabindex="0" role="button" aria-label="Hedef fotoğraf seç veya bu alana sürükle">
+              <div id="targetEmpty" class="empty-state">
+                <div class="upload-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg></div>
+                <strong>Fotoğrafını buraya bırak</strong><span>veya cihazından bir görsel seç</span>
+                <small>JPG, PNG veya WebP · En fazla 25 MB</small><span class="select-file-button">Fotoğraf seç</span>
+              </div>
+              <div id="targetPreview" class="target-preview" hidden>
+                <canvas id="targetCanvas" aria-label="Hedef fotoğraf ve algılanan yüzler"></canvas>
+                <div class="preview-hint">Yüz kutusuna dokunarak hedefi seç</div>
+              </div>
+            </div>
+            <div class="target-footer">
+              <div id="targetMeta" class="target-meta" aria-live="polite">Henüz fotoğraf seçilmedi</div>
+              <button id="clearTargetButton" class="text-button" type="button" hidden>Fotoğrafı kaldır</button>
+            </div>
+            <div id="faceSelection" class="face-selection" hidden>
+              <div class="subsection-heading"><strong>Algılanan yüzler</strong><span id="faceCount" class="count-label">0 yüz</span></div>
+              <div id="faceChips" class="face-chips" role="group" aria-label="Hedef yüzü seç"></div>
+            </div>
+          </section>
+
+          <section class="panel references-panel" aria-labelledby="referencesTitle">
+            <div class="panel-heading">
+              <div class="step-heading"><span class="step-number">02</span><div><h2 id="referencesTitle">Referans kitaplığın</h2><p>Kaynak olarak kullanacağın yüz fotoğraflarını ekle.</p></div></div>
+              <span id="referenceCount" class="count-pill">0 / 20</span>
+            </div>
+            <input id="referenceInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple>
+            <div id="referencesEmpty" class="references-empty">
+              <div class="reference-placeholder" aria-hidden="true"><span>+</span><span>+</span><span>+</span></div>
+              <div><strong>Henüz referans eklemedin</strong><p>Tek yüz içeren fotoğrafları içe aktar. Seçtiklerin bu tarayıcıda saklanır.</p></div>
+            </div>
+            <div id="referencesGrid" class="references-grid" aria-live="polite"></div>
+            <div class="references-footer">
+              <button id="addReferencesButton" class="secondary-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Referans ekle</button>
+              <button id="clearReferencesButton" class="text-button danger-text" type="button" hidden>Tümünü temizle</button>
+              <span class="helper-text">En fazla 20 fotoğraf · Her fotoğrafta tek yüz</span>
+            </div>
+          </section>
+        </div>
+
+        <aside class="side-column">
+          <section class="panel output-panel" aria-labelledby="outputTitle">
+            <div class="panel-heading">
+              <div><p class="eyebrow">SONUÇ ALANI</p><h2 id="outputTitle">Önizleme</h2></div>
+              <span class="preview-badge"><span class="badge-dot"></span> Beklemede</span>
+            </div>
+            <div class="output-stage">
+              <div class="output-orbit orbit-one"></div><div class="output-orbit orbit-two"></div>
+              <div class="output-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 8c-9.5 0-17.2 7.7-17.2 17.2S22.5 42.4 32 42.4s17.2-7.7 17.2-17.2S41.5 8 32 8Z"/><path d="M8.5 56c3.8-8.5 12.4-13.6 23.5-13.6S51.7 47.5 55.5 56"/><path d="m43 12 3.5-5M52 23h5"/></svg></div>
+              <strong>Sonucun burada görünecek</strong>
+              <p>Hedef fotoğrafını ve referans yüzünü seçtikten sonra AI işlem çıktısı bu alanda gösterilecek.</p>
+              <span class="stage-caption">BEKLEYEN İŞLEM</span>
+            </div>
+            <div class="engine-status">
+              <div class="engine-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></svg></div>
+              <div><strong id="engineTitle">AI yüz değiştirme motoru bekleniyor</strong><p id="engineDescription">Bu sürüm fotoğraf ve yüz seçimini hazırlar. Gerçek Face Swap modeli henüz bağlanmadı.</p></div>
+            </div>
+            <button id="swapButton" class="primary-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>Yüz değiştir<span>Yakında</span></button>
+            <button id="downloadButton" class="secondary-button full-width" type="button" disabled>Sonucu indir</button>
+            <p class="disabled-note">İşlem düğmesi, gerçek AI modeli entegre edildiğinde etkinleşecek. Sahte veya geometrik bir sonuç gösterilmez.</p>
+          </section>
+
+          <section class="panel privacy-panel" aria-labelledby="privacyTitle">
+            <div class="privacy-heading"><span class="privacy-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><h2 id="privacyTitle">Fotoğrafların sende kalır</h2></div>
+            <ul class="privacy-list"><li><span></span>Hedef fotoğrafı yalnızca oturum belleğinde tutulur.</li><li><span></span>Referanslar bu tarayıcının yerel veritabanında saklanır.</li><li><span></span>Görseller bir AI servisine yüklenmez.</li></ul>
+            <p class="privacy-footnote">Yüz algılama cihazında çalışır. MediaPipe kitaplığı kullanım ölçümlerini Google'a iletebilir; görüntü içeriği bu ölçümlere dahil edilmez.</p>
+          </section>
+        </aside>
       </div>
-      <div class="controls">
-        <button class="btn btn-secondary" id="captureBtn">📸 Fotoğraf Çek</button>
-        <button class="btn btn-primary" id="swapBtn" disabled>✨ Yüz Değiştir</button>
-        <button class="btn btn-secondary" id="downloadBtn" disabled>⬇ İndir</button>
-      </div>
+      <footer class="app-footer"><span><span class="footer-mark">R</span> RETAKE <span class="footer-divider">/</span> PERSONAL PHOTO STUDIO</span><span id="runtimeStatus">Yüz algılama motoru hazırlanıyor…</span></footer>
     </main>
   </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module">
-    import { FaceLandmarker, FilesetResolver } from 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
-
-    // --- STATE ---
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('outputCanvas');
-    const ctx = canvas.getContext('2d', { willReadFrequently: true });
-    const statusOverlay = document.getElementById('statusOverlay');
-    const faceGrid = document.getElementById('faceGrid');
-    const selectedCount = document.getElementById('selectedCount');
-    const swapBtn = document.getElementById('swapBtn');
-    const captureBtn = document.getElementById('captureBtn');
-    const downloadBtn = document.getElementById('downloadBtn');
-    const cameraFlipBtn = document.getElementById('cameraFlipBtn');
-    const themeBtn = document.getElementById('themeBtn');
-    const toast = document.getElementById('toast');
-
-    let faceLandmarker = null;
-    let stream = null;
-    let currentFacing = 'user';
-    let referenceFaces = [];
-    let selectedFaceIndex = -1;
-    let lastSwappedImage = null;
-    let animationId = null;
-    let isProcessing = false;
-
-    // --- REFERANS YÜZ LİSTESİ (20 adet) ---
-    const REFERENCE_FACE_FILES = [
-      '33F4BCA9-78DC-4382-B4E7-F7FD897722B3.jpeg',
-      '37D27514-F417-42AC-B9ED-4C5C3D98EA3C.jpeg',
-      '6074c30a-147b-481e-9fe5-36d02c892d48.jpeg',
-      '769BDFF4-5555-471B-AEC8-768C274912D0.jpeg',
-      '90F8BF41-96FF-44C3-AD23-0E14C2D6A1E4.jpeg',
-      '97574DEE-ED27-45BC-834A-4CCEC2E7A8F9.png',
-      'BAAC2698-A3BE-4C24-87FF-1345627644A7.jpeg',
-      'IMG_0706.jpeg',
-      'IMG_0892.jpeg',
-      'IMG_1699.jpeg',
-      'IMG_2181.jpeg',
-      'IMG_2266.jpeg',
-      'IMG_3031.jpeg',
-      'IMG_3331.jpeg',
-      'IMG_3511.jpeg',
-      'IMG_3882.jpeg',
-      'IMG_4435.jpeg',
-      'IMG_6609.jpeg',
-      'IMG_9038.jpeg',
-      'IMG_9438.jpeg'
-    ];
-
-    const REFERENCE_BASE_URL = 'reference-faces/';
-
-    // --- UTIL ---
-    function showToast(msg) {
-      toast.textContent = msg;
-      toast.classList.add('show');
-      setTimeout(() => toast.classList.remove('show'), 2500);
-    }
-    function setStatus(msg, active = false) {
-      statusOverlay.textContent = msg;
-      statusOverlay.classList.toggle('hidden', !msg);
-      statusOverlay.classList.toggle('active', active);
-    }
-    function loadTheme() {
-      const saved = localStorage.getItem('faceswap_theme');
-      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const theme = saved || (prefersDark ? 'dark' : 'light');
-      document.documentElement.dataset.theme = theme;
-      themeBtn.textContent = theme === 'dark' ? '🌙' : '☀️';
-    }
-    function toggleTheme() {
-      const html = document.documentElement;
-      const isDark = html.dataset.theme === 'dark';
-      html.dataset.theme = isDark ? 'light' : 'dark';
-      localStorage.setItem('faceswap_theme', html.dataset.theme);
-      themeBtn.textContent = isDark ? '☀️' : '🌙';
-    }
-
-    // --- KAMERA ---
-    async function startCamera() {
-      if (stream) stream.getTracks().forEach(t => t.stop());
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: currentFacing, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: false
-        });
-        video.srcObject = stream;
-        await video.play();
-        resizeCanvas();
-        setStatus('Kamera hazır. Yüz seçin.', true);
-      } catch (e) {
-        setStatus('Kamera erişimi reddedildi veya bulunamadı.');
-        showToast('Kamera hatası: ' + e.message);
-      }
-    }
-    function resizeCanvas() {
-      const rect = video.getBoundingClientRect();
-      canvas.width = rect.width;
-      canvas.height = rect.height;
-      canvas.style.width = rect.width + 'px';
-      canvas.style.height = rect.height + 'px';
-    }
-    cameraFlipBtn.addEventListener('click', () => {
-      currentFacing = currentFacing === 'user' ? 'environment' : 'user';
-      startCamera();
-    });
-    themeBtn.addEventListener('click', toggleTheme);
-    window.addEventListener('resize', resizeCanvas);
-
-    // --- REFERANS YÜZLERİ YÜKLE ---
-    async function loadReferenceFaces() {
-      faceGrid.innerHTML = '';
-      referenceFaces = [];
-
-      for (let i = 0; i < REFERENCE_FACE_FILES.length; i++) {
-        const file = REFERENCE_FACE_FILES[i];
-        const url = REFERENCE_BASE_URL + file;
-
-        const option = document.createElement('div');
-        option.className = 'face-option';
-        option.setAttribute('role', 'option');
-        option.setAttribute('aria-selected', 'false');
-        option.dataset.index = i;
-
-        const img = document.createElement('img');
-        img.src = url;
-        img.alt = `Referans yüz ${i + 1}`;
-        img.loading = 'lazy';
-
-        const check = document.createElement('span');
-        check.className = 'check';
-        check.textContent = '✓';
-
-        option.appendChild(img);
-        option.appendChild(check);
-
-        option.addEventListener('click', () => selectFace(i));
-        option.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectFace(i); }
-        });
-        option.tabIndex = 0;
-
-        faceGrid.appendChild(option);
-
-        // Resim yüklendiğinde landmark çıkar ve sakla
-        img.addEventListener('load', async () => {
-          if (faceLandmarker) {
-            try {
-              const landmarks = await getFaceLandmarksFromImage(img);
-              if (landmarks) {
-                referenceFaces[i] = { image: img, landmarks, url };
-              }
-            } catch (e) {
-              console.warn('Referans yüz işlenemedi:', file, e);
-            }
-          }
-        });
-      }
-      selectedCount.textContent = 'Seçili: -';
-    }
-
-    // --- MEDIAPIPE FACE LANDMARKER ---
-    async function initFaceLandmarker() {
-      setStatus('MediaPipe model yükleniyor...');
-      try {
-        const vision = await FilesetResolver.forVisionTasks(
-          'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm'
-        );
-        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-          baseOptions: {
-            modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
-            delegate: 'GPU'
-          },
-          runningMode: 'VIDEO',
-          numFaces: 1,
-          minFaceDetectionConfidence: 0.5,
-          minFacePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5,
-          outputFaceBlendshapes: false,
-          outputFacialTransformationMatrixes: true
-        });
-        setStatus('Model hazır. Kamerayı başlatıyorum...', true);
-        await startCamera();
-        await loadReferenceFaces();
-        requestAnimationFrame(processFrame);
-      } catch (e) {
-        setStatus('Model yüklenemedi: ' + e.message);
-        showToast('Model hatası: ' + e.message);
-        console.error(e);
-      }
-    }
-
-    // Bir <img> elemanından landmark çıkar
-    async function getFaceLandmarksFromImage(imgEl) {
-      if (!faceLandmarker) return null;
-      const mpImage = await createMPImage(imgEl);
-      const result = faceLandmarker.detect(mpImage);
-      if (result.faceLandmarks.length === 0) return null;
-      return result.faceLandmarks[0]; // [x, y, z] normalized 0-1
-    }
-
-    // Video karesinden landmark çıkar
-    async function getFaceLandmarksFromVideo() {
-      if (!faceLandmarker || video.readyState < 2) return null;
-      const mpImage = await createMPImage(video);
-      const result = faceLandmarker.detectForVideo(mpImage, performance.now());
-      if (result.faceLandmarks.length === 0) return null;
-      return result.faceLandmarks[0];
-    }
-
-    async function createMPImage(source) {
-      const { Image } = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
-      return Image.fromImageData(source);
-    }
-
-    // --- FACE SELECTION ---
-    function selectFace(index) {
-      if (!referenceFaces[index] || !referenceFaces[index].landmarks) {
-        showToast('Bu yüz henüz işlenmedi, bekleyin...');
-        return;
-      }
-      document.querySelectorAll('.face-option').forEach((el, i) => {
-        el.classList.toggle('selected', i === index);
-        el.setAttribute('aria-selected', i === index);
-      });
-      selectedFaceIndex = index;
-      selectedCount.textContent = `Seçili: #${index + 1}`;
-      swapBtn.disabled = false;
-      showToast(`Referans yüz #${index + 1} seçildi`);
-    }
-
-    // --- TRIANGULATION (Delaunay - basit fan triangulation) ---
-    const FACE_OVAL_INDICES = [
-      10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288,
-      397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136,
-      172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109
-    ];
-
-    function triangulate(points) {
-      if (points.length < 3) return [];
-      const cx = points.reduce((s, p) => s + p[0], 0) / points.length;
-      const cy = points.reduce((s, p) => s + p[1], 0) / points.length;
-      const sorted = points.map((p, i) => ({ p, i, angle: Math.atan2(p[1] - cy, p[0] - cx) }))
-        .sort((a, b) => a.angle - b.angle);
-      const triangles = [];
-      for (let i = 1; i < sorted.length - 1; i++) {
-        triangles.push([sorted[0].i, sorted[i].i, sorted[i + 1].i]);
-      }
-      return triangles;
-    }
-
-    // --- AFFINE WARP PER TRIANGLE (clip + transform) ---
-    function drawWarpedFace(srcImg, srcLandmarks, dstLandmarks, dstWidth, dstHeight) {
-      ctx.save();
-      ctx.clearRect(0, 0, dstWidth, dstHeight);
-
-      const srcOvalPoints = FACE_OVAL_INDICES.map(i => [srcLandmarks[i][0], srcLandmarks[i][1]]);
-      const triangles = triangulate(srcOvalPoints);
-
-      for (const tri of triangles) {
-        const srcTri = tri.map(idx => [srcLandmarks[FACE_OVAL_INDICES[idx]][0], srcLandmarks[FACE_OVAL_INDICES[idx]][1]]);
-        const dstTri = tri.map(idx => [dstLandmarks[FACE_OVAL_INDICES[idx]][0] * dstWidth, dstLandmarks[FACE_OVAL_INDICES[idx]][1] * dstHeight]);
-
-        // Clip path
-        ctx.beginPath();
-        ctx.moveTo(dstTri[0][0], dstTri[0][1]);
-        ctx.lineTo(dstTri[1][0], dstTri[1][1]);
-        ctx.lineTo(dstTri[2][0], dstTri[2][1]);
-        ctx.closePath();
-        ctx.clip();
-
-        // Affine transform: srcTri -> dstTri
-        const [s1, s2, s3] = srcTri;
-        const [d1, d2, d3] = dstTri;
-
-        const denom = (s1[0]*(s2[1]-s3[1]) + s2[0]*(s3[1]-s1[1]) + s3[0]*(s1[1]-s2[1]));
-        if (Math.abs(denom) < 1e-6) { ctx.restore(); ctx.save(); continue; }
-
-        const a = (d1[0]*(s2[1]-s3[1]) + d2[0]*(s3[1]-s1[1]) + d3[0]*(s1[1]-s2[1])) / denom;
-        const b = (d1[0]*(s3[0]-s2[0]) + d2[0]*(s1[0]-s3[0]) + d3[0]*(s2[0]-s1[0])) / denom;
-        const c = (d1[0]*(s2[0]*s3[1]-s3[0]*s2[1]) + d2[0]*(s3[0]*s1[1]-s1[0]*s3[1]) + d3[0]*(s1[0]*s2[1]-s2[0]*s1[1])) / denom;
-        const d = (d1[1]*(s2[1]-s3[1]) + d2[1]*(s3[1]-s1[1]) + d3[1]*(s1[1]-s2[1])) / denom;
-        const e = (d1[1]*(s3[0]-s2[0]) + d2[1]*(s1[0]-s3[0]) + d3[1]*(s2[0]-s1[0])) / denom;
-        const f = (d1[1]*(s2[0]*s3[1]-s3[0]*s2[1]) + d2[1]*(s3[0]*s1[1]-s1[0]*s3[1]) + d3[1]*(s1[0]*s2[1]-s2[0]*s1[1])) / denom;
-
-        ctx.transform(a, d, b, e, c, f);
-        ctx.drawImage(srcImg, 0, 0);
-        ctx.restore();
-        ctx.save();
-      }
-      ctx.restore();
-    }
-
-    // --- MAIN PROCESS LOOP ---
-    async function processFrame() {
-      if (!faceLandmarker || video.readyState < 2) {
-        animationId = requestAnimationFrame(processFrame);
-        return;
-      }
-
-      resizeCanvas();
-
-      // Video karesini canvas'a çiz (aynı boyut)
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      // Yüz tespiti
-      const landmarks = await getFaceLandmarksFromVideo();
-
-      if (landmarks && selectedFaceIndex >= 0 && referenceFaces[selectedFaceIndex]) {
-        const ref = referenceFaces[selectedFaceIndex];
-        if (ref.landmarks) {
-          // Face swap yap
-          drawWarpedFace(ref.image, ref.landmarks, landmarks, canvas.width, canvas.height);
-          swapBtn.textContent = '✨ Yüz Değiştir (Aktif)';
-          swapBtn.classList.add('btn-primary');
-        }
-      } else {
-        // Sadece videoyu göster (zaten çizildi)
-        swapBtn.textContent = '✨ Yüz Değiştir';
-        swapBtn.classList.remove('btn-primary');
-      }
-
-      animationId = requestAnimationFrame(processFrame);
-    }
-
-    // --- CAPTURE & DOWNLOAD ---
-    captureBtn.addEventListener('click', () => {
-      if (!canvas.width || !canvas.height) {
-        showToast('Henüz kaydedilecek bir görüntü yok.');
-        return;
-      }
-      // Her çekimde güncel canvas görüntüsünü al; önceki fotoğrafı tekrar kullanma.
-      lastSwappedImage = canvas.toDataURL('image/png');
-      showToast('Güncel görüntü kaydedildi. İndirebilirsiniz.');
-      downloadBtn.disabled = false;
-    });
-
-    downloadBtn.addEventListener('click', () => {
-      if (!lastSwappedImage) {
-        lastSwappedImage = canvas.toDataURL('image/png');
-      }
-      const a = document.createElement('a');
-      a.href = lastSwappedImage;
-      a.download = `face-swap-${Date.now()}.png`;
-      a.click();
-      showToast('İndirildi!');
-    });
-
-    swapBtn.addEventListener('click', () => {
-      if (selectedFaceIndex >= 0) {
-        showToast('Yüz değiştirme aktif - Kamerada görüyorsunuz');
-      } else {
-        showToast('Önce bir referans yüz seçin');
-      }
-    });
-
-    // --- INIT ---
-    loadTheme();
-    initFaceLandmarker();
-  </script>
+  <script type="module" src="./app.js"></script>
 </body>
 </html>

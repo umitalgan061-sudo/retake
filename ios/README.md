@@ -8,7 +8,7 @@ Hedef: iPhone 17 Pro Max, iOS 17 veya üzeri.
 
 - SwiftUI native uygulama kabuğu
 - PhotosPicker ile hedef fotoğraf seçimi
-- Vision ile cihaz içi yüz tespiti
+- Vision ile cihaz içi yüz tespiti; ImageIO üzerinden 2048 px sınırlandırılmış küçük resim üretimi ve arka plan iş parçacığında analiz.
 - Birden fazla yüz varsa hedef yüzü görüntü üzerinde seçme
 - En fazla 20 referans görselini yerel depoya içe aktarma
 - Her referans görüntüsünde tek yüz kontrolü

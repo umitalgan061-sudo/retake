@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var referencePickerItems: [PhotosPickerItem] = []
     @State private var isImportingModel = false
     @State private var modelManifestURL = ""
+    @State private var pendingDeleteFace: ReferenceFace?
+    @State private var alertMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: 12)]
 
@@ -49,11 +51,38 @@ struct ContentView: View {
                         Task { await viewModel.installModelBundle(from: url) }
                     }
                 case .failure(let error):
-                    print("Model içe aktarma hatası: \(error.localizedDescription)")
+                    alertMessage = "Model içe aktarma hatası: \(error.localizedDescription)"
                 }
             }
         }
         .tint(Color.mint)
+        .confirmationDialog(
+            "Referans yüz silinsin mi?",
+            isPresented: Binding(
+                get: { pendingDeleteFace != nil },
+                set: { if !$0 { pendingDeleteFace = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Referansı sil", role: .destructive) {
+                guard let face = pendingDeleteFace else { return }
+                pendingDeleteFace = nil
+                Task { await viewModel.removeReference(face) }
+            }
+            Button("Vazgeç", role: .cancel) {
+                pendingDeleteFace = nil
+            }
+        } message: {
+            Text("Bu fotoğraf uygulamanın yerel referans kitaplığından kaldırılacak.")
+        }
+        .alert("Retake", isPresented: Binding(
+            get: { alertMessage != nil },
+            set: { if !$0 { alertMessage = nil } }
+        )) {
+            Button("Tamam", role: .cancel) { alertMessage = nil }
+        } message: {
+            Text(alertMessage ?? "")
+        }
     }
 
     private var header: some View {
@@ -270,7 +299,7 @@ struct ContentView: View {
                             face: face,
                             isSelected: viewModel.selectedReferenceID == face.id,
                             onSelect: { viewModel.selectReference(face) },
-                            onDelete: { Task { await viewModel.removeReference(face) } }
+                            onDelete: { pendingDeleteFace = face }
                         )
                     }
                 }

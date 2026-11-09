@@ -1,24 +1,36 @@
 import Foundation
 import ImageIO
-import UIKit
 import Vision
 
 struct FaceDetectionService {
-    func detectFaces(in image: UIImage) throws -> [DetectedFace] {
-        guard let cgImage = image.cgImage else {
+    /// Decodes a bounded ImageIO thumbnail and performs face detection on that image.
+    /// The thumbnail keeps EXIF orientation while avoiding a full-resolution raster decode.
+    func detectFaces(in imageData: Data, maximumPixelSize: Int = 2048) throws -> [DetectedFace] {
+        guard maximumPixelSize >= 256,
+              let source = CGImageSourceCreateWithData(imageData as CFData, nil) else {
+            throw FaceDetectionError.imageDecodeFailed
+        }
+
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maximumPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true
+        ]
+
+        guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(
+            source,
+            0,
+            options as CFDictionary
+        ) else {
             throw FaceDetectionError.imageDecodeFailed
         }
 
         let request = VNDetectFaceRectanglesRequest()
-        let handler = VNImageRequestHandler(
-            cgImage: cgImage,
-            orientation: CGImagePropertyOrientation(image.imageOrientation),
-            options: [:]
-        )
+        let handler = VNImageRequestHandler(cgImage: thumbnail, orientation: .up, options: [:])
         try handler.perform([request])
 
-        let observations = request.results ?? []
-        return observations.enumerated().map { index, observation in
+        return (request.results ?? []).enumerated().map { index, observation in
             DetectedFace(index: index, boundingBox: observation.boundingBox)
         }
     }
@@ -29,21 +41,5 @@ enum FaceDetectionError: LocalizedError {
 
     var errorDescription: String? {
         "Fotoğraf okunamadı veya yüz tespiti için uygun bir görüntü oluşturulamadı."
-    }
-}
-
-private extension CGImagePropertyOrientation {
-    init(_ orientation: UIImage.Orientation) {
-        switch orientation {
-        case .up: self = .up
-        case .down: self = .down
-        case .left: self = .left
-        case .right: self = .right
-        case .upMirrored: self = .upMirrored
-        case .downMirrored: self = .downMirrored
-        case .leftMirrored: self = .leftMirrored
-        case .rightMirrored: self = .rightMirrored
-        @unknown default: self = .up
-        }
     }
 }

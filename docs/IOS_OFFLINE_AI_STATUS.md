@@ -33,6 +33,22 @@ Bu dal **henüz gerçek yüz değiştirme yapmaz**.
 
 Model eksikken işlem düğmesi bilerek devre dışıdır. Uygulama sahte sonuç göstermez.
 
+## Web Studio iyileştirmeleri — 9 Kasım 2026
+
+Web arayüzü eski kamera/Canvas affine-warp prototipinden fotoğraf odaklı, duyarlı bir PWA stüdyosuna dönüştürüldü.
+
+- Hedef fotoğrafı dosya seçici veya sürükle-bırak ile açma; 25 MB dosya sınırı.
+- MediaPipe Tasks Vision 1.2.2 ile tek kare görselde çoklu yüz landmark tespiti; hedef yüzü kutuya dokunarak veya düğmeyle seçme.
+- 20'ye kadar tek-yüz referans fotoğrafını doğrulama ve IndexedDB içinde yerel olarak saklama.
+- Hedef fotoğraf yalnızca oturum belleğinde tutulur; sunucuya gönderilmez.
+- Koyu/açık tema, mobil/masaüstü responsive düzen, erişilebilir durum bildirimleri ve PWA kurulumu.
+- Service Worker uygulama kabuğu, sabitlenmiş MediaPipe paket dosyaları ve model varlığını önbelleğe alır.
+- Web kalite iş akışı Node.js 22 testleri, dosya doğrulaması ve JavaScript sözdizimi kontrolü çalıştırır.
+
+MediaPipe giriş görselini cihaz üzerinde işler; kitaplık kullanım/performans ölçümlerini Google'a iletebilir. Web uygulamasında gerçek kimlik korumalı Face Swap motoru bulunmadığı için işlem ve indirme düğmeleri kapalıdır. Yüz landmark'ı üzerine çizilen kutular yüz değiştirme sonucu değildir.
+
+Teknik web ayrıntısı: `docs/WEB_STUDIO.md`.
+
 ## Model adayları ve lisans kararı
 
 ### MobileFaceSwap

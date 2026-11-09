@@ -2,58 +2,42 @@
 
 ## Nihai hedef
 
-iPhone 17 Pro Max üzerinde gerçek eğitilmiş AI Face Swap modeli kullanan, yüksek kaliteli fotoğraf çıktısı üreten kişisel iOS uygulaması.
-
-İnternet kullanımı serbesttir. İnternet; model indirme, model güncelleme ve kullanıcı açıkça etkinleştirirse uzak inference için kullanılabilir. Varsayılan tercih cihaz üzerinde inference ve fotoğrafların cihazda kalmasıdır.
+iPhone 17 Pro Max ve modern tarayıcılarda çalışan, lisans zinciri doğrulanmış gerçek AI Face Swap motoruyla yüksek kaliteli fotoğraf çıktısı üreten kişisel uygulama.
 
 ## Değişmez şartlar
 
-1. Canvas, landmark ve affine warp tek başına AI Face Swap olarak adlandırılmaz.
-2. Gerçek inference yoksa işlem başarılı gibi gösterilmez.
-3. Model kodu ile model ağırlıklarının lisansları ayrı ayrı doğrulanır.
-4. Kullanıcıya ait referans yüz fotoğrafları ve lisans kısıtlı model ağırlıkları public GitHub deposuna commit edilmez.
-5. Bir fotoğraf harici AI servisine gönderilecekse kullanıcıya hangi servise, hangi amaçla gönderileceği gösterilir ve açık onay alınır.
-6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. iOS Keychain kullanılır.
-7. Model indirirken HTTPS, SHA-256 bütünlük kontrolü, beklenen dosya boyutu ve lisans manifesti doğrulanır.
-8. NVIDIA API yalnızca gerçek Face Swap görevini destekleyen bir endpoint bulunursa kullanılır. Genel görüntü düzenleme endpoint'i kesin kimlik korumalı Face Swap gibi sunulmaz.
+1. Canvas, landmark ve affine warp tek başına AI Face Swap değildir.
+2. Gerçek inference yoksa işlem başarılı gibi gösterilmez; ilgili düğme devre dışı kalır.
+3. Model kodu ile önceden eğitilmiş ağırlıkların lisansları ayrı ayrı doğrulanır.
+4. Kullanıcının referans fotoğrafları, yüz embedding'leri ve lisansı kısıtlı ağırlıklar public GitHub'a commit edilmez.
+5. Bir fotoğraf harici AI servisine gönderilecekse sağlayıcı, amaç ve gönderilecek veri açıkça belirtilir; kullanıcı onayı olmadan gönderim yapılmaz.
+6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. Native iOS için Keychain; web uygulamasında gizli anahtar gerekiyorsa istemciye koymak yerine güvenli sunucu tarafı proxy gerekir.
+7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
+8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
 
-## Mevcut native iOS temel
+## Web Studio
 
-`ios/Retake.xcodeproj` SwiftUI uygulama projesidir. Fotoğraf seçimi PhotosPicker, yüz tespiti Vision, 20 referans fotoğrafının yerel depolanması Application Support ve Core ML model paketi incelemesi Swift ile yapılır.
+\`index.html\`, \`styles.css\`, \`app.js\`, \`src/core.js\` ve \`sw.js\` statik PWA'yı oluşturur.
 
-Mevcut sürüm fotoğraftaki hedef yüzü algılayıp görsel olarak seçtirebilir; referans yüzleri yerel olarak saklayıp kaynak yüz olarak seçtirebilir. Gerçek yüz değiştirme modeli ve inference adapter'ı henüz yoktur. Bu nedenle yüz değiştirme butonu bilinçli olarak devre dışıdır.
+- MediaPipe Tasks Vision sürümü sabitlenir; doğru API ile \`HTMLImageElement\` üzerinden \`detect()\` çağrılır.
+- Fotoğraf algılama tarayıcıda çalışır; görsel içeriği üçüncü tarafa yüklenmez.
+- Hedef fotoğraf oturum belleğinde tutulur; hedef fotoğraf IndexedDB'ye kaydedilmez.
+- Kullanıcının eklediği en fazla 20 referans fotoğrafı IndexedDB'de saklanır; tek yüz doğrulaması yapılır.
+- Servis çalışanı yalnızca uygulama kabuğunu ve izin verilen MediaPipe/WASM/model varlıklarını önbelleğe alır.
+- Web uygulamasında gerçek Face Swap modeli yoktur; swap ve indirme eylemleri kapalı kalır.
 
-## Hedef mimari
+Web değişikliklerinde \`npm test\`, \`npm run validate\`, JavaScript sözdizimi ve GitHub Actions sonucu kontrol edilir.
 
-- Native uygulama: SwiftUI
-- Fotoğraf seçimi: PhotosUI
-- Yüz tespiti: Vision
-- Face Swap: lisansı uygun, iOS üzerinde çalıştırılabilir gerçek model
-- Varsayılan inference: Core ML ile cihaz üzerinde
-- Model dağıtımı: doğrulanmış HTTPS indirmesi ve SHA-256 kontrolü
-- İsteğe bağlı uzak inference: yalnızca desteklenen gerçek Face Swap endpoint'i ve kullanıcı onayıyla
-- API anahtarı saklama: iOS Keychain
-- Veri: yerel dosya sistemi ve Photos kütüphanesi
+## Native iOS temel
 
-Modelin gerçek girdi/çıktı tensörleri ve dönüştürülmüş Core ML dosyası elde edilmeden model adapter'ı uydurma şekillerle yazma.
+\`ios/Retake.xcodeproj\` SwiftUI uygulamasıdır. Fotoğraf seçimi PhotosUI, yüz tespiti Vision, yerel depolama Application Support, model metadata Core ML ve API anahtarı saklama Keychain ile yapılır.
 
-## NVIDIA API değerlendirmesi
+- Yüz tespitinde büyük fotoğrafları ana iş parçacığında tam çözünürlükte rasterize etme; ImageIO thumbnail ve background task tercih edilir.
+- Özel yüz fotoğrafları ve model varlıkları iCloud/device backup dışında tutulmalıdır.
+- Gerçek modelin tensor sözleşmesi ve ağırlık lisansı doğrulanmadan adapter veya başarı durumu uydurma.
 
-NVIDIA API kataloğundaki Qwen-Image-Edit genel amaçlı görsel düzenleme modelidir; dokümantasyonunda kesin kimlik korumalı yüz değiştirme özelliği tanımlanmamıştır. NIM dokümanları Qwen-Image-Edit'i indirilebilir model olarak gösterir ve self-hosted NIM kurulumu için uygun NVIDIA GPU ile container çalıştırmayı anlatır. Bu sebeple kullanıcıya ait yüz fotoğraflarını Qwen Image Edit'e otomatik yükleme ve bu modeli Face Swap motoru olarak kabul etme.
+## Model seçimi
 
-Kaynaklar:
-- https://build.nvidia.com/qwen/qwen-image-edit
-- https://docs.nvidia.com/nim/visual-genai/latest/overview.html
-- https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html
+MobileFaceSwap, MobileFSGAN ve GHOST araştırma adaylarıdır; hiçbirinin tüm yardımcı ağırlık lisansları ve iOS dağıtım koşulları otomatik olarak onaylanmış sayılmaz. ArcFace/InsightFace gibi encoder ve landmark bileşenleri ayrıca denetlenmelidir.
 
-## Model lisansı
-
-InsightFace, FaceFusion ve diğer model kataloglarında kod ile ağırlık lisansları farklı olabilir. Yüz algılama, embedding, dönüştürme, segmentasyon, restorasyon ve yüz değiştirme bileşenlerinin tamamını ayrı ayrı denetle.
-
-## Yerel doğrulama
-
-```bash
-python3 tools/validate_assets.py
-```
-
-Ayrıntılı durum ve kabul kriterleri: `docs/IOS_OFFLINE_AI_STATUS.md`.
+Ayrıntılı teknik durum: \`docs/IOS_OFFLINE_AI_STATUS.md\` ve \`ios/README.md\`.

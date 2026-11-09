@@ -42,3 +42,15 @@ DerivedData/
 *.mlpackage/
 *.npy
 *.npz
+
+
+# Web tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+coverage/
+playwright-report/
+test-results/
+.DS_Store
+*.log

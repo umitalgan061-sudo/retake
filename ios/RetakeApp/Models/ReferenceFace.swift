@@ -7,7 +7,7 @@ struct ReferenceFace: Identifiable, Hashable {
     var fileName: String { url.lastPathComponent }
 }
 
-struct DetectedFace: Identifiable {
+struct DetectedFace: Identifiable, Sendable {
     let index: Int
     let boundingBox: CGRect
 

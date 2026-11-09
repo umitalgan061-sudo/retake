@@ -1,3 +1,13 @@
+.env
+.env.*
+!.env.example
+*.xcconfig.local
+Secrets.xcconfig
+*.p8
+*.pem
+*.key
+*.mobileprovision
+
 # Private biometric images — never commit these to the public repository
 /private-assets/
 /ios/Retake/Resources/PrivateAssets/

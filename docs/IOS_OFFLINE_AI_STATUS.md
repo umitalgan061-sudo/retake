@@ -11,87 +11,88 @@ Hedef cihaz: iPhone 17 Pro Max
 
 Bu dal `ios/Retake.xcodeproj` adlı SwiftUI iOS uygulamasını içerir.
 
-- PhotosPicker ile hedef fotoğrafı seçme.
-- Vision ile fotoğraftaki yüzleri cihaz üzerinde algılama.
+- PhotosPicker ile hedef fotoğraf seçimi ve Vision ile cihaz içi yüz tespiti.
 - Birden fazla yüz varsa hedef yüzü görüntü üzerinde seçme.
 - En fazla 20 referans fotoğrafını içe aktarma; yalnızca tek yüz tespit edilen referanslar kabul edilir.
-- Kaynak referans yüzünü seçme ve yerel depodan silme.
 - Referansları Application Support/Retake/ReferenceFaces altında özel yerel depolama.
-- Derlenmiş `.mlmodelc` klasörünü Files üzerinden yerel içe aktarma.
+- Derlenmiş `.mlmodelc` klasörünü Files üzerinden içe aktarma.
 - Core ML modelini yükleyip girdi/çıktı açıklamalarını inceleme.
+- `ModelDownloadManager`: HTTPS manifesti ve model dosyası indirme, izin verilen host kontrolü, tam dosya boyutu kontrolü, SHA-256 doğrulaması, Core ML derlemesi ve başarılı model yükleme kontrolünden sonra yerel kurulumu.
+- `KeychainStore`: sağlayıcı anahtarlarını `WhenUnlockedThisDeviceOnly` korumasıyla iOS Keychain'e kaydetme, okuma ve silme.
 
 ## Henüz tamamlanmamış kritik parçalar
 
 Bu dal **henüz gerçek yüz değiştirme yapmaz**.
 
-- Geçerli, lisansı uygun Face Swap model ağırlıkları yok.
-- Gerçek modelin kesin girdi/çıktı sözleşmesi, yüz hizalama/embedding ve ön/son işleme adapter'ı uygulanmış değil.
-- İnference çıktısının hedef fotoğrafa maske ile birleştirilmesi yapılmadı.
-- Doğrulanmış, imzalı/hash kontrollü model indirme kataloğu yok.
-- Fotoğraf sonucunu Photos kütüphanesine kaydetme akışı yok.
-- iPhone 17 Pro Max üzerinde gerçek cihaz, kalite ve performans testi yapılmadı.
+- Lisans zinciri tamamen onaylanmış, indirilebilir gerçek Face Swap model ağırlıkları yok.
+- Belirli bir modelin gerçek tensor sözleşmesine göre yüz hizalama/embedding ve inference adapter'ı uygulanmış değil.
+- Inference çıktısının hedef fotoğrafa maske ile birleştirilmesi yapılmadı.
+- Model yayıncısının imzalı manifesti ve public key sabitlemesi yok. İndirici SHA-256 ile dosya bütünlüğünü kontrol eder; tek başına manifest kaynağının kimliğini kanıtlamaz.
+- Otomatik model kataloğu/URL'si bağlanmadı; gerçek ve lisans onaylı model seçilmeden indirme açılmayacak.
+- Fotoğraf sonucunu Photos kütüphanesine kaydetme ve gerçek cihaz kalite/performance testleri yapılmadı.
 
-Model eksikken işlem düğmesi bilerek devre dışıdır. Uygulama sahte görüntü üretmez.
+Model eksikken işlem düğmesi bilerek devre dışıdır. Uygulama sahte sonuç göstermez.
 
-## Depo varlıkları
+## Model adayları ve lisans kararı
 
-Önceki depoda `models/` ve `reference-faces/` altındaki kayıtlar gerçek ikili dosyalar değil, küçük API metin referanslarıydı. Bu placeholder kayıtları geliştirme dalından kaldırıldı. Kullanılabilir model ağırlıkları ve orijinal yirmi JPEG/PNG fotoğrafı şu anda depoda yok. Fotoğraflar PhotosPicker ile iPhone'a içe aktarılmalıdır.
+### MobileFaceSwap
+
+AAAI 2022 makalesi MobileFaceSwap IDN modelini 0,50 milyon parametre ve kare başına 0,33 GFLOPs olarak tanımlar; bu, iPhone üzerinde çalışmaya uygun bir aday olduğunu gösterir. Kaynak kod deposu Apache-2.0 lisanslıdır. Bununla birlikte resmi README, ayrı ArcFace ağırlıkları, MobileFaceSwap ağırlıkları ve InsightFace tabanlı landmark/alignment süreci ister. Ağırlık dosyalarının bağımsız lisans şartı resmi depoda net şekilde verilmediğinden tüm zincir onaylanmış değildir. PaddlePaddle modelini Core ML'e dönüştürmek ve Swift ön/son işleme hattını ayrıca geliştirmek gerekir.
+
+### MobileFSGAN
+
+Kaynak kod MIT lisanslıdır. README'de PyTorch modelinin toplam boyutu 10,2 + 4,9 MB, Core ML dönüştürülmüş modelin boyutu 15 MB olarak raporlanır. Ancak resmi depo mevcut haliyle ağırlıklı olarak eğitim kodu ve kullanıcı tarafından tamamlanacak dataset iskeleti sunar; indirilebilir, lisansı açıklanmış hazır Core ML inference paketi yoktur. Bu nedenle hazır model olarak entegre edilemez.
+
+### GHOST
+
+Ana kaynak kod Apache-2.0 olsa da resmi `download_models.sh` ArcFace `backbone.pth`, InsightFace antelope detector/landmark dosyaları ve swapper ağırlıklarını birlikte indirir. Her ağırlık/yardımcı model için ayrı lisans doğrulaması gerekir. Tüm bileşenler açıkça onaylanmadan bu zincir kurulmayacak.
+
+### Sonuç
+
+Bu üç adaydan hiçbiri şu an “lisansı ve iOS paketi doğrulanmış, direkt indirilebilir model” kriterini karşılamıyor. MobileFaceSwap küçük mimarisi nedeniyle ilk teknik PoC adayı olarak tutuluyor; fakat ağırlık lisansı yazılı olarak netleşmeden dağıtım yapılmayacak.
+
+## Model paketinin teknik sözleşmesi
+
+`ModelPackageManifest` alanları:
+
+- `modelID`: yalnızca `RetakeFaceSwap`
+- `version`
+- `artifactURL`: izin verilen hostlardan HTTPS tek dosyalı `.mlmodel`
+- `byteCount`
+- `sha256`: 64 karakter hex
+- `codeLicense` ve `weightsLicense`
+- `licenseEvidenceURL`
+- `licenseReviewStatus`: manuel inceleme sonrası `approved`
+
+İndirici 1,5 GB üstü paketi reddeder; URL yönlendirmesini tekrar kontrol eder; exact byte-count ve SHA-256 tutmazsa kurulumu durdurur. Core ML derleme ve model input/output yükleme kontrolünden sonra yeni dosyayı yerel depoya geçirir. Mevcut yerel model, dosya doğrulaması başarısızsa değiştirilmez.
+
+**Önemli güvenlik notu:** Şu anki SHA-256 kontrolü indirilen artifact'ın manifestte yazan hash ile aynı olduğunu doğrular. Manifestin kendisini yayınlayan kimliği kriptografik olarak doğrulamaz. Üretim kullanımı için model yayıncısının imzalı manifest formatı ve uygulama içinde sabitlenmiş doğrulama public key'i gereklidir; yayıncı seçilmediği için bu anahtar uydurulmamıştır.
 
 ## NVIDIA API değerlendirmesi
 
-NVIDIA kataloğundaki Qwen-Image-Edit genel amaçlı image editing modelidir ve sayfada kimlik korumalı Face Swap görevi olarak belgelenmemiştir. Model yaklaşık 27.1B parametreli Qwen-Image-Edit mimarisidir; NVIDIA sayfası onu ticari/ticari olmayan image editing kullanımları için tarif eder. Ancak bu açıklama hedef kişiyi deterministik şekilde başka bir referans kimlikle değiştirme garantisi değildir.
+NVIDIA kataloğundaki Qwen-Image-Edit genel amaçlı görüntü düzenleme modelidir; özel bir kimlik korumalı Face Swap servisi olarak belgelenmemiştir. NVIDIA API anahtarının varlığı, bu uygulamada kullanılabilir bir Face Swap endpoint'i olduğu anlamına gelmez. Şu anda kullanıcı fotoğrafı NVIDIA'ya gönderilmez ve anahtar istenmez.
 
-Model sayfası Qwen-Image-Edit'i "Downloadable" gösterir. NVIDIA Visual GenAI NIM belgeleri indirilebilir container'ların GPU destekli sunucuda çalıştırılmasını ve NGC API anahtarının NGC'den model/container edinmede kullanılmasını anlatır. Bu, bir NVIDIA API anahtarının otomatik olarak barındırılan Face Swap endpoint'i verdiği anlamına gelmez.
+## Kaynaklar
 
-Bu yüzden NVIDIA API anahtarı şu anda uygulamaya eklenmedi; Qwen-Image-Edit'e kullanıcı fotoğrafları gönderilmedi. Gerçek Face Swap endpoint'i bulunduğunda uzak sağlayıcı, fotoğraf gönderimi için ayrı onay ve Keychain anahtar saklama ile eklenebilir.
+- MobileFaceSwap makalesi: https://ojs.aaai.org/index.php/AAAI/article/view/20203
+- MobileFaceSwap resmi kod deposu: https://github.com/Seanseattle/MobileFaceSwap
+- MobileFSGAN resmi kod deposu: https://github.com/hoim/mobilefsgan
+- GHOST resmi kod ve model indirme betiği: https://github.com/ai-forever/ghost
+- Apple Core ML model derleme API'si: https://developer.apple.com/documentation/coreml/mlmodel/compilemodel%28at%3A%29
+- Apple CryptoKit SHA-256 akış özeti: https://developer.apple.com/documentation/cryptokit/hashfunction/update%28data%3A%29
 
-Kaynaklar:
-- https://build.nvidia.com/qwen/qwen-image-edit
-- https://docs.nvidia.com/nim/visual-genai/latest/overview.html
-- https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html
+## Gizlilik ve anahtarlar
 
-## Model lisansı ve adaylar
-
-Model zinciri tek bir dosyadan ibaret değildir. Face detector, landmark, identity encoder/embedding, embedding converter, swapper, segmentation, restoration ve upscaling bileşenlerinin lisansları ayrı ayrı kontrol edilmelidir.
-
-FaceFusion'in güncel katalog metadata'sı GHOST swapper ağırlıklarını Apache-2.0 olarak etiketler; aynı GHOST işleminde kullanılan `crossface_ghost` embedding converter ayrıca gereklidir. O dönüştürücü ve kaynak embedding modelinin kullanım şartları ayrıca doğrulanmadan tüm işlem hattının lisansı uygun kabul edilemez.
-
-InsightFace kaynak kodu MIT olsa da önceden eğitilmiş model ağırlıklarının kullanımı ayrıca kısıtlıdır. InSwapper için ticari olmayan koşullar belirtilmiştir. Bu dosyalar otomatik olarak seçilmeyecektir.
-
-Kaynaklar:
-- https://github.com/ai-forever/ghost
-- https://github.com/facefusion/facefusion/blob/master/facefusion/processors/modules/face_swapper/core.py
-- https://github.com/deepinsight/insightface
-- https://www.insightface.ai/
-
-## Model dağıtım şartları
-
-Model download manager geliştirilirken:
-- Yalnızca HTTPS ve izin verilen kaynak hostları.
-- Sabitlenmiş sürüm ve dosya boyutu.
-- SHA-256 checksum.
-- Kaynak URL, model adı, sürüm, kod lisansı ve ağırlık lisansı için manifest.
-- İndirme tamamlanmadan model dosyasını aktif etme.
-- Hatalı checksum'da dosyayı silme ve hata gösterme.
-- API anahtarı gerekiyorsa Keychain saklama.
-- Kullanıcı fotoğrafını model indirme servisine asla ekleme.
+Public GitHub deposuna kişisel yüz fotoğrafları, yüz embedding'leri veya lisansı kısıtlı model ağırlıkları eklenmemelidir. iOS uygulamasındaki API anahtarları Keychain'de saklanmalıdır; `.env` dosyası iOS uygulama bundle'ı için gizli anahtar kasası değildir.
 
 ## Tamamlanma ölçütleri
 
-- [ ] Xcode projesi iOS Simulator için derlenir.
-- [ ] iPhone 17 Pro Max üzerine kurulur.
-- [ ] 20 gerçek JPEG/PNG referans görüntüsü cihazda açılır.
-- [ ] Çok yüzlü fotoğrafta seçilen yüz görsel olarak işaretlenir.
-- [ ] Kaynak referans yüz seçimi çalışır.
-- [ ] Lisansı doğrulanmış gerçek Face Swap modeli indirilir veya içe aktarılır.
-- [ ] Modelin kesin girdi/çıktı sözleşmesi ve ön/son işleme kodu uygulanır.
-- [ ] Gerçek inference çıktısı hedef fotoğrafa maskeli biçimde birleştirilir.
-- [ ] Core ML CPU/GPU/Neural Engine kullanım birimleri ölçülür.
-- [ ] Ağ olmadan model cihazda kayıtlıysa işlem devam eder.
-- [ ] Sonuç Photos kütüphanesine kaydedilir.
-- [ ] Uzak inference varsa işlem öncesinde kullanıcı onayı ve Keychain anahtar saklama çalışır.
-- [ ] Başarısız işlem hiçbir zaman başarı gibi gösterilmez.
-
-## Gizlilik
-
-Public GitHub deposuna kişisel yüz fotoğrafları, yüz embedding'leri veya lisansı kısıtlı model ağırlıkları eklenmemelidir.
+- [x] Xcode projesi iOS Simulator CI için derleniyor (önceki CI başarılı; son değişiklikler için yeni CI bekleniyor).
+- [x] Model paketi için HTTPS, boyut, SHA-256 ve Core ML doğrulama altyapısı eklendi.
+- [x] API anahtarı saklama için iOS Keychain altyapısı eklendi.
+- [ ] iPhone 17 Pro Max üzerine kurulum ve fiziksel cihaz testi.
+- [ ] 20 gerçek JPEG/PNG referans görüntüsünün cihazda doğrulanması.
+- [ ] Lisans zinciri doğrulanmış gerçek Face Swap modelinin seçilmesi ve indirilmesi.
+- [ ] Modelin kesin input/output sözleşmesine göre adapter, hizalama ve maskeli compositing.
+- [ ] Gerçek inference çıktısının Photos kütüphanesine kaydedilmesi.
+- [ ] iPhone 17 Pro Max üzerinde kalite, bellek ve hız testleri.

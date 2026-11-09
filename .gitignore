@@ -1,0 +1,15 @@
+# Private biometric images — never commit these to the public repository
+/private-assets/
+/ios/Retake/Resources/PrivateAssets/
+
+# Locally installed model weights and compiled Core ML bundles
+/ios/Retake/Resources/Models/
+*.mlmodelc/
+*.mlpackage/
+
+# Xcode / Swift build output
+DerivedData/
+.build/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint

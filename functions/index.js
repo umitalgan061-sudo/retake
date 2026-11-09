@@ -90,23 +90,27 @@ async function createAndUploadAsset(apiKey, imageBytes) {
     throw new Error("NVIDIA geçersiz yükleme adresi döndürdü.");
   }
 
-  const uploadResponse = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: {
-      "Content-Type": "image/png",
-      "x-amz-meta-nvcf-asset-description": "Retake temporary face-edit board"
-    },
-    body: imageBytes,
-    signal: AbortSignal.timeout(60000)
-  });
-
-  if (!uploadResponse.ok) {
-    throw Object.assign(new Error("NVIDIA geçici görsel varlığına yükleme yapılamadı."), {
-      status: uploadResponse.status
+  try {
+    const uploadResponse = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "image/png",
+        "x-amz-meta-nvcf-asset-description": "Retake temporary face-edit board"
+      },
+      body: imageBytes,
+      signal: AbortSignal.timeout(60000)
     });
-  }
 
-  return asset.assetId;
+    if (!uploadResponse.ok) {
+      throw Object.assign(new Error("NVIDIA geçici görsel varlığına yükleme yapılamadı."), {
+        status: uploadResponse.status
+      });
+    }
+    return asset.assetId;
+  } catch (error) {
+    await deleteAsset(apiKey, asset.assetId);
+    throw error;
+  }
 }
 
 async function deleteAsset(apiKey, assetId) {

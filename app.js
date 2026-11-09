@@ -35,6 +35,9 @@ const elements = {
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
   outputPlaceholder: $("#outputPlaceholder"),
+  outputMessage: $("#outputMessage"),
+  outputStage: $(".output-stage"),
+  outputSymbol: $(".output-symbol"),
   outputTitle: $("#outputTitle"),
   outputStatus: $("#outputStatus"),
   engineTitle: $("#engineTitle"),
@@ -216,8 +219,11 @@ function clearResult() {
   elements.resultImage.hidden = true;
   elements.resultImage.removeAttribute("src");
   elements.outputPlaceholder.hidden = false;
+  elements.outputStage.classList.remove("has-result");
+  elements.outputSymbol.hidden = false;
   elements.outputTitle.textContent = "Önizleme";
   elements.outputStatus.textContent = "Beklemede";
+  elements.outputMessage.textContent = "NVIDIA FLUX deneysel düzenleme için hazır olduğunda sonuç burada görünecek.";
   updateSwapAvailability();
 }
 
@@ -595,11 +601,12 @@ async function runNvidiaFaceEdit() {
 
   state.isSwapping = true;
   updateSwapAvailability();
+  clearResult();
   elements.outputTitle.textContent = "NVIDIA ile işleniyor";
   elements.outputStatus.textContent = "Yükleniyor";
   elements.outputPlaceholder.hidden = false;
   elements.outputPlaceholder.querySelector("strong").textContent = "Yüz düzenleniyor…";
-  elements.outputPlaceholder.querySelector("p").textContent =
+  elements.outputMessage.textContent =
     "Seçilen yüz crop'u ve 20 referans NVIDIA'ya gönderildi. Orijinal fotoğrafın geri kalanı tarayıcıda kalıyor.";
 
   let generatedUrl = null;
@@ -635,6 +642,8 @@ async function runNvidiaFaceEdit() {
     elements.resultImage.src = resultUrl;
     elements.resultImage.hidden = false;
     elements.outputPlaceholder.hidden = true;
+    elements.outputStage.classList.add("has-result");
+    elements.outputSymbol.hidden = true;
     elements.outputTitle.textContent = "Sonuç önizlemesi";
     elements.outputStatus.textContent = "Deneysel çıktı";
     elements.downloadButton.disabled = false;
@@ -648,7 +657,9 @@ async function runNvidiaFaceEdit() {
     elements.outputStatus.textContent = "Hata";
     elements.outputPlaceholder.hidden = false;
     elements.outputPlaceholder.querySelector("strong").textContent = "NVIDIA işlemi başarısız";
-    elements.outputPlaceholder.querySelector("p").textContent = error.message || "NVIDIA API isteği başarısız oldu.";
+    elements.outputMessage.textContent = error.message || "NVIDIA API isteği başarısız oldu.";
+    elements.outputStage.classList.remove("has-result");
+    elements.outputSymbol.hidden = false;
     showToast(error.message || "NVIDIA yüz düzenleme işlemi başarısız.");
     setRuntimeStatus("NVIDIA FLUX · hata");
   } finally {

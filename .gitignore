@@ -54,3 +54,7 @@ playwright-report/
 test-results/
 .DS_Store
 *.log
+
+# Keep the harmless Functions environment template tracked
+!functions/
+!functions/.env.example

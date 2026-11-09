@@ -9,7 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
     "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js", "src/nvidia-pipeline.js",
-    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "docs/FACE_ONLY_PIPELINE.md",
+    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "tests/nvidia-backend.test.js", "functions/index.js", "functions/lib/nvidia.js", "functions/package.json", "docs/FACE_ONLY_PIPELINE.md", "docs/NVIDIA_SETUP.md",
     "package.json", "manifest.webmanifest", "sw.js", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )
@@ -37,7 +37,8 @@ def main() -> int:
     if index_path.is_file():
         source = index_path.read_text(encoding="utf-8", errors="replace")
         markers = ('lang="tr"', 'id="targetInput"', 'id="referencesGrid"',
-                   'id="reloadReferencesButton"', 'id="swapButton"', 'id="resultImage"', "styles.css", "app.js", "manifest.webmanifest")
+                   'id="reloadReferencesButton"', 'id="swapButton"', 'id="resultImage"',
+                   'id="outputMessage"', "styles.css", "app.js", "manifest.webmanifest")
         missing = [marker for marker in markers if marker not in source]
         checks.append({
             "check": "web-entry", "file": "index.html", "ok": not missing,
@@ -77,6 +78,17 @@ def main() -> int:
                   else "eski referans yükleme/IndexedDB akışı veya API yükleyicisi eksik: "
                        + ", ".join(upload_hits or ["API image route"]),
     })
+
+    app_source = app_path.read_text(encoding="utf-8", errors="replace") if app_path.is_file() else ""
+    if app_path.is_file():
+        leaked = [marker for marker in ("NVIDIA_API_KEY", "nvapi-") if marker in app_source]
+        checks.append({
+            "check": "no-client-nvidia-key",
+            "file": "app.js",
+            "ok": not leaked,
+            "detail": "NVIDIA API anahtarı istemci kodunda bulunmuyor" if not leaked
+                      else "NVIDIA API anahtarı istemci koduna yazılmış: " + ", ".join(leaked),
+        })
 
     source_files = [ROOT / "index.html", ROOT / "app.js"]
     source_files.extend((ROOT / "ios" / "RetakeApp").rglob("*.swift"))

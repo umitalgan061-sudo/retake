@@ -2,6 +2,7 @@ const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 const RATE_WINDOW_MS = 15 * 60 * 1000;
 const FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev";
 const NVCF_ASSETS_URL = "https://api.nvcf.nvidia.com/v2/nvcf/assets";
+const ASSET_DESCRIPTION = "Retake temporary face-edit reference board";
 const editAttempts = new Map();
 
 function configuredOrigins(env) {
@@ -76,7 +77,7 @@ async function createAndUploadAsset(apiKey, imageBytes) {
     },
     body: JSON.stringify({
       contentType: "image/png",
-      description: "Retake temporary face-edit reference board"
+      description: ASSET_DESCRIPTION
     })
   });
 
@@ -106,7 +107,7 @@ async function createAndUploadAsset(apiKey, imageBytes) {
       method: "PUT",
       headers: {
         "Content-Type": "image/png",
-        "x-amz-meta-nvcf-asset-description": "Retake temporary face-edit board"
+        "x-amz-meta-nvcf-asset-description": ASSET_DESCRIPTION
       },
       body: imageBytes
     });

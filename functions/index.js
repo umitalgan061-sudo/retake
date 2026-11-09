@@ -11,6 +11,7 @@ const NVIDIA_API_KEY = defineSecret("NVIDIA_API_KEY");
 const REGION = "europe-west1";
 const FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev";
 const NVCF_ASSETS_URL = "https://api.nvcf.nvidia.com/v2/nvcf/assets";
+const ASSET_DESCRIPTION = "Retake temporary face-edit reference board";
 const REQUEST_WINDOW_MS = 15 * 60 * 1000;
 const REQUEST_LIMIT = 5;
 const requestBuckets = new Map();
@@ -69,7 +70,7 @@ async function createAndUploadAsset(apiKey, imageBytes) {
     },
     body: JSON.stringify({
       contentType: "image/png",
-      description: "Retake temporary face-edit reference board"
+      description: ASSET_DESCRIPTION
     }),
     signal: AbortSignal.timeout(30000)
   });
@@ -95,7 +96,7 @@ async function createAndUploadAsset(apiKey, imageBytes) {
       method: "PUT",
       headers: {
         "Content-Type": "image/png",
-        "x-amz-meta-nvcf-asset-description": "Retake temporary face-edit board"
+        "x-amz-meta-nvcf-asset-description": ASSET_DESCRIPTION
       },
       body: imageBytes,
       signal: AbortSignal.timeout(60000)

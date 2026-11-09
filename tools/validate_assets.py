@@ -44,16 +44,18 @@ def main() -> int:
         target_site = firebaserc["targets"]["hafize-23465"]["hosting"]["retake06"]
         ignored = hosting_config.get("ignore", [])
         safe_ignores = all(pattern in ignored for pattern in (
-            "functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "reference-faces/**"
+            "functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "worker/**"
         ))
+        reference_assets_public = "reference-faces/**" not in ignored
         hosting_ok = (
             hosting_config.get("target") == "retake06"
             and hosting_config.get("public") == "."
             and target_site == ["retake06"]
             and firebaserc.get("projects", {}).get("default") == "hafize-23465"
             and safe_ignores
+            and reference_assets_public
         )
-        hosting_detail = "yalnız retake06 Hosting hedefi seçili; kaynak ve gizli dosyalar public değil"
+        hosting_detail = "retake06 hedefi seçili; kaynak hariç, onaylı referans varlıkları public"
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         hosting_ok = False
         hosting_detail = "Firebase Hosting hedefi yapılandırması geçersiz: " + str(error)
@@ -124,9 +126,9 @@ def main() -> int:
         "check": "local-reference-flow",
         "file": "index.html/app.js/src/reference-catalog.js/reference-faces/manifest.json",
         "ok": not upload_hits and has_local_loader,
-        "detail": "25 yerel görsel manifestten yükleniyor; özel klasör Hosting dışında"
+        "detail": "25 referans manifestten yükleniyor; fotoğraflar Firebase Hosting'de yayımlanır"
                   if not upload_hits and has_local_loader
-                  else "yerel manifest akışı veya özel Hosting hariç tutması eksik: "
+              else "yerel manifest akışı veya Hosting fotoğraf yayını tutarsız: "
                        + ", ".join(upload_hits or ["25-image manifest/local loader"]),
     })
 

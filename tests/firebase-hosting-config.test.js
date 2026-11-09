@@ -12,11 +12,12 @@ test("maps only the Retake Hosting target to the retake06 site", () => {
   assert.equal(firebase.hosting.public, ".");
 });
 
-test("excludes server, native app, tests and private docs from public Hosting", () => {
+test("excludes source and tooling while publishing the consented reference assets", () => {
   const ignored = firebase.hosting.ignore;
-  for (const path of ["functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "reference-faces/**", "worker/**", "wrangler.toml"]) {
+  for (const path of ["functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "worker/**", "wrangler.toml"]) {
     assert.ok(ignored.includes(path), path + " must not be deployed to Hosting");
   }
+  assert.ok(!ignored.includes("reference-faces/**"), "approved reference photos must be served by Hosting");
 });
 
 test("retains the NVIDIA function config alongside one Hosting site", () => {

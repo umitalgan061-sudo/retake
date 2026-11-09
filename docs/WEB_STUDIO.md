@@ -38,7 +38,7 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 
 - Hedef fotoğraf IndexedDB'ye yazılmaz; sayfa oturumu sona erdiğinde bellek referansı serbest bırakılır.
 - Referans fotoğrafları `reference-faces/manifest.json` ile yerel statik dosyalardan okunur; uygulama bunları IndexedDB'ye yazmaz.
-- Firebase Hosting, kişisel fotoğrafların herkese açılmaması için `reference-faces/**` yolunu dağıtmaz. Yerel klasör akışı yalnızca fotoğrafların bulunduğu geliştirme makinesinde çalışır; canlı site için kimlik doğrulamalı özel depolama gerekir.
+- Onaylanan 25 referans fotoğrafı `reference-faces/**` ile Firebase Hosting'de yayımlanır. Bu URL'lere erişebilen herkes görselleri indirebilir; gizli depolama gerekiyorsa kimlik doğrulamalı özel depolama kullanılmalıdır.
 - Service Worker `/reference-faces/` yanıtlarını önbelleğe almaz; yüz görselleri Cache Storage'a kaydedilmez.
 - Tarayıcı depolamasının temizlenmesi veya özel gezinme modu referans fotoğraflarını silebilir. Önemli dosyaların ayrıca yedeklenmesi kullanıcı sorumluluğundadır.
 - Service Worker uygulama kabuğunu ve MediaPipe varlıklarını önbelleğe alır; `/reference-faces/` altındaki fotoğraflar ve manifest cache'e yazılmaz.

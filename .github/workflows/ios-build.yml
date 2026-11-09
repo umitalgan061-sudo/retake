@@ -1,5 +1,9 @@
 name: iOS build
 
+concurrency:
+  group: retake-ios-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 on:
   pull_request:
     paths:

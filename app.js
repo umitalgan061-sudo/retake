@@ -411,7 +411,7 @@ async function loadDatabaseReferences({ force = false } = {}) {
   state.referenceLoadError = failedCount
     ? (loadedCount
         ? loadedCount + " referans yüklendi; " + failedCount + " kayıt alınamadı."
-        : "Kayıtlı yüzler API'den alınamadı. " +
+        : "Hafize'deki 20 görsel yerel ve oturum korumalı SQLite API'sinde tutuluyor. retake06.web.app bu yerel veritabanına doğrudan erişemez; önce görseller özel Firebase Storage'a güvenli biçimde aktarılmalı. " +
           (state.references.find((item) => item.status === "error")?.error || ""))
     : null;
 

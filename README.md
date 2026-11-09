@@ -46,6 +46,20 @@ npx serve .
 
 Kamera/Service Worker özellikleri için \`file://\` yerine güvenli bağlam (HTTPS veya localhost) kullanın.
 
+## Firebase Hosting (retake06)
+
+Bu depo yalnızca `hafize-23465` projesindeki `retake06` Hosting sitesine dağıtılacak şekilde yapılandırılmıştır. Diğer yedi Hosting sitesi bu hedefe dahil değildir.
+
+```powershell
+firebase functions:secrets:set NVIDIA_API_KEY --project hafize-23465
+firebase deploy --only functions:retakeNvidiaEdit --project hafize-23465
+firebase deploy --only hosting:retake06 --project hafize-23465
+```
+
+Deploy target `.firebaserc` içinde `retake06` → `retake06` olarak tanımlıdır. `firebase deploy --only hosting:retake06` yalnız bu siteyi yayımlar; tüm Hosting sitelerini hedefleyen `firebase deploy --only hosting` komutunu kullanma.
+
+**Referans verisi notu:** Eski `img_...` kayıtları Hafize'nin yerel `data/hafize.db` SQLite veritabanında ve sahibin oturumunu gerektiren `/api/images/:id` uç noktasında bulunur. Hafize sunucusu varsayılan olarak `127.0.0.1:4173` üzerinde çalışır. Bu veriler, herkese açık `retake06.web.app` alanından doğrudan okunamaz. Referanslar özel Firebase Storage'a bir defalık, kimlik doğrulamalı biçimde aktarılmadan havuz hazır sayılmaz.
+
 ## Native iOS
 
 Xcode projesi: \`ios/Retake.xcodeproj\`

@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
     "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js", "src/nvidia-pipeline.js",
     "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "tests/nvidia-backend.test.js", "functions/index.js", "functions/lib/nvidia.js", "functions/package.json", "docs/FACE_ONLY_PIPELINE.md", "docs/NVIDIA_SETUP.md",
-    "package.json", "manifest.webmanifest", "sw.js", "firebase.json", "functions/.env.example", "icons/retake.svg",
+    "package.json", "manifest.webmanifest", "sw.js", "firebase.json", ".firebaserc", "functions/.env.example", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )
 FORBIDDEN_WEB_MARKERS = (
@@ -34,6 +34,35 @@ def main() -> int:
 
     index_path = ROOT / "index.html"
     app_path = ROOT / "app.js"
+
+    firebase_path = ROOT / "firebase.json"
+    firebaserc_path = ROOT / ".firebaserc"
+    try:
+        firebase_config = json.loads(firebase_path.read_text(encoding="utf-8"))
+        hosting_config = firebase_config["hosting"]
+        firebaserc = json.loads(firebaserc_path.read_text(encoding="utf-8"))
+        target_site = firebaserc["targets"]["hafize-23465"]["hosting"]["retake06"]
+        ignored = hosting_config.get("ignore", [])
+        safe_ignores = all(pattern in ignored for pattern in (
+            "functions/**", "ios/**", "docs/**", "tests/**", "tools/**"
+        ))
+        hosting_ok = (
+            hosting_config.get("target") == "retake06"
+            and hosting_config.get("public") == "."
+            and target_site == ["retake06"]
+            and firebaserc.get("projects", {}).get("default") == "hafize-23465"
+            and safe_ignores
+        )
+        hosting_detail = "yalnız retake06 Hosting hedefi seçili; kaynak ve gizli dosyalar public değil"
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        hosting_ok = False
+        hosting_detail = "Firebase Hosting hedefi yapılandırması geçersiz: " + str(error)
+    checks.append({
+        "check": "firebase-retake06-target",
+        "file": "firebase.json/.firebaserc",
+        "ok": hosting_ok,
+        "detail": hosting_detail,
+    })
     if index_path.is_file():
         source = index_path.read_text(encoding="utf-8", errors="replace")
         markers = ('lang="tr"', 'id="targetInput"', 'id="referencesGrid"',

@@ -14,7 +14,7 @@ test("maps only the Retake Hosting target to the retake06 site", () => {
 
 test("excludes server, native app, tests and private docs from public Hosting", () => {
   const ignored = firebase.hosting.ignore;
-  for (const path of ["functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "reference-faces/**"]) {
+  for (const path of ["functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "reference-faces/**", "worker/**", "wrangler.toml"]) {
     assert.ok(ignored.includes(path), path + " must not be deployed to Hosting");
   }
 });

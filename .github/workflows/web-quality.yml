@@ -48,4 +48,5 @@ jobs:
         run: |
           node --check app.js
           node --check src/core.js
+          node --check src/nvidia-pipeline.js
           node --check sw.js

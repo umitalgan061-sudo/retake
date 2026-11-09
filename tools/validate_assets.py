@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
-    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js",
-    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "docs/FACE_ONLY_PIPELINE.md",
+    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js", "src/nvidia-pipeline.js",
+    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "docs/FACE_ONLY_PIPELINE.md",
     "package.json", "manifest.webmanifest", "sw.js", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )
@@ -37,7 +37,7 @@ def main() -> int:
     if index_path.is_file():
         source = index_path.read_text(encoding="utf-8", errors="replace")
         markers = ('lang="tr"', 'id="targetInput"', 'id="referencesGrid"',
-                   'id="reloadReferencesButton"', 'id="swapButton"', "styles.css", "app.js", "manifest.webmanifest")
+                   'id="reloadReferencesButton"', 'id="swapButton"', 'id="resultImage"', "styles.css", "app.js", "manifest.webmanifest")
         missing = [marker for marker in markers if marker not in source]
         checks.append({
             "check": "web-entry", "file": "index.html", "ok": not missing,

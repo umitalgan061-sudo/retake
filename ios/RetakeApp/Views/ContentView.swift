@@ -32,11 +32,14 @@ struct ContentView: View {
                 Task { await viewModel.loadTarget(newItem) }
             }
             .onChange(of: referencePickerItems) { _, newItems in
-                Task { await viewModel.importReferences(newItems) }
+                Task {
+                    await viewModel.importReferences(newItems)
+                    referencePickerItems = []
+                }
             }
             .fileImporter(
                 isPresented: $isImportingModel,
-                allowedContentTypes: [.folder],
+                allowedContentTypes: [.folder, .package],
                 allowsMultipleSelection: false
             ) { result in
                 switch result {

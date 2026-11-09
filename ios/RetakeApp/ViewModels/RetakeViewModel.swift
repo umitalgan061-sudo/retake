@@ -57,7 +57,14 @@ final class RetakeViewModel: ObservableObject {
         for item in items.prefix(remaining) {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self),
-                      UIImage(data: data) != nil else {
+                      let image = UIImage(data: data) else {
+                    failed += 1
+                    continue
+                }
+                // Reference entries must contain exactly one detectable face.
+                // This avoids silently treating group photos as a single identity.
+                let faceCount = try faceDetector.detectFaces(in: image).count
+                guard faceCount == 1 else {
                     failed += 1
                     continue
                 }
@@ -70,7 +77,7 @@ final class RetakeViewModel: ObservableObject {
         }
 
         await refreshReferences()
-        statusMessage = "İçe aktarılan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
+        statusMessage = "Tek yüz içerdiği doğrulanan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
     }
 
     func removeReference(_ face: ReferenceFace) async {

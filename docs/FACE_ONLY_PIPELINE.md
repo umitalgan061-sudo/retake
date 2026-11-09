@@ -2,7 +2,7 @@
 
 Tarih: 9 Kasım 2026  
 Hedef: iPhone 17 Pro Max + modern web tarayıcıları  
-Durum: Ürün sözleşmesi onaylandı; gerçek inference ve maskeli compositing henüz uygulanmadı.
+Durum: Web üzerinde NVIDIA FLUX.1-Kontext-dev ile deneysel görsel düzenleme ve eliptik face-only compositing eklendi. Gerçek kimlik korumalı Face Swap modeli ve kimlik doğrulaması hâlâ yoktur.
 
 ## 1. Kesin ürün kuralları
 
@@ -60,20 +60,17 @@ Referans fotoğrafları yalnızca tek yüz içerme kontrolünden geçmekle kalma
 
 Sınır kutusu tek başına yeterli değildir. Piksel-seviyesinde semantik yüz maskesi ve örtücü algısı gerekir.
 
-Maskeye girebilecek bölgeler:
-- yüz derisi, alın, yanak, burun ve çene;
-- sol/sağ kaş ve göz kapakları;
-- sol/sağ göz ve iris;
-- ağız, üst/alt dudak;
-- gerektiğinde yüzün kulak/şakak sınırları.
+Mevcut NVIDIA deneysel web akışında maske, hedef yüz landmark sınırından türetilen yumuşak elipstir. Semantik face parser/occlusion detector henüz bağlanmadı.
 
-Korunacak bölgeler:
+Maske yaklaşık yüz derisi, göz, burun, ağız ve çene çevresini kapsar. Elips saç tellerini, gözlük camını/çerçevesini veya yüzü örten eli semantik olarak ayırt edemez. Bu nedenle maske sınırı kontrollü tutulur ve sonuç kullanıcı tarafından incelenir.
+
+Korunması hedeflenen bölgeler:
 - saç, saç çizgisinin yüz dışında kalan bölümü ve saç telleri;
 - gözlük çerçevesi/camı, el, mikrofon veya yüzün önünden geçen nesneler;
 - boyun, kıyafet, beden, arka plan;
 - hedefteki diğer kişiler ve diğer yüzler.
 
-Maske üretimi parser + landmark + occlusion detector birleşimiyle yapılır. Kenar feather işlemi maskenin içinde kalır; dışarı taşmaz. Yalnızca bounding-box maskesi kullanılmaz.
+Maske kenarında feather işlemi yalnızca maskenin içinde uygulanır. Alpha 0 olan piksel orijinalden byte-byte kopyalanır.
 
 ## 6. Birleştirme ve orijinal fotoğrafın korunması
 
@@ -124,21 +121,25 @@ Lisans listesi: https://docs.facefusion.io/introduction/licenses
 
 ## 9. Mevcut kod ile fark
 
-Mevcut sürüm:
-- fotoğraf seçimi ve çoklu yüz tespiti yapar;
-- kullanıcıya hedef yüz seçtirir;
-- 20'ye kadar tek-yüz referansı yerel olarak kaydeder;
-- kamera API'si kullanmaz.
+Web sürümünde:
+- fotoğraf seçimi ve çoklu yüz tespiti vardır;
+- kullanıcı hedef yüzü kendisi seçer;
+- 20 kayıtlı referans görsel API'sinden otomatik okunur;
+- açık onaydan sonra hedef yüz crop'u ve 20 referans panosu NVIDIA FLUX'a gönderilir;
+- NVIDIA çıktısı yalnızca eliptik yüz maskesinin içinde orijinal fotoğrafa eklenir;
+- maske dışı piksel bütünlüğü kontrol edilir;
+- API anahtarı Firebase Functions Secret'ta tutulur; istemci koduna eklenmez;
+- kamera API'si kullanılmaz.
 
 Henüz olmayanlar:
-- referanslar arasında aynı kişiyi doğrulayan kimlik encoder'ı;
-- kalite ağırlıklı 20-referans identity profile;
-- lisansı uygun face-swap generator ve göz/ifade retargeter;
-- yüz parser/occlusion mask;
-- sadece yüz bölgesine uygulanan gerçek compositing;
-- çıktı kalitesi ve maske dışı piksel bütünlüğü testleri.
+- 20 fotoğrafın aynı kişiye ait olduğunu doğrulayan identity encoder;
+- kalite ağırlıklı identity embedding/prototype;
+- özel Face Swap generator ve güvenilir eye/expression retargeter;
+- semantik face parser ve occlusion mask;
+- kimlik benzerliği/poz için otomatik kalite kapısı;
+- aynı NVIDIA deneysel hattının native iOS Core ML karşılığı.
 
-Bu aşamalar tamamlanmadan yüz değiştirme butonu devre dışı kalır.
+FLUX çıktısı deneysel olarak üretilir; özel kimlik korumalı Face Swap başarısı garanti edilmez.
 
 ## 10. CI gereksinimleri
 

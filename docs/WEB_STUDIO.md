@@ -19,8 +19,11 @@ Web ve iOS uygulamalarında kamera açılmaz. `getUserMedia`, WebRTC canlı vide
 
 - \`index.html\`: Anlamsal, Türkçe ve erişilebilir sayfa iskeleti.
 - \`styles.css\`: Responsive masaüstü/tablet/mobil düzen, koyu/açık tema ve hareket azaltma tercihleri.
-- \`app.js\`: MediaPipe yaşam döngüsü, dosya seçimi, hedef seçim, IndexedDB ve PWA etkileşimleri.
-- \`src/core.js\`: Saf ve test edilebilir görsel doğrulama, landmark sınır kutusu, aspect-ratio ve dosya boyutu yardımcıları.
+- \`app.js\`: MediaPipe yaşam döngüsü, hedef fotoğraf seçimi, veritabanı referansları, NVIDIA isteği ve sonuç dışa aktarma.
+- \`src/nvidia-pipeline.js\`: Hedef yüz crop'u, 20 fotoğraflı kimlik panosu ve yumuşak eliptik yüz maskesi.
+- \`src/face-only.js\`: RGBA kompozitleme ve maske dışı piksel bütünlüğü kontrolü.
+- \`functions/index.js\`: NVIDIA API anahtarını Secret Manager'dan alan sunucu proxy'si.
+- \`src/core.js\`: Görsel doğrulama, landmark sınır kutusu, aspect-ratio ve dosya boyutu yardımcıları.
 - \`sw.js\`: Uygulama kabuğu ve açıkça izin verilen MediaPipe varlıkları için önbellek.
 - \`manifest.webmanifest\`: PWA adı, başlangıç URL'si, kapsam ve tema.
 - \`tests/core.test.js\`: Node.js yerleşik test koşucusuyla yardımcı fonksiyon testleri.
@@ -44,15 +47,19 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 
 İlk kurulumda HTTPS/localhost üzerinden çevrimiçi açılış gerekir. Service Worker uygulama kabuğunu, MediaPipe WASM dosyalarını ve model dosyasını indirip cache'e ekler. Bu varlıklar önbelleğe alındıktan sonra desteklenen tarayıcılarda arayüz ve yüz algılama çevrimdışı da çalışabilir. Tarayıcı cache'i her zaman silebilir; çevrimdışı kullanım garantisi disk alanı ve tarayıcı politikalarına bağlıdır.
 
-## Yüz dışı piksel koruma
+## NVIDIA FLUX deneysel düzenleme hattı
 
-Üretim hattı sadece seçilen yüz crop'unda çalışır. 20 referans aynı kimlikten olmalı ve kalite ağırlıklı tek kimlik profiline dönüştürülmelidir. Hedef fotoğraf poz/ışık/kompozisyonu sağlar. Kapalı gözler varsa uygun açık göz referanslarından doğal göz açıklığı üretilir; ifade değişimi yalnızca gerektiğinde yapılır. Face parsing ve occlusion mask saç, gözlük, eller, nesneler, arka plan ve diğer yüzleri dışarıda bırakmalıdır. Sonuç orijinal çözünürlüklü fotoğrafa yalnızca yüz maskesinin içine birleştirilir; maskenin dışı piksel olarak değişmemelidir.
+Web sürümü, kullanıcı onayından sonra seçili hedef yüz crop'unu ve veritabanındaki 20 referansı tek bir 1568×1024 panoda birleştirir. Pano \`functions/index.js\` üzerinden NVIDIA NVCF Asset API'ye yüklenir ve FLUX.1-Kontext-dev endpoint'ine gönderilir. Tam hedef fotoğrafın geri kalanı NVIDIA'ya gönderilmez.
 
-## Gerçek Face Swap motoru neden kapalı?
+FLUX.1-Kontext-dev özel bir Face Swap/kimlik encoder modeli değildir. Yirmi referansı tek bir kimlik profiline dönüştürmez ve kimlik benzerliğini garanti etmez; prompt ve görsel panoyla yönlendirilen deneysel bir görsel düzenleme yöntemidir. Model kartı ticari olmayan kullanıma işaret eder; dağıtım öncesinde NVIDIA ve Black Forest Labs'ın güncel koşulları incelenmelidir.
 
-MediaPipe Face Landmarker, yüz landmark'ı ve sınırlarını verir; yüz kimliğini başka bir fotoğrafa aktaran bir Face Swap modeli değildir. Eski Canvas affine-warp demosu kaldırıldı; çünkü gerçek bir kimlik korumalı model çıktısı üretmiyordu. Web sürümünde işlem/indirme düğmeleri, model ve model-özel inference/kompozitleme hattı doğrulanana kadar devre dışıdır.
+Sonuçta yalnızca hedef yüz crop'u alınır ve tarayıcıda yumuşak eliptik maskeyle orijinal fotoğrafa yerleştirilir. \`inspectOutsideMaskIntegrity\` maskenin dışındaki her pikselin kaynakla aynı olduğunu kontrol eder. Maske semantik face parsing değildir; gözlük, saç teli, el veya başka örtücüleri otomatik tanımaz. Bu nedenle maskenin dışındaki piksel garantisi vardır, ancak maskenin içindeki bölgede model hatası oluşabilir.
 
-Web gerçek AI entegrasyonu için modelin lisans zinciri, WebAssembly/WebGPU uyumluluğu, bellek/performans sınırı, 20-referans identity aggregation, expression retargeting ve yüz maskeli birleştirme ayrıca doğrulanmalıdır. iOS Core ML modeli tek başına tarayıcıda çalıştırılamaz.
+NVIDIA API anahtarı istemci kodunda tutulmaz. Firebase Function, \`NVIDIA_API_KEY\` Secret'ını okur; tarayıcı yalnızca Function URL'sine istek gönderir. Kurulum ve izinler: \`docs/NVIDIA_SETUP.md\`.
+
+## Gerçek kimlik korumalı Face Swap ile arasındaki fark
+
+MediaPipe yalnızca yüz landmark'ı tespit eder. FLUX genel amaçlı görsel düzenleme modelidir; özel yüz kimlik aktarımı, biyometrik referans karşılaştırması veya kalite skoru sunmaz. Mevcut 20 fotoğrafın tek kişiye ait olduğu varsayılır; kod bunu henüz bir identity encoder ile doğrulamaz. Bu akış deneysel sonuç verebilir, ancak deterministik veya profesyonel Face Swap garantisi değildir.
 
 ## Geliştirici doğrulaması
 
@@ -62,6 +69,9 @@ Node.js 22 veya üstü:
 npm test
 npm run validate
 node --check app.js
+node --check src/nvidia-pipeline.js
+node --check functions/index.js
+node --check functions/lib/nvidia.js
 node --check sw.js
 \`\`\`
 

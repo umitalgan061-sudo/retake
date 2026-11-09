@@ -1,28 +1,40 @@
-# Face Swap
+# Retake
 
-Yapay zeka destekli gerçek zamanlı yüz değiştirme uygulaması.
+Kişisel kullanım için geliştirilen Face Swap projesi. Nihai hedef, iPhone 17 Pro Max üzerinde tamamen çevrimdışı çalışan yerel bir iOS uygulamasıdır.
 
-## Özellikler
-- MediaPipe Face Landmarker ile 468 noktalı yüz landmark tespiti
-- 20 referans yüz seçeneği
-- Gerçek zamanlı yüz değiştirme (Delaunay triangulation + affine warp)
-- Fotoğraf çekme ve indirme
-- Ön/arka kamera geçişi
-- Karanlık/açık tema
-- PWA desteği
-- Mobil uyumlu
+> **Durum:** Depodaki mevcut web sürümü henüz gerçek AI Face Swap değildir ve çevrimdışı çalışmaz.
 
-## Canlı Demo
-https://retake06.web.app
+## Mevcut web prototipi
 
-## Kullanım
-1. Sayfa yüklendiğinde kamera izni verin
-2. Alt kısımda 20 referans yüzdenden birini seçin
-3. Kameradaki yüzünüz anında seçilen yüzle değişir
-4. "Fotoğraf Çek" ile anı kaydedin, "İndir" ile PNG kaydedin
+- MediaPipe Face Landmarker ile yüz landmark tespiti
+- 20 referans yüz seçimi arayüzü
+- Canvas üzerinde üçgen/affine warp tabanlı geometrik yüz kaplama
+- Kamera önizlemesi ve PNG indirme arayüzü
+- Koyu/açık tema
 
-## Teknolojiler
-- MediaPipe Tasks Vision (Face Landmarker)
-- HTML5 Canvas 2D affine warp
-- Vanilla JavaScript (ES modules)
-- CSS Custom Properties (theming)
+Bu yaklaşım eğitilmiş bir yüz değiştirme modeli değildir. Mevcut `index.html`, MediaPipe kitaplığını jsDelivr'den ve model dosyasını Google Storage'dan yüklediği için çevrimdışı değildir.
+
+## Depo varlıklarının durumu
+
+Son depo denetiminde `models/` altındaki dosyalar gerçek ONNX/MediaPipe ağırlıkları olarak, `reference-faces/` altındaki 20 dosya da gerçek JPEG/PNG görüntüleri olarak doğrulanamadı. Dosyalar çok küçük API/asset referans metinleri biçiminde görünüyor.
+
+Kontrol etmek için:
+
+```bash
+python3 tools/validate_assets.py
+```
+
+## Nihai hedef
+
+- SwiftUI / PhotosUI tabanlı native iOS uygulaması
+- Gerçek, lisansı doğrulanmış Face Swap modeli
+- Core ML üzerinde cihaz içi inference
+- Yerel referans fotoğrafları
+- Uçak modunda uçtan uca çalışma
+- Fotoğrafların üçüncü taraf servislere gönderilmemesi
+
+Teknik durum ve tamamlanma testleri için [iOS çevrimdışı AI geçiş planına](docs/IOS_OFFLINE_AI_STATUS.md) bakın.
+
+## Gizlilik
+
+Bu GitHub deposu herkese açıktır. Kişisel yüz fotoğraflarınızı veya lisans kısıtlı model ağırlıklarını herkese açık depoya commit etmeyin. Bunları yerel Xcode build kaynaklarına veya uygulama içi güvenli yerel içe aktarma alanına ekleyin.

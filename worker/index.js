@@ -353,7 +353,13 @@ export default {
 
     if (!nvidiaResponse.ok) {
       const status = nvidiaResponse.status;
-      await nvidiaResponse.body?.cancel().catch(() => {});
+      if (nvidiaResponse.body) {
+        try {
+          await nvidiaResponse.body.cancel();
+        } catch {
+          // The upstream error body is not needed by the client.
+        }
+      }
       return jsonResponse({ error: describeNvidiaFailure(status) }, status, cors);
     }
 

@@ -6,15 +6,15 @@ Hedef çalışma şekli: fotoğraflar ve model inference tamamen cihazda; ağ ü
 
 ## Bu dalda geliştirilen native temel
 
-Bu dal artık `ios/Retake.xcodeproj` adlı bir Xcode uygulama projesi içeriyor.
+Bu dal `ios/Retake.xcodeproj` adlı bir Xcode uygulama projesi içeriyor.
 
 - SwiftUI uygulama kabuğu.
 - PhotosPicker ile hedef fotoğrafı seçme.
 - Vision ile fotoğraftaki yüzleri cihaz üzerinde algılama.
 - Birden fazla yüz varsa hedef yüzü görüntü üzerinde çerçeveleyip seçme.
-- En fazla 20 referans fotoğrafını PhotosPicker üzerinden içe aktarma.
+- En fazla 20 referans fotoğrafını PhotosPicker üzerinden içe aktarma; yalnızca tam bir yüz tespit edilen referanslar kabul edilir.
+- Referanslar arasından kaynak yüz seçimi ve silme.
 - Referansları Application Support/Retake/ReferenceFaces altında özel yerel depolama.
-- Referans silme.
 - Derlenmiş `.mlmodelc` klasörünü Files üzerinden yerel içe aktarma.
 - Core ML modelini yükleyip girdi/çıktı açıklamalarını inceleme.
 
@@ -26,7 +26,7 @@ Bu dal **henüz gerçek yüz değiştirme yapmaz**.
 - 20 referans fotoğrafının GitHub girdileri gerçek JPEG/PNG dosyaları değil; küçük `/api/images/...` referans metinleri.
 - Model girdileri, çıktı tensörleri, yüz hizalama ve embedding sözleşmesi doğrulanmış değil.
 - `RetakeFaceSwap.mlmodelc` bulunursa yalnızca yüklenip model açıklaması okunuyor; yüz değiştirme inference çağrısı uygulanmış değil.
-- Gerçek iPhone 17 Pro Max derleme, GPU/Neural Engine profilleme ve uçak modu testi henüz yapılmadı.
+- Gerçek iPhone 17 Pro Max derleme, GPU/Neural Engine profilleme, uçak modu testi ve fotoğraf dışa aktarma henüz yapılmadı.
 
 Model eksikken işlem düğmesi bilerek devre dışıdır. Uygulama sahte görüntü üretmez.
 
@@ -51,7 +51,7 @@ python3 tools/validate_assets.py
 Modelin adı kadar yardımcı modellerin lisansları da önemlidir.
 
 - InsightFace, kaynak kodu için MIT lisansı belirtirken önceden eğitilmiş modelleri non-commercial academic research olarak sınırlıyor; InSwapper serisi için ayrıca lisanslama yönlendirmesi yayımlıyor.
-- FaceFusion, kendi uygulama lisansı ile model varlıklarının lisanslarının ayrı olduğunu açıkça belirtiyor. Model kataloğunda InSwapper non-commercial, GHOST face-swap ağırlıkları Apache-2.0, fakat bazı GHOST yapılandırmalarında kullanılan CrossFace embedding dönüştürücüsü ayrı lisansa sahip.
+- FaceFusion, kendi uygulama lisansı ile model varlıklarının lisanslarının ayrı olduğunu açıkça belirtiyor. Model kataloğunda InSwapper non-commercial, GHOST face-swap ağırlıkları Apache-2.0; bazı GHOST yapılandırmalarında kullanılan CrossFace embedding dönüştürücüsü ise ayrı lisansa sahip.
 - Bu nedenle yalnızca face-swap ağırlığının lisansına bakmak yeterli değildir. Yüz algılama, landmark, tanıma/embedding, embedding dönüştürücü, restorasyon ve segmentasyon bileşenlerinin tamamı incelenmelidir.
 
 Kaynaklar:
@@ -73,7 +73,7 @@ Apple'ın güncel Core ML Tools rehberi öncelikle PyTorch/TensorFlow dönüşü
 3. Signing & Capabilities bölümünde kendi Apple Team hesabınızı seçin.
 4. iPhone 17 Pro Max cihazını hedefleyin.
 5. Uygulamayı derleyip çalıştırın.
-6. Fotoğraf seçimini ve 20 referans fotoğrafı yerel içe aktarmayı test edin.
+6. Fotoğraf seçimini, hedef yüz seçimini ve referans içe aktarmayı test edin.
 7. Uçak modunda tekrar açıp yerel fotoğraf seçimi/yüz algılamayı doğrulayın.
 
 Model paketi içe aktarmak için Dosyalar uygulamasından derlenmiş `RetakeFaceSwap.mlmodelc` klasörü seçilebilir. Modelin yalnızca yüklenebilmesi, onun yüz değiştirme modeli olduğunu veya Neural Engine üzerinde çalıştığını kanıtlamaz.
@@ -84,6 +84,7 @@ Model paketi içe aktarmak için Dosyalar uygulamasından derlenmiş `RetakeFace
 - [ ] iPhone 17 Pro Max üzerine kurulur.
 - [ ] Gerçek 20 JPEG/PNG referans görüntüsü cihazda açılır.
 - [ ] Çok yüzlü fotoğrafta seçilen yüz görsel olarak işaretlenir.
+- [ ] Kaynak referans yüz seçimi çalışır.
 - [ ] Lisansı doğrulanmış gerçek Face Swap modeli Core ML'e dönüştürülür.
 - [ ] Modelin kesin girdi/çıktı sözleşmesi ve ön/son işleme kodu uygulanır.
 - [ ] Gerçek inference sonucunun hedef fotoğrafa maskeli biçimde birleştirilmesi yapılır.

@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "hafize-23465"
+  },
+  "targets": {
+    "hafize-23465": {
+      "hosting": {
+        "retake06": [
+          "retake06"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

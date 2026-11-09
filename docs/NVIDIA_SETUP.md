@@ -27,7 +27,7 @@ Firebase CLI ile:
 
 ```bash
 firebase login
-firebase use <FIREBASE_PROJECT_ID>
+firebase use hafize-23465
 firebase functions:secrets:set NVIDIA_API_KEY
 ```
 
@@ -43,20 +43,21 @@ Site başka bir adreste çalışıyorsa o adresi ekle. Bu dosya Git tarafından 
 
 Functions dağıtımı:
 
-```bash
-firebase deploy --only functions:retakeNvidiaEdit --project <FIREBASE_PROJECT_ID>
+```powershell
+firebase deploy --only functions:retakeNvidiaEdit --project hafize-23465
+firebase deploy --only hosting:retake06 --project hafize-23465
 ```
 
 Dağıtım sonunda Function URL'si şu şekildedir:
 
 ```text
-https://europe-west1-<FIREBASE_PROJECT_ID>.cloudfunctions.net/retakeNvidiaEdit
+https://europe-west1-hafize-23465.cloudfunctions.net/retakeNvidiaEdit
 ```
 
-Bu URL'yi `index.html` içindeki `meta[name="retake-ai-base"]` alanına yaz ve mevcut Firebase Hosting hedefini kullanarak siteyi yayımla. Örneğin:
+Bu Function URL'si Retake deposundaki `index.html` dosyasına önceden yazılmıştır. Function başarıyla dağıtıldıktan sonra yalnızca retake06 Hosting hedefini yayımla:
 
 ```html
-<meta name="retake-ai-base" content="https://europe-west1-PROJECT_ID.cloudfunctions.net/retakeNvidiaEdit">
+<meta name="retake-ai-base" content="https://europe-west1-hafize-23465.cloudfunctions.net/retakeNvidiaEdit">
 ```
 
 Functions doğrudan URL'si kullanılınca `RETAKE_ALLOWED_ORIGINS` içine sitenin tam origin'i eklenmelidir.
@@ -74,3 +75,15 @@ FLUX.1-Kontext-dev model kartında Downloadable olarak listelendiği için tüm 
 - NVIDIA anahtarı sadece Cloud Secret Manager üzerinden Function'a bağlanır.
 - Görsel içerikleri log'lara yazılmaz.
 - Geçici NVCF asset'i istek sonunda silinir; silme başarısızsa NVIDIA'nın saklama politikası geçerlidir.
+
+## retake06 Hosting hedefi
+
+Proje `hafize-23465` ve Hosting site kimliği `retake06` olarak ayarlanmıştır. `.firebaserc` hedef eşlemesi bu depoda kayıtlıdır. `firebase.json` yalnızca retake06 için Hosting hedefi tanımlar; `functions/`, `ios/`, `docs/`, `tests/` ve `tools/` klasörleri public dağıtımdan hariç tutulur. Diğer yedi Hosting sitesine deploy yapılmaz.
+
+PowerShell komutlarını Retake depo klasörünün kökünde çalıştır. `firebase deploy --only hosting:retake06 --project hafize-23465` komutu yalnız retake06 alan adını günceller.
+
+## Mevcut 20 görselin kaynağı
+
+Eski `img_...` kimlikleri Hafize uygulamasının `/api/images/:id` uç noktasına aittir. Bu endpoint `data/hafize.db` içindeki sahibine bağlı SQLite kayıtlarını ve yerel dosya deposunu okur; platform güvenlik katmanı oturum/principal gerektirir. Hafize sunucusu varsayılan olarak `127.0.0.1:4173` adresinde dinler. Bu nedenle `retake06.web.app` içinden aynı-origin `/api/images/{id}` isteği bu kayıtları vermez.
+
+Görseller public Hosting içine kopyalanmamalıdır. Önce mevcut 20 görsel, yalnız sahibin oturumuyla okunup özel Firebase Storage alanına bir defalık aktarılmalı; sonrasında Retake Functions katmanı sahip doğrulaması yaparak referansları sunmalıdır. Bu aktarım tamamlanana kadar Retake referans kartları erişim hatası gösterecektir.

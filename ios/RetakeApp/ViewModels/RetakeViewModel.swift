@@ -17,6 +17,7 @@ final class RetakeViewModel: ObservableObject {
     private let assetStore = LocalAssetStore()
     private let faceDetector = FaceDetectionService()
     private let modelInspector = LocalModelInspector()
+    private let modelDownloader = ModelDownloadManager()
 
     var canAttemptFaceSwap: Bool {
         // Intentionally false until a licensed model and its verified adapter exist.
@@ -116,6 +117,27 @@ final class RetakeViewModel: ObservableObject {
             statusMessage = "Model paketi kopyalandı. Dosyanın yüklenmesi ve model sözleşmesi ayrıca doğrulanmalıdır."
         } catch {
             statusMessage = "Model içe aktarılamadı: \(error.localizedDescription)"
+        }
+    }
+
+    func installModelManifest(from rawURL: String) async {
+        guard !isBusy else { return }
+
+        let value = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: value) else {
+            statusMessage = "Geçerli bir model manifest URL'si girin."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        do {
+            let result = try await modelDownloader.install(from: url)
+            refreshModelInspection()
+            statusMessage = "Model \(result.version) doğrulandı ve kuruldu. Girdi: \(result.inputs.count) · Çıktı: \(result.outputs.count). Modelin Face Swap adaptörü ayrıca doğrulanmalıdır."
+        } catch {
+            statusMessage = "Model kurulamadı: \(error.localizedDescription)"
         }
     }
 

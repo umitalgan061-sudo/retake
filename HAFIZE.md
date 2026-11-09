@@ -26,7 +26,7 @@ Mevcut sürüm fotoğraftaki hedef yüzü algılayıp görsel olarak seçtirebil
 
 ## Depo varlıkları
 
-GitHub'daki eski `models/` dosyaları 51 baytlık API metin referanslarıdır; gerçek model ağırlıkları değildir. `reference-faces/` girdileri de 36 baytlık API metin referanslarıdır; gerçek JPEG/PNG fotoğraf dosyaları değildir. Orijinal fotoğraflar PhotosPicker ile iPhone'a içe aktarılmalıdır.
+GitHub'daki eski `models/` ve `reference-faces/` girdileri gerçek ikili dosyalar değil, küçük API metin referanslarıydı. Bu placeholder kayıtları geliştirme dalından kaldırıldı. Kullanılabilir model ağırlıkları ve orijinal yirmi JPEG/PNG fotoğrafı şu anda depoda yok. Fotoğraflar PhotosPicker ile iPhone'a içe aktarılmalı; model Core ML'e dönüştürülüp yerel olarak kurulmalıdır.
 
 ## Hedef mimari
 

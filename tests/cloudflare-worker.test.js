@@ -69,3 +69,44 @@ test("rejects non-PNG editing input", async () => {
   const response = await worker.fetch(request, env);
   assert.equal(response.status, 415);
 });
+
+test("uploads an asset with metadata matching its signed description", async (t) => {
+  const assetUrl = "https://api.nvcf.nvidia.com/v2/nvcf/assets";
+  const uploadUrl = "https://upload.example/presigned";
+  const requests = [];
+
+  t.mock.method(globalThis, "fetch", async (input, init = {}) => {
+    const url = input instanceof Request ? input.url : String(input);
+    requests.push({ url, init });
+
+    if (url === assetUrl && init.method === "POST") {
+      return Response.json({ assetId: "test-asset", uploadUrl });
+    }
+    if (url === uploadUrl && init.method === "PUT") return new Response(null, { status: 200 });
+    if (url.endsWith("/test-asset") && init.method === "DELETE") return new Response(null, { status: 204 });
+    if (url === "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-kontext-dev") {
+      return Response.json({ artifacts: [{ base64: "AQID" }] });
+    }
+    throw new Error("Unexpected fetch: " + url);
+  });
+
+  const request = new Request("https://retake-nvidia-edit.example.workers.dev/edit", {
+    method: "POST",
+    headers: {
+      Origin: "https://retake06.web.app",
+      "Content-Type": "image/png",
+      "X-Retake-Consent": "true"
+    },
+    body: new Uint8Array([137,80,78,71,13,10,26,10])
+  });
+
+  const response = await worker.fetch(request, env);
+  assert.equal(response.status, 200);
+
+  const assetCreate = requests.find((entry) => entry.url === assetUrl && entry.init.method === "POST");
+  const upload = requests.find((entry) => entry.url === uploadUrl && entry.init.method === "PUT");
+  assert.equal(
+    JSON.parse(assetCreate.init.body).description,
+    upload.init.headers["x-amz-meta-nvcf-asset-description"]
+  );
+});

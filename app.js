@@ -42,6 +42,8 @@ const elements = {
   outputStatus: $("#outputStatus"),
   engineTitle: $("#engineTitle"),
   engineDescription: $("#engineDescription"),
+  accessPassword: $("#accessPassword"),
+  accessButton: $("#accessButton"),
   disabledNote: $("#disabledNote"),
   referencesEmpty: $("#referencesEmpty"),
   referencesGrid: $("#referencesGrid"),
@@ -63,6 +65,7 @@ const state = {
   referenceLoadToken: 0,
   selectedFaceIndex: null,
   nvidiaStatus: { checked: false, configured: false },
+  accessToken: null,
   isSwapping: false,
   result: null,
   toastTimer: null,
@@ -82,7 +85,70 @@ function setRuntimeStatus(message) {
 
 function nvidiaApiBase() {
   const configured = document.querySelector('meta[name="retake-ai-base"]')?.content?.trim();
-  return (configured || (window.location.origin + "/api/retake")).replace(/\/+$/, "");
+  if (!configured) return "";
+  try {
+    const parsed = new URL(configured);
+    return parsed.protocol === "https:" ? parsed.origin.replace(/\/+$/, "") : "";
+  } catch {
+    return "";
+  }
+}
+
+function clearWorkerSession() {
+  state.accessToken = null;
+  try {
+    sessionStorage.removeItem("retake-worker-session");
+  } catch {
+    // Session storage may be unavailable in restricted browsing modes.
+  }
+}
+
+async function connectNvidiaAccess() {
+  const base = nvidiaApiBase();
+  if (!base) {
+    showToast("Cloudflare Worker adresi henüz uygulamaya tanımlanmadı.");
+    return;
+  }
+  const password = elements.accessPassword.value;
+  if (!password) {
+    showToast("Retake erişim şifreni gir.");
+    elements.accessPassword.focus();
+    return;
+  }
+
+  elements.accessButton.disabled = true;
+  elements.accessButton.textContent = "Bağlanıyor…";
+  try {
+    const response = await fetch(base + "/auth", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ password })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || typeof payload.token !== "string") {
+      throw new Error(payload.error || "Retake erişim doğrulaması başarısız.");
+    }
+
+    state.accessToken = payload.token;
+    try {
+      sessionStorage.setItem("retake-worker-session", payload.token);
+    } catch {
+      // The session remains available in memory for this page.
+    }
+    elements.accessPassword.value = "";
+    await checkNvidiaStatus();
+    showToast("Retake oturumu açıldı.");
+  } catch (error) {
+    state.nvidiaStatus = { checked: true, configured: false, message: error.message };
+    elements.engineTitle.textContent = "Retake erişimi açılamadı";
+    elements.engineDescription.textContent = error.message;
+    updateSwapAvailability();
+    showToast(error.message || "Giriş başarısız.");
+  } finally {
+    elements.accessButton.disabled = false;
+    elements.accessButton.textContent = "Bağlan";
+  }
 }
 
 function updateSwapAvailability() {
@@ -95,39 +161,55 @@ function updateSwapAvailability() {
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector("span");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Sunucu kurulmalı"));
+    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Giriş gerekli"));
 }
 
 async function checkNvidiaStatus() {
-  try {
-    const response = await fetch(nvidiaApiBase() + "/status", {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    });
-    const payload = await response.json().catch(() => ({}));
-    state.nvidiaStatus = {
-      checked: true,
-      configured: Boolean(response.ok && payload.configured),
-      message: payload.message || (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
-    };
-  } catch (error) {
+  const base = nvidiaApiBase();
+  if (!base) {
     state.nvidiaStatus = {
       checked: true,
       configured: false,
-      message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+      message: "Cloudflare Worker henüz bağlanmadı. Worker dağıtımından sonra verilen workers.dev adresi site ayarına eklenecek."
     };
+  } else if (!state.accessToken) {
+    state.nvidiaStatus = {
+      checked: true,
+      configured: false,
+      message: "Kişisel Retake erişim şifreni girip Bağlan düğmesine bas."
+    };
+  } else {
+    try {
+      const response = await fetch(base + "/status", {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json", Authorization: "Bearer " + state.accessToken }
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (response.status === 401) clearWorkerSession();
+      state.nvidiaStatus = {
+        checked: true,
+        configured: Boolean(response.ok && payload.configured),
+        message: payload.error || payload.message ||
+          (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
+      };
+    } catch (error) {
+      state.nvidiaStatus = {
+        checked: true,
+        configured: false,
+        message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+      };
+    }
   }
 
   if (state.nvidiaStatus.configured) {
     elements.engineTitle.textContent = "NVIDIA FLUX bağlantısı hazır";
     elements.engineDescription.textContent =
-      "Deneysel görüntü düzenleme motoru hazır. Hedef yüz crop'u ve 20 kimlik referansı yalnızca onayından sonra NVIDIA'ya gönderilir.";
+      "Kişisel oturumun doğrulandı. Seçili yüz crop'u ve 20 referans, yalnızca açık onayından sonra NVIDIA'ya gönderilir.";
   } else {
-    elements.engineTitle.textContent = "NVIDIA sunucu anahtarı bekleniyor";
-    elements.engineDescription.textContent =
-      state.nvidiaStatus.message ||
-      "NVIDIA API anahtarı Firebase Functions Secret olarak eklenmeli. Anahtar tarayıcıya veya GitHub'a konmamalı.";
+    elements.engineTitle.textContent = "NVIDIA / Retake bağlantısı bekleniyor";
+    elements.engineDescription.textContent = state.nvidiaStatus.message ||
+      "NVIDIA API anahtarı Cloudflare Worker Secret olarak sunucuda saklanır; tarayıcıya veya GitHub'a eklenmez.";
   }
   updateSwapAvailability();
 }
@@ -430,15 +512,6 @@ async function canvasToBlob(canvas) {
   });
 }
 
-async function blobToDataURL(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Görsel verisi okunamadı."));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function drawContainedImage(context, image, x, y, width, height) {
   const sourceWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
@@ -616,16 +689,24 @@ async function runNvidiaFaceEdit() {
     if (boardBlob.size > 10 * 1024 * 1024) {
       throw new Error("Referans panosu 10 MB sınırını aşıyor.");
     }
-    const imageDataUrl = await blobToDataURL(boardBlob);
+    if (!state.accessToken) {
+      throw new Error("Önce Retake erişim şifrenle oturum aç.");
+    }
     setRuntimeStatus("NVIDIA FLUX · görsel gönderiliyor…");
 
     const response = await fetch(nvidiaApiBase() + "/edit", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ imageDataUrl, consent: true })
+      headers: {
+        "Content-Type": "image/png",
+        Accept: "application/json",
+        Authorization: "Bearer " + state.accessToken,
+        "X-Retake-Consent": "true"
+      },
+      body: boardBlob
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
+      if (response.status === 401) clearWorkerSession();
       const detail = payload.error || ("NVIDIA API " + response.status + " yanıtı verdi.");
       throw new Error(detail);
     }
@@ -809,6 +890,10 @@ function initializeInteractions() {
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
   elements.reloadReferences.addEventListener("click", () => loadDatabaseReferences({ force: true }));
+  elements.accessButton.addEventListener("click", connectNvidiaAccess);
+  elements.accessPassword.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") connectNvidiaAccess();
+  });
   elements.swapButton.addEventListener("click", runNvidiaFaceEdit);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
@@ -840,6 +925,11 @@ function initializeInteractions() {
 async function initializeApp() {
   initializeTheme();
   initializeInteractions();
+  try {
+    state.accessToken = sessionStorage.getItem("retake-worker-session");
+  } catch {
+    state.accessToken = null;
+  }
 
   await Promise.allSettled([
     loadDatabaseReferences(),

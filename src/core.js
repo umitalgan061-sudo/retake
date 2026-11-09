@@ -1,4 +1,4 @@
-export const MAX_REFERENCE_FACES = 20;
+export const MAX_REFERENCE_FACES = 25;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 export const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 

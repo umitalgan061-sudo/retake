@@ -8,7 +8,7 @@ struct ContentView: View {
     @State private var targetPickerItem: PhotosPickerItem?
     @State private var referencePickerItems: [PhotosPickerItem] = []
     @State private var isImportingModel = false
-    @State private var modelManifestURL = ""
+    @State private var isImportingReferenceFiles = false
     @State private var pendingDeleteFace: ReferenceFace?
     @State private var alertMessage: String?
 
@@ -52,6 +52,18 @@ struct ContentView: View {
                     }
                 case .failure(let error):
                     alertMessage = "Model içe aktarma hatası: \(error.localizedDescription)"
+                }
+            }
+            .fileImporter(
+                isPresented: $isImportingReferenceFiles,
+                allowedContentTypes: [.image],
+                allowsMultipleSelection: true
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    Task { await viewModel.importReferenceFiles(urls) }
+                case .failure(let error):
+                    viewModel.statusMessage = "Referans içe aktarma hatası: \(error.localizedDescription)"
                 }
             }
         }
@@ -158,32 +170,7 @@ struct ContentView: View {
                 .disabled(viewModel.isBusy)
                 .accessibilityLabel("Modeli yeniden denetle")
             }
-            Text("Dosyalar uygulamasından derlenmiş RetakeFaceSwap.mlmodelc klasörünü seçin.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-
-            Divider().overlay(Color.white.opacity(0.1))
-
-            TextField("HTTPS model manifest URL'si", text: $modelManifestURL)
-                .textFieldStyle(.roundedBorder)
-                .keyboardType(.URL)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-
-            Button {
-                Task { await viewModel.installModelManifest(from: modelManifestURL) }
-            } label: {
-                Label("Manifestten modeli indir ve kur", systemImage: "arrow.down.circle")
-                    .font(.caption.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(
-                viewModel.isBusy ||
-                modelManifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            )
-
-            Text("Yalnızca izin verilen HTTPS kaynaklarından gelen, lisans incelemesi onaylı ve SHA-256 bilgisi bulunan manifestler kabul edilir. Henüz hazır bir model kataloğu URL'si tanımlı değildir.")
+            Text("Cihaza önceden yerel olarak eklenmiş derlenmiş RetakeFaceSwap.mlmodelc klasörünü seçin.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -289,7 +276,7 @@ struct ContentView: View {
             }
 
             if viewModel.referenceFaces.isEmpty {
-                Text("Aynı kişiye ait en fazla 20 fotoğrafı farklı açılardan ve ifadelerden ekle. Kimlik özellikleri birlikte değerlendirilecek.")
+                Text("Aynı kişiye ait en fazla 20 fotoğrafı farklı açılardan ekle. Uygulama her görselde tek yüz bulunduğunu kontrol eder; aynı kimliğe ait olduklarını doğrulamaz.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -303,15 +290,27 @@ struct ContentView: View {
                 }
             }
 
-            PhotosPicker(selection: $referencePickerItems, maxSelectionCount: 20, matching: .images) {
-                Label("Galeriden kimlik fotoğrafları ekle", systemImage: "person.crop.square.badge.plus")
-                    .font(.subheadline.weight(.semibold))
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.isBusy || viewModel.referenceFaces.count >= 20)
+            HStack(spacing: 10) {
+                PhotosPicker(selection: $referencePickerItems, maxSelectionCount: 20, matching: .images) {
+                    Label("Fotoğraflar", systemImage: "photo.on.rectangle.angled")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isBusy || viewModel.referenceFaces.count >= 20)
 
-            Text("Yalnızca seçilen yüz bölgesi düzenlenecek. Gözler kapalıysa uygun referanslardan doğal göz açıklığı üretilebilecek; saç, arka plan, kıyafet ve diğer yüzler korunacak. Referanslar uygulamanın yerel klasöründe saklanır.")
+                Button {
+                    isImportingReferenceFiles = true
+                } label: {
+                    Label("Dosyalar", systemImage: "folder")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isBusy || viewModel.referenceFaces.count >= 20)
+            }
+
+            Text("20 fotoğrafı iPhone Fotoğraflar veya Dosyalar uygulamasından seç. Her görselde tam bir yüz aranır; kabul edilenler uygulamanın özel yerel klasörüne kopyalanır, sunucuya gönderilmez.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

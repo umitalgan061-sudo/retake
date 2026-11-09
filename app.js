@@ -2,9 +2,15 @@ import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@m
 import {
   formatBytes,
   getLandmarkBounds,
+  MAX_IMAGE_BYTES,
+  MAX_REFERENCE_FACES,
   validateImageFile
 } from "./src/core.js";
-import { REFERENCE_CATALOG, getReferenceImageUrl } from "./src/reference-catalog.js";
+import {
+  getReferenceImageUrl,
+  parseReferenceManifest,
+  REFERENCE_MANIFEST_URL
+} from "./src/reference-catalog.js";
 import {
   NVIDIA_BOARD_WIDTH,
   NVIDIA_BOARD_HEIGHT,
@@ -97,7 +103,7 @@ function updateSwapAvailability() {
   const hasTarget = Boolean(state.target && Number.isInteger(state.selectedFaceIndex) &&
     state.target.faces[state.selectedFaceIndex]);
   const enabled = state.nvidiaStatus.configured && state.detector &&
-    referenceCount === REFERENCE_CATALOG.length && hasTarget && !state.isSwapping;
+    referenceCount === MAX_REFERENCE_FACES && hasTarget && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector("span");
@@ -111,7 +117,7 @@ async function checkNvidiaStatus() {
     state.nvidiaStatus = {
       checked: true,
       configured: false,
-      message: "Cloudflare Worker adresi henüz uygulamaya bağlanmadı."
+      message: "Dış AI düzenleme servisi yapılandırılmamış; yerel yüz algılama kullanılabilir."
     };
   } else {
     try {
@@ -137,11 +143,11 @@ async function checkNvidiaStatus() {
   }
 
   if (state.nvidiaStatus.configured) {
-    elements.engineTitle.textContent = "NVIDIA FLUX bağlantısı hazır";
+    elements.engineTitle.textContent = "Deneysel AI düzenleme hazır";
     elements.engineDescription.textContent =
-      "Sunucu bağlantısı hazır. Seçili yüz crop'u ve 20 referans, yalnızca açık onayından sonra NVIDIA'ya gönderilir.";
+      `Sunucu bağlantısı hazır. Seçili yüz crop'u ve ${MAX_REFERENCE_FACES} yerel referans, yalnızca açık onayından sonra NVIDIA'ya gönderilir.`;
   } else {
-    elements.engineTitle.textContent = "NVIDIA bağlantısı bekleniyor";
+    elements.engineTitle.textContent = "Yerel algılama · düzenleme servisi yok";
     elements.engineDescription.textContent = state.nvidiaStatus.message ||
       "NVIDIA API anahtarı Cloudflare Worker üzerinde sunucu tarafında saklanır.";
   }
@@ -312,18 +318,18 @@ function clearTargetPhoto() {
 function renderReferences() {
   elements.referencesGrid.replaceChildren();
   const readyCount = state.references.filter((item) => item.status === "ready").length;
-  elements.referenceCount.textContent = readyCount + " / " + REFERENCE_CATALOG.length;
+  elements.referenceCount.textContent = readyCount + " / " + MAX_REFERENCE_FACES;
   elements.referencesEmpty.hidden = readyCount > 0;
 
   if (readyCount === 0) {
     const title = elements.referencesEmpty.querySelector("strong");
     const description = elements.referencesEmpty.querySelector("p");
     title.textContent = state.referencesLoading
-      ? "Veritabanındaki yüzler yükleniyor"
-      : "Kayıtlı yüz havuzuna ulaşılamadı";
+      ? "Yerel yüzler yükleniyor"
+      : "Yerel referans havuzu okunamadı";
     description.textContent = state.referencesLoading
-      ? "Kayıtlı 20 referans doğrudan mevcut görsel veritabanından okunuyor. Yeniden fotoğraf eklemen gerekmiyor."
-      : (state.referenceLoadError || "Sunucudaki /api/images/{id} uç noktasını kontrol et ve yeniden dene.");
+      ? `${MAX_REFERENCE_FACES} fotoğraf reference-faces/manifest.json listesinden okunuyor.`
+      : (state.referenceLoadError || "reference-faces/manifest.json dosyasını kontrol et.");
   }
 
   state.references.forEach((reference) => {
@@ -352,7 +358,7 @@ function renderReferences() {
     const label = document.createElement("span");
     label.className = "reference-state";
     label.textContent = reference.status === "ready"
-      ? "VERİTABANINDA"
+      ? "YERELDE"
       : (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR");
 
     card.append(name, label);
@@ -360,83 +366,80 @@ function renderReferences() {
   });
 
   elements.reloadReferences.disabled = state.referencesLoading;
-  elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Veritabanından yenile";
+  elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Klasörden yenile";
   updateSwapAvailability();
 }
 
-async function loadDatabaseReferences({ force = false } = {}) {
+async function loadLocalReferences({ force = false } = {}) {
   const token = ++state.referenceLoadToken;
   state.referencesLoading = true;
   state.referenceLoadError = null;
-  state.references = REFERENCE_CATALOG.map((reference) => ({ ...reference, status: "loading" }));
-  renderReferences();
-
-  const configuredBase = document.querySelector('meta[name="retake-api-base"]')?.content?.trim() || "";
-  const apiBase = configuredBase || window.location.origin;
-
-  const results = await Promise.allSettled(REFERENCE_CATALOG.map(async (reference) => {
-    const endpoint = getReferenceImageUrl(reference.id, apiBase, window.location.origin);
-    const response = await fetch(endpoint, {
-      method: "GET",
-      credentials: new URL(endpoint).origin === window.location.origin ? "same-origin" : "omit",
-      cache: force ? "reload" : "no-store",
-      headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" }
-    });
-
-    if (!response.ok) {
-      throw new Error("API " + response.status + " yanıtı verdi.");
-    }
-
-    const blob = await response.blob();
-    if (!blob.size) throw new Error("Veritabanı boş görsel döndürdü.");
-
-    const loaded = await loadImage(blob);
-    return {
-      ...reference,
-      status: "ready",
-      url: loaded.url,
-      image: loaded.image,
-      mimeType: response.headers.get("content-type") || blob.type,
-      size: blob.size
-    };
-  }));
-
-  if (token !== state.referenceLoadToken) {
-    results.forEach((result) => {
-      if (result.status === "fulfilled") URL.revokeObjectURL(result.value.url);
-    });
-    return 0;
-  }
-
   state.references.forEach((reference) => {
     if (reference.url) URL.revokeObjectURL(reference.url);
   });
-
-  state.references = results.map((result, index) => result.status === "fulfilled"
-    ? result.value
-    : ({
-        ...REFERENCE_CATALOG[index],
-        status: "error",
-        error: result.reason?.message || "Bilinmeyen API hatası"
-      }));
-
-  const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
-  const failedCount = REFERENCE_CATALOG.length - loadedCount;
-  state.referencesLoading = false;
-  state.referenceLoadError = failedCount
-    ? (loadedCount
-        ? loadedCount + " referans yüklendi; " + failedCount + " kayıt alınamadı."
-        : "Hafize'deki 20 görsel yerel ve oturum korumalı SQLite API'sinde tutuluyor. retake06.web.app bu yerel veritabanına doğrudan erişemez; önce görseller özel Firebase Storage'a güvenli biçimde aktarılmalı. " +
-          (state.references.find((item) => item.status === "error")?.error || ""))
-    : null;
-
+  state.references = [];
   renderReferences();
-  if (failedCount) {
-    showToast(loadedCount + " / " + REFERENCE_CATALOG.length + " kayıtlı referans yüklendi.");
-  } else {
-    showToast("20 kayıtlı referans başarıyla yüklendi.");
+
+  try {
+    const manifestResponse = await fetch(REFERENCE_MANIFEST_URL, {
+      cache: force ? "reload" : "no-store"
+    });
+    if (!manifestResponse.ok) {
+      throw new Error("reference-faces/manifest.json bulunamadı.");
+    }
+
+    const references = parseReferenceManifest(await manifestResponse.json());
+    if (token !== state.referenceLoadToken) return 0;
+    state.references = references.map((reference) => ({ ...reference, status: "loading" }));
+    renderReferences();
+
+    const imageBaseUrl = new URL("./reference-faces/", window.location.href).href;
+    const results = await Promise.allSettled(references.map(async (reference) => {
+      const endpoint = getReferenceImageUrl(reference.file, imageBaseUrl);
+      const response = await fetch(endpoint, {
+        cache: force ? "reload" : "no-store",
+        headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" }
+      });
+      if (!response.ok) throw new Error(`${reference.file}: HTTP ${response.status}`);
+
+      const blob = await response.blob();
+      if (!blob.size || blob.size > MAX_IMAGE_BYTES) {
+        throw new Error(`${reference.file}: görsel boş veya 25 MB sınırını aşıyor.`);
+      }
+
+      const loaded = await loadImage(blob);
+      return { ...reference, status: "ready", url: loaded.url, image: loaded.image, size: blob.size };
+    }));
+
+    if (token !== state.referenceLoadToken) {
+      results.forEach((result) => {
+        if (result.status === "fulfilled") URL.revokeObjectURL(result.value.url);
+      });
+      return 0;
+    }
+
+    state.references = results.map((result, index) => result.status === "fulfilled"
+      ? result.value
+      : ({ ...references[index], status: "error", error: result.reason?.message || "Görsel açılamadı." }));
+    const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
+      const failedCount = MAX_REFERENCE_FACES - loadedCount;
+    state.referencesLoading = false;
+    state.referenceLoadError = failedCount
+      ? `${loadedCount}/${MAX_REFERENCE_FACES} görsel yüklendi; ${failedCount} dosyayı manifest ve dosya adıyla karşılaştır.`
+      : null;
+
+    renderReferences();
+    showToast(`${loadedCount}/${MAX_REFERENCE_FACES} yerel referans yüklendi.`);
+    return loadedCount;
+  } catch (error) {
+    if (token !== state.referenceLoadToken) return 0;
+    state.references = [];
+    state.referencesLoading = false;
+    state.referenceLoadError = error.message || "Yerel referans dosyaları okunamadı.";
+    renderReferences();
+    showToast(state.referenceLoadError);
+    return 0;
   }
-  return loadedCount;
 }
 
 async function canvasToBlob(canvas) {
@@ -456,8 +459,8 @@ function drawContainedImage(context, image, x, y, width, height) {
 
 function buildNvidiaContactSheet() {
   const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
-  if (readyReferences.length !== REFERENCE_CATALOG.length) {
-    throw new Error("NVIDIA işlemi için veritabanındaki 20 referansın tamamı yüklenmiş olmalı.");
+  if (readyReferences.length !== MAX_REFERENCE_FACES) {
+    throw new Error(`İşlem için ${MAX_REFERENCE_FACES} yerel referansın tamamı yüklenmiş olmalı.`);
   }
   const face = state.target?.faces?.[state.selectedFaceIndex];
   if (!face) throw new Error("Önce hedef fotoğraftaki değiştirilecek yüzü seç.");
@@ -493,12 +496,12 @@ function buildNvidiaContactSheet() {
   const panelX = NVIDIA_TARGET_PANEL_WIDTH;
   context.fillStyle = "#f0f5f7";
   context.font = "700 17px system-ui";
-  context.fillText("20 IDENTITY REFERENCES", panelX + 22, 29);
+  context.fillText(`${MAX_REFERENCE_FACES} IDENTITY REFERENCES`, panelX + 22, 29);
   context.fillStyle = "#9caaba";
   context.font = "12px system-ui";
   context.fillText("All photos show the same person", panelX + 22, 50);
 
-  const columns = 4;
+  const columns = 5;
   const rows = 5;
   const startY = 66;
   const gapX = 10;
@@ -592,14 +595,14 @@ async function runNvidiaFaceEdit() {
     showToast("Önce hedef fotoğrafı ve yüzü seç.");
     return;
   }
-  if (state.references.filter((item) => item.status === "ready").length !== REFERENCE_CATALOG.length) {
-    showToast("20 referansın tamamı yüklenmeden işlem başlatılamaz.");
+  if (state.references.filter((item) => item.status === "ready").length !== MAX_REFERENCE_FACES) {
+    showToast(`${MAX_REFERENCE_FACES} referansın tamamı yüklenmeden işlem başlatılamaz.`);
     return;
   }
 
   const consent = window.confirm(
     "GİZLİLİK ONAYI\n\n" +
-    "Yalnızca seçtiğin yüzün bulunduğu crop ve veritabanındaki 20 referans fotoğrafı birleştirilerek NVIDIA FLUX servisine gönderilecek. " +
+    `Yalnızca seçtiğin yüzün bulunduğu crop ve yerel klasörden yüklenen ${MAX_REFERENCE_FACES} referans fotoğrafı NVIDIA FLUX servisine gönderilecek. ` +
     "Hedef fotoğrafın geri kalanı gönderilmeyecek. Görseller NVIDIA altyapısında işlenecek. " +
     "Devam etmek istiyor musun?"
   );
@@ -613,7 +616,7 @@ async function runNvidiaFaceEdit() {
   elements.outputPlaceholder.hidden = false;
   elements.outputPlaceholder.querySelector("strong").textContent = "Yüz düzenleniyor…";
   elements.outputMessage.textContent =
-    "Seçilen yüz crop'u ve 20 referans NVIDIA'ya gönderildi. Orijinal fotoğrafın geri kalanı tarayıcıda kalıyor.";
+    `Seçilen yüz crop'u ve ${MAX_REFERENCE_FACES} referans NVIDIA'ya gönderildi. Orijinal fotoğrafın geri kalanı tarayıcıda kalıyor.`;
 
   let generatedUrl = null;
   try {
@@ -713,7 +716,7 @@ async function initializeDetector() {
     }
 
     elements.engineDescription.textContent =
-      "Yüz algılama cihaz üzerinde hazır. NVIDIA FLUX deneysel düzenleme için kullanılabilir; kimlik aktarımı garanti edilmez.";
+      "MediaPipe yüzleri cihazda GPU ile algılamayı dener, desteklenmezse CPU'ya geçer. Yerel Face Swap modeli yoktur.";
     if (state.target) {
       state.target.faces = detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
@@ -818,7 +821,7 @@ function initializeInteractions() {
   });
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
-  elements.reloadReferences.addEventListener("click", () => loadDatabaseReferences({ force: true }));
+  elements.reloadReferences.addEventListener("click", () => loadLocalReferences({ force: true }));
   elements.swapButton.addEventListener("click", runNvidiaFaceEdit);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
@@ -852,7 +855,7 @@ async function initializeApp() {
   initializeInteractions();
 
   await Promise.allSettled([
-    loadDatabaseReferences(),
+    loadLocalReferences(),
     initializeDetector(),
     checkNvidiaStatus()
   ]);
@@ -860,7 +863,7 @@ async function initializeApp() {
   const loaded = state.references.filter((reference) => reference.status === "ready").length;
   setRuntimeStatus(
     (state.detector ? "Yüz algılama hazır" : "Yüz algılama kullanılamıyor") +
-    " · Veritabanı: " + loaded + " / " + REFERENCE_CATALOG.length + " referans"
+    " · Yerel referans: " + loaded + " / " + MAX_REFERENCE_FACES
   );
   updateSwapAvailability();
 

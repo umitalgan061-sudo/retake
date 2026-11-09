@@ -1,13 +1,11 @@
-# Reference faces
+# Yerel referans fotoğrafları
 
-The twenty old filename entries in this directory were removed from this branch after the audit showed that they were 36-byte `/api/images/...` text references, not JPEG/PNG image files.
+Site 25 görseli bu klasördeki `manifest.json` dosyasından yükler. Fotoğrafları aşağıdaki adlarla bu klasöre koy:
 
-**The original twenty photos are not available in this repository.** No actual user photo was deleted; the removed entries did not contain image pixels.
+`01.jpg` … `25.jpg`
 
-Import the real, consented reference photos into the native iOS app using PhotosPicker. The app:
-- accepts up to 20 reference images;
-- validates that exactly one face is detectable in each imported image;
-- stores them in the app's private Application Support folder;
-- lets the user select the source face and remove a local reference.
+Manifestte dosya adlarını değiştirebilirsin; yalnızca JPG, PNG ve WebP desteklenir. Her dosya 25 MB'tan küçük olmalı. Yeni isimleri `manifest.json` içindeki `images` listesinde güncelle. Tarayıcı statik bir klasörü kendiliğinden listeleyemediği için manifest gereklidir.
 
-Do not commit personal face photographs, face embeddings, biometric templates, or other private identity data to this public GitHub repository. Common reference image formats are ignored by Git in this folder.
+Siteyi yerel HTTP sunucusuyla aç. `file://` üzerinden çalıştırma. Firebase Hosting, kişisel yüz fotoğraflarını herkese açık yayımlamamak için `reference-faces/**` yolunu dağıtım dışında bırakır; canlı sitede bu fotoğrafları kullanmak için kimlik doğrulamalı özel depolama gerekir. Fotoğraflar Git tarafından yok sayılır; herkese açık depoya ekleme.
+
+Native iOS uygulaması için fotoğrafları iPhone Fotoğraflar veya Dosyalar uygulamasından içe aktar. Uygulama her görselde tek yüz bulunduğunu kontrol eder; bunun aynı kişiyi gösterdiğini doğrulamaz.

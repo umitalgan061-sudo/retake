@@ -44,7 +44,7 @@ def main() -> int:
         target_site = firebaserc["targets"]["hafize-23465"]["hosting"]["retake06"]
         ignored = hosting_config.get("ignore", [])
         safe_ignores = all(pattern in ignored for pattern in (
-            "functions/**", "ios/**", "docs/**", "tests/**", "tools/**"
+            "functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "reference-faces/**"
         ))
         hosting_ok = (
             hosting_config.get("target") == "retake06"
@@ -93,19 +93,41 @@ def main() -> int:
     reference_app = app_path.read_text(encoding="utf-8", errors="replace") if app_path.is_file() else ""
     catalog_path = ROOT / "src" / "reference-catalog.js"
     catalog_source = catalog_path.read_text(encoding="utf-8", errors="replace") if catalog_path.is_file() else ""
+    core_path = ROOT / "src" / "core.js"
+    core_source = core_path.read_text(encoding="utf-8", errors="replace") if core_path.is_file() else ""
+    reference_manifest_path = ROOT / "reference-faces" / "manifest.json"
+    try:
+        reference_manifest = json.loads(reference_manifest_path.read_text(encoding="utf-8"))
+        reference_images = reference_manifest.get("images", [])
+        manifest_ok = (
+            isinstance(reference_images, list)
+            and len(reference_images) == 25
+            and len(set(reference_images)) == 25
+            and all(isinstance(name, str) and name.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))
+                    and "/" not in name and "\\" not in name for name in reference_images)
+        )
+    except (OSError, TypeError, json.JSONDecodeError):
+        manifest_ok = False
     forbidden_upload_markers = ("referenceInput", "addReferencesButton", "clearReferencesButton",
                                  "importReferencePhotos", "openDatabase", "indexedDB")
     upload_hits = [marker for marker in forbidden_upload_markers
                    if marker in reference_ui or marker in reference_app]
-    has_api_loader = "getReferenceImageUrl" in reference_app and "/api/images/" in catalog_source
+    has_local_loader = (
+        "parseReferenceManifest" in reference_app
+        and "REFERENCE_MANIFEST_URL" in reference_app
+        and "reference-faces/manifest.json" in catalog_source
+        and "MAX_REFERENCE_FACES = 25" in core_source
+        and "/api/images/" not in catalog_source
+        and manifest_ok
+    )
     checks.append({
-        "check": "database-reference-flow",
-        "file": "index.html/app.js/src/reference-catalog.js",
-        "ok": not upload_hits and has_api_loader,
-        "detail": "20 kayıtlı referans API'den okunuyor; yükleme ve yerel DB akışı yok"
-                  if not upload_hits and has_api_loader
-                  else "eski referans yükleme/IndexedDB akışı veya API yükleyicisi eksik: "
-                       + ", ".join(upload_hits or ["API image route"]),
+        "check": "local-reference-flow",
+        "file": "index.html/app.js/src/reference-catalog.js/reference-faces/manifest.json",
+        "ok": not upload_hits and has_local_loader,
+        "detail": "25 yerel görsel manifestten yükleniyor; özel klasör Hosting dışında"
+                  if not upload_hits and has_local_loader
+                  else "yerel manifest akışı veya özel Hosting hariç tutması eksik: "
+                       + ", ".join(upload_hits or ["25-image manifest/local loader"]),
     })
 
     app_source = app_path.read_text(encoding="utf-8", errors="replace") if app_path.is_file() else ""

@@ -95,9 +95,9 @@ export function createNvidiaEditPrompt() {
   return [
     "This is a two-panel image-editing reference board.",
     "LEFT PANEL: the target portrait crop that must be edited.",
-    "RIGHT PANEL: twenty different reference photographs of ONE SAME PERSON. They are identity references, not extra people to add to the target.",
+    "RIGHT PANEL: twenty-five different reference photographs of ONE SAME PERSON. They are identity references, not extra people to add to the target.",
     "Edit only the face of the person in the LEFT PANEL so that the face identity closely resembles the same person shown in the RIGHT PANEL.",
-    "Use all twenty references together to infer stable identity traits. Do not choose or copy only one thumbnail.",
+    "Use all twenty-five references together to infer stable identity traits. Do not choose or copy only one thumbnail.",
     "Preserve the target portrait's head pose, camera angle, expression, gaze direction, skin texture, lighting, shadows, color balance and photographic realism.",
     "If the target person's eyes are clearly closed, make them naturally open using the open-eye appearance visible in the references, without changing gaze direction or exaggerating the eyelids.",
     "Keep the target person's hairline, hairstyle, ears, neck, clothing, body, background and every object unchanged.",

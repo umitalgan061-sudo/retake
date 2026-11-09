@@ -37,9 +37,9 @@ test("creates a soft elliptical face mask and leaves distant pixels untouched", 
   assert.ok(mask.some((alpha) => alpha > 0 && alpha < 1));
 });
 
-test("prompt explicitly distinguishes target and twenty identity references", () => {
+test("prompt explicitly distinguishes target and twenty-five identity references", () => {
   const prompt = createNvidiaEditPrompt();
-  assert.match(prompt, /twenty different reference photographs/i);
+  assert.match(prompt, /twenty-five different reference photographs/i);
   assert.match(prompt, /LEFT PANEL/);
   assert.match(prompt, /RIGHT PANEL/);
   assert.match(prompt, /eyes are clearly closed/i);

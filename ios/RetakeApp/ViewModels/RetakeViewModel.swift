@@ -15,7 +15,6 @@ final class RetakeViewModel: ObservableObject {
 
     private let assetStore = LocalAssetStore()
     private let modelInspector = LocalModelInspector()
-    private let modelDownloader = ModelDownloadManager()
     private let maximumImageBytes = 100 * 1024 * 1024
 
     var canAttemptFaceSwap: Bool {
@@ -64,25 +63,49 @@ final class RetakeViewModel: ObservableObject {
                     continue
                 }
 
-                let faceCount = try await Task.detached(priority: .userInitiated) {
-                    try FaceDetectionService().detectFaces(in: data).count
-                }.value
-
-                guard faceCount == 1 else {
-                    failed += 1
-                    continue
-                }
-
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
-                _ = try await assetStore.saveReference(data: data, fileExtension: ext)
-                imported += 1
+                if await saveValidatedReference(data: data, fileExtension: ext) {
+                    imported += 1
+                } else {
+                    failed += 1
+                }
             } catch {
                 failed += 1
             }
         }
 
-        await refreshReferences()
-        statusMessage = "Tek yüz içerdiği doğrulanan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
+        await finishReferenceImport(imported: imported, failed: failed)
+    }
+
+    func importReferenceFiles(_ urls: [URL]) async {
+        guard !urls.isEmpty else { return }
+        guard !isBusy else { return }
+
+        let remaining = max(0, 20 - referenceFaces.count)
+        guard remaining > 0 else {
+            statusMessage = "20 referans yüz sınırına ulaşıldı."
+            return
+        }
+
+        isBusy = true
+        defer { isBusy = false }
+
+        var imported = 0
+        var failed = 0
+        for url in urls.prefix(remaining) {
+            do {
+                let (data, fileExtension) = try await readReferenceFile(at: url)
+                if await saveValidatedReference(data: data, fileExtension: fileExtension) {
+                    imported += 1
+                } else {
+                    failed += 1
+                }
+            } catch {
+                failed += 1
+            }
+        }
+
+        await finishReferenceImport(imported: imported, failed: failed)
     }
 
     func removeReference(_ face: ReferenceFace) async {
@@ -105,27 +128,6 @@ final class RetakeViewModel: ObservableObject {
             statusMessage = "Model paketi kopyalandı. Dosyanın yüklenmesi ve model sözleşmesi ayrıca doğrulanmalıdır."
         } catch {
             statusMessage = "Model içe aktarılamadı: \(error.localizedDescription)"
-        }
-    }
-
-    func installModelManifest(from rawURL: String) async {
-        guard !isBusy else { return }
-
-        let value = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: value) else {
-            statusMessage = "Geçerli bir model manifest URL'si girin."
-            return
-        }
-
-        isBusy = true
-        defer { isBusy = false }
-
-        do {
-            let result = try await modelDownloader.install(from: url)
-            refreshModelInspection()
-            statusMessage = "Model \(result.version) doğrulandı ve kuruldu. Girdi: \(result.inputs.count) · Çıktı: \(result.outputs.count). Modelin Face Swap adaptörü ayrıca doğrulanmalıdır."
-        } catch {
-            statusMessage = "Model kurulamadı: \(error.localizedDescription)"
         }
     }
 
@@ -175,6 +177,49 @@ final class RetakeViewModel: ObservableObject {
     func refreshModelInspection() {
         modelInspection = modelInspector.inspect()
     }
+
+    private func readReferenceFile(at url: URL) async throws -> (Data, String) {
+        let didAccess = url.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let fileSize = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard fileSize > 0, fileSize <= maximumImageBytes else {
+            throw ReferenceImportError.invalidImageSize
+        }
+
+        let data = try await Task.detached(priority: .userInitiated) {
+            try Data(contentsOf: url, options: .mappedIfSafe)
+        }.value
+        guard data.count <= maximumImageBytes else {
+            throw ReferenceImportError.invalidImageSize
+        }
+
+        return (data, url.pathExtension)
+    }
+
+    private func saveValidatedReference(data: Data, fileExtension: String) async -> Bool {
+        guard !data.isEmpty, data.count <= maximumImageBytes else { return false }
+
+        do {
+            let faceCount = try await Task.detached(priority: .userInitiated) {
+                try FaceDetectionService().detectFaces(in: data).count
+            }.value
+            guard faceCount == 1 else { return false }
+            _ = try await assetStore.saveReference(data: data, fileExtension: fileExtension)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func finishReferenceImport(imported: Int, failed: Int) async {
+        await refreshReferences()
+        statusMessage = "Tek yüz içerdiği doğrulanan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
+    }
 }
 
 private enum TargetImageError: LocalizedError {
@@ -182,5 +227,13 @@ private enum TargetImageError: LocalizedError {
 
     var errorDescription: String? {
         "Seçilen görsel okunamadı veya 100 MB boyut sınırını aşıyor."
+    }
+}
+
+private enum ReferenceImportError: LocalizedError {
+    case invalidImageSize
+
+    var errorDescription: String? {
+        "Referans görsel boş veya 100 MB sınırını aşıyor."
     }
 }

@@ -12,15 +12,15 @@ Web ve iOS uygulamalarında kamera açılmaz. `getUserMedia`, WebRTC canlı vide
 2. Dosya türü ve 25 MB üst sınırı doğrulanır. Hedef görsel yalnızca sayfa belleğinde tutulur.
 3. MediaPipe Face Landmarker birden fazla yüzü cihazda algılar.
 4. Kullanıcı yüz kutusuna veya yüz seçim düğmesine basarak hedef yüzü seçer.
-5. Uygulama önceden kaydedilmiş 20 referansı `GET /api/images/{id}` üzerinden otomatik çeker.
+5. Uygulama `reference-faces/manifest.json` içindeki 25 dosya adını okur ve görselleri aynı klasörden yükler.
 6. Referanslar salt okunur gösterilir; kullanıcıdan yeniden yükleme istenmez. Fotoğraflar IndexedDB'ye yazılmaz ve Service Worker Cache Storage'a alınmaz.
 
 ## Modüller
 
 - \`index.html\`: Anlamsal, Türkçe ve erişilebilir sayfa iskeleti.
 - \`styles.css\`: Responsive masaüstü/tablet/mobil düzen, koyu/açık tema ve hareket azaltma tercihleri.
-- \`app.js\`: MediaPipe yaşam döngüsü, hedef fotoğraf seçimi, veritabanı referansları, NVIDIA isteği ve sonuç dışa aktarma.
-- \`src/nvidia-pipeline.js\`: Hedef yüz crop'u, 20 fotoğraflı kimlik panosu ve yumuşak eliptik yüz maskesi.
+- \`app.js\`: MediaPipe yaşam döngüsü, hedef fotoğraf seçimi, yerel referans manifesti, NVIDIA isteği ve sonuç dışa aktarma.
+- \`src/nvidia-pipeline.js\`: Hedef yüz crop'u, 25 fotoğraflı kimlik panosu ve yumuşak eliptik yüz maskesi.
 - \`src/face-only.js\`: RGBA kompozitleme ve maske dışı piksel bütünlüğü kontrolü.
 - \`functions/index.js\`: NVIDIA API anahtarını Secret Manager'dan alan sunucu proxy'si.
 - \`src/core.js\`: Görsel doğrulama, landmark sınır kutusu, aspect-ratio ve dosya boyutu yardımcıları.
@@ -37,11 +37,11 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 ## Yerel depolama ve gizlilik
 
 - Hedef fotoğraf IndexedDB'ye yazılmaz; sayfa oturumu sona erdiğinde bellek referansı serbest bırakılır.
-- Referans fotoğrafları mevcut API üzerinden salt okunur çekilir; uygulama bunları yeniden yüklemez veya IndexedDB'ye yazmaz.
-- API varsayılan olarak aynı origin'de `/api/images/{id}` yolunda bulunmalıdır. Farklı origin kullanılıyorsa `meta[name="retake-api-base"]` ve CSP `connect-src` birlikte yapılandırılmalıdır.
-- Service Worker `/api/images/` yanıtlarını önbelleğe almaz; yüz görselleri Cache Storage'a kaydedilmez.
+- Referans fotoğrafları `reference-faces/manifest.json` ile yerel statik dosyalardan okunur; uygulama bunları IndexedDB'ye yazmaz.
+- Firebase Hosting, kişisel fotoğrafların herkese açılmaması için `reference-faces/**` yolunu dağıtmaz. Yerel klasör akışı yalnızca fotoğrafların bulunduğu geliştirme makinesinde çalışır; canlı site için kimlik doğrulamalı özel depolama gerekir.
+- Service Worker `/reference-faces/` yanıtlarını önbelleğe almaz; yüz görselleri Cache Storage'a kaydedilmez.
 - Tarayıcı depolamasının temizlenmesi veya özel gezinme modu referans fotoğraflarını silebilir. Önemli dosyaların ayrıca yedeklenmesi kullanıcı sorumluluğundadır.
-- Service Worker yalnızca uygulama kabuğunu, sabitlenmiş MediaPipe paket yolunu ve resmi landmark modelini önbelleğe alır. `/api/images/` altındaki fotoğraflar cache'e eklenmez.
+- Service Worker uygulama kabuğunu ve MediaPipe varlıklarını önbelleğe alır; `/reference-faces/` altındaki fotoğraflar ve manifest cache'e yazılmaz.
 
 ## PWA ve çevrimdışı davranış
 
@@ -49,7 +49,7 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 
 ## NVIDIA FLUX deneysel düzenleme hattı
 
-Web sürümü, kullanıcı onayından sonra seçili hedef yüz crop'unu ve veritabanındaki 20 referansı tek bir 1568×1024 panoda birleştirir. Pano \`functions/index.js\` üzerinden NVIDIA NVCF Asset API'ye yüklenir ve FLUX.1-Kontext-dev endpoint'ine gönderilir. Tam hedef fotoğrafın geri kalanı NVIDIA'ya gönderilmez.
+Web sürümü, kullanıcı onayından sonra seçili hedef yüz crop'unu ve yerel klasörden okuduğu 25 referansı tek bir 1568×1024 panoda birleştirir. Pano \`functions/index.js\` üzerinden NVIDIA NVCF Asset API'ye yüklenir ve FLUX.1-Kontext-dev endpoint'ine gönderilir. Tam hedef fotoğrafın geri kalanı NVIDIA'ya gönderilmez. Referansların yerel klasörden okunması, NVIDIA'ya aktarılmayacağı anlamına gelmez; aktarım için açık onay sorulur.
 
 FLUX.1-Kontext-dev özel bir Face Swap/kimlik encoder modeli değildir. Yirmi referansı tek bir kimlik profiline dönüştürmez ve kimlik benzerliğini garanti etmez; prompt ve görsel panoyla yönlendirilen deneysel bir görsel düzenleme yöntemidir. Model kartı ticari olmayan kullanıma işaret eder; dağıtım öncesinde NVIDIA ve Black Forest Labs'ın güncel koşulları incelenmelidir.
 
@@ -59,7 +59,7 @@ NVIDIA API anahtarı istemci kodunda tutulmaz. Firebase Function, \`NVIDIA_API_K
 
 ## Gerçek kimlik korumalı Face Swap ile arasındaki fark
 
-MediaPipe yalnızca yüz landmark'ı tespit eder. FLUX genel amaçlı görsel düzenleme modelidir; özel yüz kimlik aktarımı, biyometrik referans karşılaştırması veya kalite skoru sunmaz. Mevcut 20 fotoğrafın tek kişiye ait olduğu varsayılır; kod bunu henüz bir identity encoder ile doğrulamaz. Bu akış deneysel sonuç verebilir, ancak deterministik veya profesyonel Face Swap garantisi değildir.
+MediaPipe yalnızca yüz landmark'ı tespit eder. FLUX genel amaçlı görsel düzenleme modelidir; özel yüz kimlik aktarımı, biyometrik referans karşılaştırması veya kalite skoru sunmaz. 25 fotoğrafın tek kişiye ait olduğu varsayılır; kod bunu henüz bir identity encoder ile doğrulamaz. Bu akış deneysel sonuç verebilir, ancak deterministik veya profesyonel Face Swap garantisi değildir.
 
 ## Geliştirici doğrulaması
 

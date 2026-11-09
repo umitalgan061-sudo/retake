@@ -1,1 +1,443 @@
-/api/documents/doc_8c7d11ca502141d48a77e0d171e44c38
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="description" content="Retake - Tekrar Çek Uygulaması: anında yeniden başlatma döngüsü" />
+  <title>Retake</title>
+  <link rel="manifest" href="data:application/json;base64,eyJuYW1lIjoiUmV0YWtlIiwic2hvcnRfbmFtZSI6IlJldGFrZSIsInN0YXJ0X3VybCI6Ii8iLCJkaXNwbGF5Ijoic3RhbmRhbG9uZSIsImJhY2tncm91bmRfY29sb3IiOiIjMWExYTJlIiwidGhlbWVfY29sb3IiOiIjMWExYTJlIiwiaWNvbnMiOlt7InNyYyI6ImRhdGE6aW1hZ2Uvc3ZnK3htbDtiYXNlNjQsUEhOMGNtbHdWR1Z1ZEdWeWJtVjBJR052Ym5SbGNpQmhkR1VnYzJOc2RYTmxjaUF3Y0NJN0NnbHdJZ29nWW1WbmNtRjBaWE1nWTI5dFpXNHhMM0ErQ2c9PSJ9XSwic2NyZWVuX29yaWVudGF0aW9uIjoicG9ydHJhaXQiLCJwcmVmZXJyZWRfb3JpZW50YXRpb24iOiJwb3J0cmFpdCJ9" />
+  <style>
+    :root {
+      --bg: #1a1a2e;
+      --fg: #eaeaea;
+      --muted: #888;
+      --accent: #00d4aa;
+      --accent-dim: #00b894;
+      --danger: #ff4757;
+      --card: #232342;
+      --border: #3a3a5a;
+      --focus: #00d4aa;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f5f5f7;
+        --fg: #1a1a2e;
+        --muted: #666;
+        --accent: #00a88a;
+        --accent-dim: #00967a;
+        --danger: #e03e4e;
+        --card: #ffffff;
+        --border: #ddd;
+        --focus: #00a88a;
+      }
+    }
+    [data-theme="light"] {
+      --bg: #f5f5f7;
+      --fg: #1a1a2e;
+      --muted: #666;
+      --accent: #00a88a;
+      --accent-dim: #00967a;
+      --danger: #e03e4e;
+      --card: #ffffff;
+      --border: #ddd;
+      --focus: #00a88a;
+    }
+    [data-theme="dark"] {
+      --bg: #1a1a2e;
+      --fg: #eaeaea;
+      --muted: #888;
+      --accent: #00d4aa;
+      --accent-dim: #00b894;
+      --danger: #ff4757;
+      --card: #232342;
+      --border: #3a3a5a;
+      --focus: #00d4aa;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 1rem;
+      transition: background 0.3s, color 0.3s;
+    }
+    .container {
+      width: 100%;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 0;
+    }
+    h1 {
+      font-size: 1.5rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+    .theme-btn {
+      background: var(--card);
+      border: 1px solid var(--border);
+      color: var(--fg);
+      width: 40px;
+      height: 40px;
+      border-radius: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.2rem;
+      transition: border-color 0.2s, background 0.2s;
+    }
+    .theme-btn:hover { border-color: var(--accent); }
+    .theme-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .main-card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+    .timer {
+      font-size: 4rem;
+      font-weight: 700;
+      text-align: center;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.03em;
+      font-family: 'SF Mono', 'Monaco', 'Inconsolata', monospace;
+      color: var(--fg);
+    }
+    .btn-group {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn {
+      flex: 1;
+      min-width: 120px;
+      padding: 1rem 1.5rem;
+      font-size: 1.1rem;
+      font-weight: 600;
+      border: none;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: transform 0.1s, opacity 0.2s, box-shadow 0.2s;
+      touch-action: manipulation;
+    }
+    .btn:active { transform: scale(0.98); }
+    .btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .btn-primary {
+      background: var(--accent);
+      color: #0d1b17;
+      box-shadow: 0 4px 14px rgba(0, 212, 170, 0.3);
+    }
+    .btn-primary:hover { background: var(--accent-dim); }
+    .btn-secondary {
+      background: var(--card);
+      color: var(--fg);
+      border: 1px solid var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--accent); }
+    .btn-danger {
+      background: var(--danger);
+      color: white;
+    }
+    .btn-danger:hover { opacity: 0.9; }
+    .counter {
+      text-align: center;
+      font-size: 1.25rem;
+      color: var(--muted);
+    }
+    .counter strong { color: var(--accent); font-size: 1.5rem; }
+    .notes-section {
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .notes-label {
+      font-size: 0.875rem;
+      color: var(--muted);
+      display: flex;
+      justify-content: space-between;
+    }
+    .notes-label span { color: var(--accent); cursor: pointer; font-size: 0.75rem; }
+    .notes-label span:hover { text-decoration: underline; }
+    textarea {
+      width: 100%;
+      min-height: 100px;
+      background: var(--bg);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem;
+      font-family: inherit;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      resize: vertical;
+      transition: border-color 0.2s;
+    }
+    textarea:focus { outline: none; border-color: var(--focus); }
+    .session-controls {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }    .session-btn {
+      padding: 0.6rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 500;
+      background: var(--card);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      cursor: pointer;
+      transition: border-color 0.2s;
+    }
+    .session-btn:hover { border-color: var(--accent); }
+    .session-btn:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+    .sound-toggle {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-size: 0.9rem;
+      color: var(--muted);
+      cursor: pointer;
+    }
+    .sound-toggle input { accent-color: var(--accent); width: 18px; height: 18px; }
+    .hints {
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-align: center;
+      line-height: 1.6;
+    }
+    .hints kbd {
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 0.15rem 0.4rem;
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.7rem;
+    }
+    @media (max-width: 400px) {
+      .timer { font-size: 3rem; }
+      .btn { padding: 0.875rem 1rem; font-size: 1rem; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Retake</h1>
+      <button class="theme-btn" id="themeBtn" aria-label="Tema değiştir" title="Tema değiştir (T)">🌙</button>
+    </header>
+    <main class="main-card" role="main">
+      <div class="timer" id="timer" aria-live="polite">00:00.0</div>
+      <div class="btn-group">
+        <button class="btn btn-primary" id="retakeBtn" aria-label="Tekrar başlat (Space/Enter)">Tekrar</button>
+        <button class="btn btn-secondary" id="resetBtn" aria-label="Sıfırla (R)">Sıfırla</button>
+      </div>
+      <div class="counter">Tekrar: <strong id="counter">0</strong></div>
+      <div class="notes-section">
+        <div class="notes-label">
+          <span>Not / Görüş</span>
+          <span id="clearNotes" title="Notu temizle">temizle</span>
+        </div>
+        <textarea id="notes" placeholder="Bu tur için notunuz... (otomatik kaydedilir)" aria-label="Tur notu"></textarea>
+      </div>
+      <div class="session-controls">
+        <button class="session-btn" id="saveSession" aria-label="Oturumu kaydet">Oturumu Kaydet</button>
+        <button class="session-btn" id="loadSession" aria-label="Oturumu yükle">Oturumu Yükle</button>
+        <button class="session-btn" id="newSession" aria-label="Yeni oturum">Yeni Oturum</button>
+      </div>
+      <label class="sound-toggle">
+        <input type="checkbox" id="soundToggle" />
+        <span>Sesli bip (her tekrar başında)</span>
+      </label>
+      <p class="hints">
+        Kısayollar: <kbd>Space</kbd>/<kbd>Enter</kbd>=Tekrar · <kbd>R</kbd>=Sıfırla · <kbd>N</kbd>=Yeni Not · <kbd>T</kbd>=Tema
+      </p>
+    </main>
+  </div>
+  <script>
+    (function () {
+      'use strict';
+      const timerEl = document.getElementById('timer');
+      const counterEl = document.getElementById('counter');
+      const retakeBtn = document.getElementById('retakeBtn');
+      const resetBtn = document.getElementById('resetBtn');
+      const notesEl = document.getElementById('notes');
+      const clearNotesBtn = document.getElementById('clearNotes');
+      const saveSessionBtn = document.getElementById('saveSession');
+      const loadSessionBtn = document.getElementById('loadSession');
+      const newSessionBtn = document.getElementById('newSession');
+      const soundToggle = document.getElementById('soundToggle');
+      const themeBtn = document.getElementById('themeBtn');
+
+      let startTime = 0;
+      let elapsed = 0;
+      let timerId = null;
+      let running = false;
+      let count = 0;
+      let audioCtx = null;
+
+      const STORAGE_KEY = 'retake_session';
+      const NOTES_KEY = 'retake_notes';
+
+      function formatTime(ms) {
+        const totalSeconds = Math.floor(ms / 100);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        const tenths = Math.floor((ms % 1000) / 100);
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${tenths}`;
+      }
+
+      function updateTimer() {
+        if (running) {
+          elapsed = Date.now() - startTime;
+        }
+        timerEl.textContent = formatTime(elapsed);
+      }
+
+      function playBip() {
+        if (!soundToggle.checked) return;
+        try {
+          if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+          if (audioCtx.state === 'suspended') audioCtx.resume();
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = 880;
+          gain.gain.value = 0.08;
+          osc.connect(gain).connect(audioCtx.destination);
+          osc.start();
+          osc.stop(audioCtx.currentTime + 0.08);
+        } catch (e) {}
+      }
+
+      function startTimer() {
+        if (!running) {
+          startTime = Date.now() - elapsed;
+          timerId = setInterval(updateTimer, 50);
+          running = true;
+        }
+      }
+
+      function stopTimer() {
+        if (running) {
+          clearInterval(timerId);
+          timerId = null;
+          running = false;
+        }
+      }
+
+      function retake() {
+        stopTimer();
+        elapsed = 0;
+        count++;
+        counterEl.textContent = count;
+        updateTimer();
+        playBip();
+        startTimer();
+        notesEl.value = '';
+        saveNotes();
+      }
+
+      function reset() {
+        stopTimer();
+        elapsed = 0;
+        count = 0;
+        counterEl.textContent = count;
+        updateTimer();
+        notesEl.value = '';
+        saveNotes();
+      }
+
+      function saveNotes() {
+        localStorage.setItem(NOTES_KEY, notesEl.value);
+      }
+
+      function loadNotes() {
+        notesEl.value = localStorage.getItem(NOTES_KEY) || '';
+      }
+
+      function saveSession() {
+        const data = { elapsed, count, notes: notesEl.value, timestamp: Date.now() };
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        alert('Oturum kaydedildi.');
+      }
+
+      function loadSession() {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) { alert('Kayıtlı oturum yok.'); return; }
+        try {
+          const data = JSON.parse(raw);
+          elapsed = data.elapsed || 0;
+          count = data.count || 0;
+          counterEl.textContent = count;
+          notesEl.value = data.notes || '';
+          updateTimer();
+          saveNotes();
+          alert('Oturum yüklendi.');
+        } catch (e) { alert('Oturum verisi bozuk.'); }
+      }
+
+      function newSession() {
+        if (confirm('Yeni oturum başlatılsın mı? Mevcut veri silinecek.')) {
+          localStorage.removeItem(STORAGE_KEY);
+          reset();
+        }
+      }
+
+      function toggleTheme() {
+        const html = document.documentElement;
+        const isDark = html.dataset.theme === 'dark';
+        html.dataset.theme = isDark ? 'light' : 'dark';
+        localStorage.setItem('retake_theme', html.dataset.theme);
+        themeBtn.textContent = isDark ? '☀️' : '🌙';
+      }
+
+      function loadTheme() {
+        const saved = localStorage.getItem('retake_theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const theme = saved || (prefersDark ? 'dark' : 'light');
+        document.documentElement.dataset.theme = theme;
+        themeBtn.textContent = theme === 'dark' ? '🌙' : '☀️';
+      }
+
+      retakeBtn.addEventListener('click', retake);
+      resetBtn.addEventListener('click', reset);
+      clearNotesBtn.addEventListener('click', () => { notesEl.value = ''; saveNotes(); });
+      saveSessionBtn.addEventListener('click', saveSession);
+      loadSessionBtn.addEventListener('click', loadSession);
+      newSessionBtn.addEventListener('click', newSession);
+      notesEl.addEventListener('input', saveNotes);
+
+      document.addEventListener('keydown', (e) => {
+        if (e.target === notesEl) return;
+        if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); retake(); }
+        else if (e.code === 'KeyR') { reset(); }
+        else if (e.code === 'KeyN') { notesEl.focus(); }
+        else if (e.code === 'KeyT') { toggleTheme(); }
+      });
+
+      loadTheme();
+      loadNotes();
+      updateTimer();
+    })();
+  </script>
+</body>
+</html>

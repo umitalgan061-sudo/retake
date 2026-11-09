@@ -13,8 +13,13 @@ actor LocalAssetStore {
         rootURL.appendingPathComponent("ReferenceFaces", isDirectory: true)
     }
 
+    private var modelsURL: URL {
+        rootURL.appendingPathComponent("Models", isDirectory: true)
+    }
+
     func prepareDirectories() throws {
         try fileManager.createDirectory(at: referencesURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: modelsURL, withIntermediateDirectories: true)
     }
 
     func referenceFiles() throws -> [URL] {
@@ -51,12 +56,44 @@ actor LocalAssetStore {
             try fileManager.removeItem(at: candidate)
         }
     }
+
+    func installCompiledModel(from sourceURL: URL) throws {
+        try prepareDirectories()
+        guard sourceURL.pathExtension.lowercased() == "mlmodelc" else {
+            throw LocalAssetStoreError.invalidModelBundle
+        }
+
+        let didAccess = sourceURL.startAccessingSecurityScopedResource()
+        defer {
+            if didAccess {
+                sourceURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: sourceURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            throw LocalAssetStoreError.invalidModelBundle
+        }
+
+        let destination = modelsURL.appendingPathComponent("RetakeFaceSwap.mlmodelc", isDirectory: true)
+        if fileManager.fileExists(atPath: destination.path) {
+            try fileManager.removeItem(at: destination)
+        }
+        try fileManager.copyItem(at: sourceURL, to: destination)
+    }
 }
 
 enum LocalAssetStoreError: LocalizedError {
     case invalidFilePath
+    case invalidModelBundle
 
     var errorDescription: String? {
-        "Geçersiz yerel dosya yolu."
+        switch self {
+        case .invalidFilePath:
+            return "Geçersiz yerel dosya yolu."
+        case .invalidModelBundle:
+            return "Lütfen geçerli, derlenmiş bir .mlmodelc klasörü seçin."
+        }
     }
 }

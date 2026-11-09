@@ -5,6 +5,15 @@ import {
   validateImageFile
 } from "./src/core.js";
 import { REFERENCE_CATALOG, getReferenceImageUrl } from "./src/reference-catalog.js";
+import {
+  NVIDIA_BOARD_WIDTH,
+  NVIDIA_BOARD_HEIGHT,
+  NVIDIA_TARGET_PANEL_WIDTH,
+  getFaceCropRect,
+  createFaceAlphaMask,
+  createNvidiaEditPrompt
+} from "./src/nvidia-pipeline.js";
+import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
@@ -22,6 +31,18 @@ const elements = {
   faceCount: $("#faceCount"),
   faceChips: $("#faceChips"),
   reloadReferences: $("#reloadReferencesButton"),
+  swapButton: $("#swapButton"),
+  downloadButton: $("#downloadButton"),
+  resultImage: $("#resultImage"),
+  outputPlaceholder: $("#outputPlaceholder"),
+  outputMessage: $("#outputMessage"),
+  outputStage: $(".output-stage"),
+  outputSymbol: $(".output-symbol"),
+  outputTitle: $("#outputTitle"),
+  outputStatus: $("#outputStatus"),
+  engineTitle: $("#engineTitle"),
+  engineDescription: $("#engineDescription"),
+  disabledNote: $("#disabledNote"),
   referencesEmpty: $("#referencesEmpty"),
   referencesGrid: $("#referencesGrid"),
   referenceCount: $("#referenceCount"),
@@ -41,6 +62,9 @@ const state = {
   referenceLoadError: null,
   referenceLoadToken: 0,
   selectedFaceIndex: null,
+  nvidiaStatus: { checked: false, configured: false },
+  isSwapping: false,
+  result: null,
   toastTimer: null,
   installPrompt: null
 };
@@ -54,6 +78,58 @@ function showToast(message) {
 
 function setRuntimeStatus(message) {
   elements.runtimeStatus.textContent = message;
+}
+
+function nvidiaApiBase() {
+  const configured = document.querySelector('meta[name="retake-ai-base"]')?.content?.trim();
+  return (configured || (window.location.origin + "/api/retake")).replace(/\/+$/, "");
+}
+
+function updateSwapAvailability() {
+  const referenceCount = state.references.filter((item) => item.status === "ready").length;
+  const hasTarget = Boolean(state.target && Number.isInteger(state.selectedFaceIndex) &&
+    state.target.faces[state.selectedFaceIndex]);
+  const enabled = state.nvidiaStatus.configured && state.detector &&
+    referenceCount === REFERENCE_CATALOG.length && hasTarget && !state.isSwapping;
+  elements.swapButton.disabled = !enabled;
+  elements.downloadButton.disabled = !state.result || state.isSwapping;
+  const tag = elements.swapButton.querySelector("span");
+  if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
+    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Sunucu kurulmalı"));
+}
+
+async function checkNvidiaStatus() {
+  try {
+    const response = await fetch(nvidiaApiBase() + "/status", {
+      method: "GET",
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    });
+    const payload = await response.json().catch(() => ({}));
+    state.nvidiaStatus = {
+      checked: true,
+      configured: Boolean(response.ok && payload.configured),
+      message: payload.message || (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
+    };
+  } catch (error) {
+    state.nvidiaStatus = {
+      checked: true,
+      configured: false,
+      message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+    };
+  }
+
+  if (state.nvidiaStatus.configured) {
+    elements.engineTitle.textContent = "NVIDIA FLUX bağlantısı hazır";
+    elements.engineDescription.textContent =
+      "Deneysel görüntü düzenleme motoru hazır. Hedef yüz crop'u ve 20 kimlik referansı yalnızca onayından sonra NVIDIA'ya gönderilir.";
+  } else {
+    elements.engineTitle.textContent = "NVIDIA sunucu anahtarı bekleniyor";
+    elements.engineDescription.textContent =
+      state.nvidiaStatus.message ||
+      "NVIDIA API anahtarı Firebase Functions Secret olarak eklenmeli. Anahtar tarayıcıya veya GitHub'a konmamalı.";
+  }
+  updateSwapAvailability();
 }
 
 function createObjectURL(blob) {
@@ -137,11 +213,27 @@ function renderFaceChips() {
   });
 }
 
+function clearResult() {
+  if (state.result?.url) URL.revokeObjectURL(state.result.url);
+  state.result = null;
+  elements.resultImage.hidden = true;
+  elements.resultImage.removeAttribute("src");
+  elements.outputPlaceholder.hidden = false;
+  elements.outputStage.classList.remove("has-result");
+  elements.outputSymbol.hidden = false;
+  elements.outputTitle.textContent = "Önizleme";
+  elements.outputStatus.textContent = "Beklemede";
+  elements.outputMessage.textContent = "NVIDIA FLUX deneysel düzenleme için hazır olduğunda sonuç burada görünecek.";
+  updateSwapAvailability();
+}
+
 function selectTargetFace(index) {
   if (!state.target || !Number.isInteger(index) || !state.target.faces[index]) return;
   state.selectedFaceIndex = index;
+  clearResult();
   drawTargetPreview();
   renderFaceChips();
+  updateSwapAvailability();
 }
 
 async function setTargetPhoto(file) {
@@ -168,6 +260,7 @@ async function setTargetPhoto(file) {
     }
 
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
+    clearResult();
     state.target = { file, image: loaded.image, url: loaded.url, faces };
     state.selectedFaceIndex = faces.length > 0 ? 0 : null;
     elements.targetEmpty.hidden = true;
@@ -177,6 +270,7 @@ async function setTargetPhoto(file) {
       loaded.image.naturalWidth + " × " + loaded.image.naturalHeight + " px · " + formatBytes(file.size) + " · " + detectionMessage;
     drawTargetPreview();
     renderFaceChips();
+    updateSwapAvailability();
     showToast(detectionMessage);
   } catch (error) {
     showToast(error.message || "Fotoğraf yüklenemedi.");
@@ -185,6 +279,7 @@ async function setTargetPhoto(file) {
 
 function clearTargetPhoto() {
   if (state.target?.url) URL.revokeObjectURL(state.target.url);
+  clearResult();
   state.target = null;
   state.selectedFaceIndex = null;
   elements.targetCanvas.width = 1;
@@ -196,6 +291,7 @@ function clearTargetPhoto() {
   elements.faceChips.replaceChildren();
   elements.targetMeta.textContent = "Henüz fotoğraf seçilmedi";
   elements.targetInput.value = "";
+  updateSwapAvailability();
 }
 
 function renderReferences() {
@@ -250,6 +346,7 @@ function renderReferences() {
 
   elements.reloadReferences.disabled = state.referencesLoading;
   elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Veritabanından yenile";
+  updateSwapAvailability();
 }
 
 async function loadDatabaseReferences({ force = false } = {}) {
@@ -327,6 +424,261 @@ async function loadDatabaseReferences({ force = false } = {}) {
   return loadedCount;
 }
 
+async function canvasToBlob(canvas) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Görsel hazırlanamadı.")), "image/png");
+  });
+}
+
+async function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("Görsel verisi okunamadı."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function drawContainedImage(context, image, x, y, width, height) {
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
+}
+
+function buildNvidiaContactSheet() {
+  const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
+  if (readyReferences.length !== REFERENCE_CATALOG.length) {
+    throw new Error("NVIDIA işlemi için veritabanındaki 20 referansın tamamı yüklenmiş olmalı.");
+  }
+  const face = state.target?.faces?.[state.selectedFaceIndex];
+  if (!face) throw new Error("Önce hedef fotoğraftaki değiştirilecek yüzü seç.");
+
+  const crop = getFaceCropRect(
+    state.target.image.naturalWidth,
+    state.target.image.naturalHeight,
+    face
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = NVIDIA_BOARD_WIDTH;
+  canvas.height = NVIDIA_BOARD_HEIGHT;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("NVIDIA referans panosu oluşturulamadı.");
+
+  context.fillStyle = "#10151d";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = "#18212b";
+  context.fillRect(NVIDIA_TARGET_PANEL_WIDTH, 0, NVIDIA_BOARD_WIDTH - NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT);
+
+  context.drawImage(
+    state.target.image,
+    crop.x, crop.y, crop.width, crop.height,
+    0, 0, NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT
+  );
+
+  context.fillStyle = "rgba(10, 15, 22, .78)";
+  context.fillRect(0, 0, NVIDIA_TARGET_PANEL_WIDTH, 38);
+  context.fillStyle = "#ffffff";
+  context.font = "700 16px system-ui";
+  context.fillText("TARGET FACE", 22, 25);
+
+  const panelX = NVIDIA_TARGET_PANEL_WIDTH;
+  context.fillStyle = "#f0f5f7";
+  context.font = "700 17px system-ui";
+  context.fillText("20 IDENTITY REFERENCES", panelX + 22, 29);
+  context.fillStyle = "#9caaba";
+  context.font = "12px system-ui";
+  context.fillText("All photos show the same person", panelX + 22, 50);
+
+  const columns = 4;
+  const rows = 5;
+  const startY = 66;
+  const gapX = 10;
+  const gapY = 10;
+  const outerX = panelX + 16;
+  const outerWidth = NVIDIA_BOARD_WIDTH - panelX - 32;
+  const cellWidth = (outerWidth - gapX * (columns - 1)) / columns;
+  const cellHeight = (NVIDIA_BOARD_HEIGHT - startY - 20 - gapY * (rows - 1)) / rows;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+
+  readyReferences.forEach((reference, index) => {
+    const column = index % columns;
+    const row = Math.floor(index / columns);
+    const x = outerX + column * (cellWidth + gapX);
+    const y = startY + row * (cellHeight + gapY);
+    context.fillStyle = "#f7f9fa";
+    context.fillRect(x, y, cellWidth, cellHeight);
+    drawContainedImage(context, reference.image, x + 5, y + 4, cellWidth - 10, cellHeight - 8);
+  });
+
+  return { canvas, crop };
+}
+
+function applyGeneratedFacePatch(generatedBoardImage, crop) {
+  if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
+  const sourceImage = state.target.image;
+  const imageWidth = sourceImage.naturalWidth;
+  const imageHeight = sourceImage.naturalHeight;
+  const cropCanvas = document.createElement("canvas");
+  cropCanvas.width = crop.width;
+  cropCanvas.height = crop.height;
+  const cropContext = cropCanvas.getContext("2d", { willReadFrequently: true });
+  cropContext.drawImage(sourceImage, crop.x, crop.y, crop.width, crop.height, 0, 0, crop.width, crop.height);
+  const sourceCrop = cropContext.getImageData(0, 0, crop.width, crop.height);
+
+  const generatedCanvas = document.createElement("canvas");
+  generatedCanvas.width = crop.width;
+  generatedCanvas.height = crop.height;
+  const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
+  generatedContext.drawImage(
+    generatedBoardImage,
+    0, 0, NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT,
+    0, 0, crop.width, crop.height
+  );
+  const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
+  const alphaMask = createFaceAlphaMask(crop.width, crop.height, crop.face);
+  const blended = compositeMaskedRGBA(
+    sourceCrop.data,
+    generatedCrop.data,
+    alphaMask,
+    crop.width,
+    crop.height
+  );
+
+  const fullCanvas = document.createElement("canvas");
+  fullCanvas.width = imageWidth;
+  fullCanvas.height = imageHeight;
+  const fullContext = fullCanvas.getContext("2d", { willReadFrequently: true });
+  fullContext.drawImage(sourceImage, 0, 0, imageWidth, imageHeight);
+  const original = fullContext.getImageData(0, 0, imageWidth, imageHeight);
+  const output = new ImageData(new Uint8ClampedArray(original.data), imageWidth, imageHeight);
+  const fullMask = new Float32Array(imageWidth * imageHeight);
+
+  for (let y = 0; y < crop.height; y += 1) {
+    const sourceOffset = y * crop.width * 4;
+    const outputOffset = ((crop.y + y) * imageWidth + crop.x) * 4;
+    output.data.set(blended.subarray(sourceOffset, sourceOffset + crop.width * 4), outputOffset);
+    fullMask.set(
+      alphaMask.subarray(y * crop.width, (y + 1) * crop.width),
+      (crop.y + y) * imageWidth + crop.x
+    );
+  }
+
+  const integrity = inspectOutsideMaskIntegrity(original.data, output.data, fullMask, imageWidth, imageHeight);
+  if (!integrity.ok) {
+    throw new Error("Güvenlik kontrolü başarısız: yüz maskesi dışında " + integrity.changedPixels + " piksel değişti.");
+  }
+
+  fullContext.putImageData(output, 0, 0);
+  return canvasToBlob(fullCanvas);
+}
+
+async function runNvidiaFaceEdit() {
+  if (state.isSwapping) return;
+  if (!state.nvidiaStatus.configured) {
+    showToast("NVIDIA sunucu anahtarı yapılandırılmamış. Kurulum dosyasını kontrol et.");
+    return;
+  }
+  if (!state.target || !Number.isInteger(state.selectedFaceIndex)) {
+    showToast("Önce hedef fotoğrafı ve yüzü seç.");
+    return;
+  }
+  if (state.references.filter((item) => item.status === "ready").length !== REFERENCE_CATALOG.length) {
+    showToast("20 referansın tamamı yüklenmeden işlem başlatılamaz.");
+    return;
+  }
+
+  const consent = window.confirm(
+    "GİZLİLİK ONAYI\n\n" +
+    "Yalnızca seçtiğin yüzün bulunduğu crop ve veritabanındaki 20 referans fotoğrafı birleştirilerek NVIDIA FLUX servisine gönderilecek. " +
+    "Hedef fotoğrafın geri kalanı gönderilmeyecek. Görseller NVIDIA altyapısında işlenecek. " +
+    "Devam etmek istiyor musun?"
+  );
+  if (!consent) return;
+
+  state.isSwapping = true;
+  updateSwapAvailability();
+  clearResult();
+  elements.outputTitle.textContent = "NVIDIA ile işleniyor";
+  elements.outputStatus.textContent = "Yükleniyor";
+  elements.outputPlaceholder.hidden = false;
+  elements.outputPlaceholder.querySelector("strong").textContent = "Yüz düzenleniyor…";
+  elements.outputMessage.textContent =
+    "Seçilen yüz crop'u ve 20 referans NVIDIA'ya gönderildi. Orijinal fotoğrafın geri kalanı tarayıcıda kalıyor.";
+
+  let generatedUrl = null;
+  try {
+    const { canvas, crop } = buildNvidiaContactSheet();
+    const boardBlob = await canvasToBlob(canvas);
+    if (boardBlob.size > 10 * 1024 * 1024) {
+      throw new Error("Referans panosu 10 MB sınırını aşıyor.");
+    }
+    const imageDataUrl = await blobToDataURL(boardBlob);
+    setRuntimeStatus("NVIDIA FLUX · görsel gönderiliyor…");
+
+    const response = await fetch(nvidiaApiBase() + "/edit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ imageDataUrl, consent: true })
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload.error || ("NVIDIA API " + response.status + " yanıtı verdi.");
+      throw new Error(detail);
+    }
+    if (typeof payload.imageDataUrl !== "string" || !payload.imageDataUrl.startsWith("data:image/")) {
+      throw new Error("NVIDIA geçerli bir görsel çıktısı döndürmedi.");
+    }
+
+    const generated = await loadImage(await (await fetch(payload.imageDataUrl)).blob());
+    generatedUrl = generated.url;
+    const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
+    const resultUrl = createObjectURL(resultBlob);
+    if (state.result?.url) URL.revokeObjectURL(state.result.url);
+    state.result = { blob: resultBlob, url: resultUrl };
+    elements.resultImage.src = resultUrl;
+    elements.resultImage.hidden = false;
+    elements.outputPlaceholder.hidden = true;
+    elements.outputStage.classList.add("has-result");
+    elements.outputSymbol.hidden = true;
+    elements.outputTitle.textContent = "Sonuç önizlemesi";
+    elements.outputStatus.textContent = "Deneysel çıktı";
+    elements.downloadButton.disabled = false;
+    elements.disabledNote.textContent =
+      "NVIDIA FLUX genel amaçlı görsel düzenleme modelidir. Kimlik benzerliği garanti edilmez; sonucu kontrol ederek indir.";
+    showToast("Deneysel NVIDIA çıktısı hazır. Lütfen yüz benzerliğini kontrol et.");
+    setRuntimeStatus("NVIDIA FLUX · sonuç hazır");
+  } catch (error) {
+    console.error("NVIDIA FLUX işlemi başarısız:", error);
+    elements.outputTitle.textContent = "İşlem tamamlanamadı";
+    elements.outputStatus.textContent = "Hata";
+    elements.outputPlaceholder.hidden = false;
+    elements.outputPlaceholder.querySelector("strong").textContent = "NVIDIA işlemi başarısız";
+    elements.outputMessage.textContent = error.message || "NVIDIA API isteği başarısız oldu.";
+    elements.outputStage.classList.remove("has-result");
+    elements.outputSymbol.hidden = false;
+    showToast(error.message || "NVIDIA yüz düzenleme işlemi başarısız.");
+    setRuntimeStatus("NVIDIA FLUX · hata");
+  } finally {
+    if (generatedUrl) URL.revokeObjectURL(generatedUrl);
+    state.isSwapping = false;
+    updateSwapAvailability();
+  }
+}
+
+function downloadResult() {
+  if (!state.result?.url) return;
+  const link = document.createElement("a");
+  link.href = state.result.url;
+  link.download = "retake-nvidia-face-edit-" + Date.now() + ".png";
+  document.body.append(link);
+  link.click();
+  link.remove();
+}
+
 async function initializeDetector() {
   setRuntimeStatus("Yüz algılama modeli yükleniyor…");
   try {
@@ -351,10 +703,11 @@ async function initializeDetector() {
     }
 
     elements.engineDescription.textContent =
-      "Yüz algılama cihaz üzerinde hazır. Kayıtlı referanslar veritabanından okunuyor; gerçek Face Swap motoru henüz bağlı değil.";
+      "Yüz algılama cihaz üzerinde hazır. NVIDIA FLUX deneysel düzenleme için kullanılabilir; kimlik aktarımı garanti edilmez.";
     if (state.target) {
       state.target.faces = detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
+      clearResult();
       elements.targetMeta.textContent =
         state.target.image.naturalWidth + " × " + state.target.image.naturalHeight + " px · " +
         formatBytes(state.target.file.size) + " · " +
@@ -362,14 +715,16 @@ async function initializeDetector() {
       drawTargetPreview();
       renderFaceChips();
     }
-    setRuntimeStatus("Yüz algılama hazır · Yerel işlem etkin");
+    setRuntimeStatus("Yüz algılama hazır · Yerel yüz tespiti");
     renderReferences();
+    updateSwapAvailability();
   } catch (error) {
     console.error("MediaPipe başlatılamadı:", error);
     elements.engineTitle.textContent = "Yüz algılama motoru yüklenemedi";
     elements.engineDescription.textContent =
       "Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol edip sayfayı yenile.";
     setRuntimeStatus("Yüz algılama başlatılamadı");
+    updateSwapAvailability();
     showToast("Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol et.");
   }
 }
@@ -454,6 +809,8 @@ function initializeInteractions() {
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
   elements.reloadReferences.addEventListener("click", () => loadDatabaseReferences({ force: true }));
+  elements.swapButton.addEventListener("click", runNvidiaFaceEdit);
+  elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -472,6 +829,7 @@ function initializeInteractions() {
   window.addEventListener("pagehide", (event) => {
     if (event.persisted) return;
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
+    if (state.result?.url) URL.revokeObjectURL(state.result.url);
     state.references.forEach((item) => {
       if (item.url) URL.revokeObjectURL(item.url);
     });
@@ -485,7 +843,8 @@ async function initializeApp() {
 
   await Promise.allSettled([
     loadDatabaseReferences(),
-    initializeDetector()
+    initializeDetector(),
+    checkNvidiaStatus()
   ]);
 
   const loaded = state.references.filter((reference) => reference.status === "ready").length;
@@ -493,6 +852,7 @@ async function initializeApp() {
     (state.detector ? "Yüz algılama hazır" : "Yüz algılama kullanılamıyor") +
     " · Veritabanı: " + loaded + " / " + REFERENCE_CATALOG.length + " referans"
   );
+  updateSwapAvailability();
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("./sw.js").catch((error) => {

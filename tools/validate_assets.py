@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
-    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js",
-    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "docs/FACE_ONLY_PIPELINE.md",
+    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js",
+    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "docs/FACE_ONLY_PIPELINE.md",
     "package.json", "manifest.webmanifest", "sw.js", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )
@@ -36,8 +36,8 @@ def main() -> int:
     app_path = ROOT / "app.js"
     if index_path.is_file():
         source = index_path.read_text(encoding="utf-8", errors="replace")
-        markers = ('lang="tr"', 'id="targetInput"', 'id="referenceInput"',
-                   'id="swapButton"', "styles.css", "app.js", "manifest.webmanifest")
+        markers = ('lang="tr"', 'id="targetInput"', 'id="referencesGrid"',
+                   'id="reloadReferencesButton"', 'id="swapButton"', "styles.css", "app.js", "manifest.webmanifest")
         missing = [marker for marker in markers if marker not in source]
         checks.append({
             "check": "web-entry", "file": "index.html", "ok": not missing,
@@ -57,6 +57,26 @@ def main() -> int:
                            + ", ".join(forbidden or ["MediaPipe sürümü sabit değil"]),
         })
 
+
+
+    reference_ui = index_path.read_text(encoding="utf-8", errors="replace") if index_path.is_file() else ""
+    reference_app = app_path.read_text(encoding="utf-8", errors="replace") if app_path.is_file() else ""
+    catalog_path = ROOT / "src" / "reference-catalog.js"
+    catalog_source = catalog_path.read_text(encoding="utf-8", errors="replace") if catalog_path.is_file() else ""
+    forbidden_upload_markers = ("referenceInput", "addReferencesButton", "clearReferencesButton",
+                                 "importReferencePhotos", "openDatabase", "indexedDB")
+    upload_hits = [marker for marker in forbidden_upload_markers
+                   if marker in reference_ui or marker in reference_app]
+    has_api_loader = "getReferenceImageUrl" in reference_app and "/api/images/" in catalog_source
+    checks.append({
+        "check": "database-reference-flow",
+        "file": "index.html/app.js/src/reference-catalog.js",
+        "ok": not upload_hits and has_api_loader,
+        "detail": "20 kayıtlı referans API'den okunuyor; yükleme ve yerel DB akışı yok"
+                  if not upload_hits and has_api_loader
+                  else "eski referans yükleme/IndexedDB akışı veya API yükleyicisi eksik: "
+                       + ", ".join(upload_hits or ["API image route"]),
+    })
 
     source_files = [ROOT / "index.html", ROOT / "app.js"]
     source_files.extend((ROOT / "ios" / "RetakeApp").rglob("*.swift"))

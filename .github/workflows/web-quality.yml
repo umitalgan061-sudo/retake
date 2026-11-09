@@ -1,0 +1,51 @@
+name: Web quality
+
+on:
+  pull_request:
+    paths:
+      - "index.html"
+      - "styles.css"
+      - "app.js"
+      - "src/**"
+      - "tests/**"
+      - "manifest.webmanifest"
+      - "sw.js"
+      - "package.json"
+      - "tools/validate_assets.py"
+      - ".github/workflows/web-quality.yml"
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "styles.css"
+      - "app.js"
+      - "src/**"
+      - "tests/**"
+      - "manifest.webmanifest"
+      - "sw.js"
+      - "package.json"
+      - "tools/validate_assets.py"
+
+concurrency:
+  group: retake-web-\${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Run unit tests
+        run: npm test
+      - name: Validate repository assets
+        run: python3 tools/validate_assets.py
+      - name: Check JavaScript syntax
+        run: |
+          node --check app.js
+          node --check src/core.js
+          node --check sw.js

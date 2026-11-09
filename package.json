@@ -1,0 +1,12 @@
+{
+  "name": "retake-personal-studio",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Retake personal photo studio web app",
+  "scripts": {
+    "test": "node --test",
+    "validate": "python3 tools/validate_assets.py"
+  },
+  "engines": { "node": ">=22" }
+}

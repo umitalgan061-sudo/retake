@@ -1,0 +1,14 @@
+{
+  "id": "./",
+  "name": "Retake — Personal Photo Studio",
+  "short_name": "Retake",
+  "description": "Kişisel fotoğraf stüdyosu. Yerel fotoğraf ve referans yüz yönetimi.",
+  "lang": "tr",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "icons": [{ "src": "./icons/retake.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

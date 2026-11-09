@@ -2,58 +2,60 @@
 
 ## Nihai hedef
 
-iPhone 17 Pro Max üzerinde gerçek eğitilmiş AI Face Swap modeli kullanan, yüksek kaliteli fotoğraf çıktısı üreten kişisel iOS uygulaması.
-
-İnternet kullanımı serbesttir. İnternet; model indirme, model güncelleme ve kullanıcı açıkça etkinleştirirse uzak inference için kullanılabilir. Varsayılan tercih cihaz üzerinde inference ve fotoğrafların cihazda kalmasıdır.
+iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki seçilen yüz bölgesini değiştiren kişisel uygulama. Kamera/canlı video özelliği yoktur.
 
 ## Değişmez şartlar
 
-1. Canvas, landmark ve affine warp tek başına AI Face Swap olarak adlandırılmaz.
-2. Gerçek inference yoksa işlem başarılı gibi gösterilmez.
-3. Model kodu ile model ağırlıklarının lisansları ayrı ayrı doğrulanır.
-4. Kullanıcıya ait referans yüz fotoğrafları ve lisans kısıtlı model ağırlıkları public GitHub deposuna commit edilmez.
-5. Bir fotoğraf harici AI servisine gönderilecekse kullanıcıya hangi servise, hangi amaçla gönderileceği gösterilir ve açık onay alınır.
-6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. iOS Keychain kullanılır.
-7. Model indirirken HTTPS, SHA-256 bütünlük kontrolü, beklenen dosya boyutu ve lisans manifesti doğrulanır.
-8. NVIDIA API yalnızca gerçek Face Swap görevini destekleyen bir endpoint bulunursa kullanılır. Genel görüntü düzenleme endpoint'i kesin kimlik korumalı Face Swap gibi sunulmaz.
+0. Kamera API'si, canlı video, kamera önizlemesi veya kamera izni kesinlikle eklenmez. Yalnızca fotoğraf seçici kullanılır.
+0.1. Değişiklik yalnızca seçilen yüz crop'u ve yüz maskesi içinde yapılır; yüz dışı pikseller orijinalle aynı kalır.
+0.2. En çok 20 referans fotoğrafı aynı kimliğe ait olmalıdır; farklı kişiler bir identity bank içinde karıştırılmaz.
+0.3. Göz/ifade retarget yalnızca ihtiyaç varsa ve yalnızca hedef yüz crop'unda çalışır. Kapalı göz doğal açılabilir, fakat saç/arka plan/diğer kişiler değiştirilmez.
 
-## Mevcut native iOS temel
 
-`ios/Retake.xcodeproj` SwiftUI uygulama projesidir. Fotoğraf seçimi PhotosPicker, yüz tespiti Vision, 20 referans fotoğrafının yerel depolanması Application Support ve Core ML model paketi incelemesi Swift ile yapılır.
+1. Canvas, landmark ve affine warp tek başına AI Face Swap değildir.
+2. Gerçek inference yoksa işlem başarılı gibi gösterilmez; ilgili düğme devre dışı kalır.
+3. Model kodu ile önceden eğitilmiş ağırlıkların lisansları ayrı ayrı doğrulanır.
+4. Kullanıcının referans fotoğrafları, yüz embedding'leri ve lisansı kısıtlı ağırlıklar public GitHub'a commit edilmez.
+5. Bir fotoğraf harici AI servisine gönderilecekse sağlayıcı, amaç ve gönderilecek veri açıkça belirtilir; kullanıcı onayı olmadan gönderim yapılmaz.
+6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. Native iOS için Keychain; web uygulamasında gizli anahtar gerekiyorsa istemciye koymak yerine güvenli sunucu tarafı proxy gerekir.
+7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
+8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
 
-Mevcut sürüm fotoğraftaki hedef yüzü algılayıp görsel olarak seçtirebilir; referans yüzleri yerel olarak saklayıp kaynak yüz olarak seçtirebilir. Gerçek yüz değiştirme modeli ve inference adapter'ı henüz yoktur. Bu nedenle yüz değiştirme butonu bilinçli olarak devre dışıdır.
+## Face-only generation contract
 
-## Hedef mimari
+Detaylı işlem hattı: `docs/FACE_ONLY_PIPELINE.md`.
 
-- Native uygulama: SwiftUI
-- Fotoğraf seçimi: PhotosUI
-- Yüz tespiti: Vision
-- Face Swap: lisansı uygun, iOS üzerinde çalıştırılabilir gerçek model
-- Varsayılan inference: Core ML ile cihaz üzerinde
-- Model dağıtımı: doğrulanmış HTTPS indirmesi ve SHA-256 kontrolü
-- İsteğe bağlı uzak inference: yalnızca desteklenen gerçek Face Swap endpoint'i ve kullanıcı onayıyla
-- API anahtarı saklama: iOS Keychain
-- Veri: yerel dosya sistemi ve Photos kütüphanesi
+- 20 kaynak fotoğrafını kaliteye göre hizala ve tek identity profile oluştur.
+- Hedefte kullanıcı tarafından seçilen yüz crop'unda kimlik aktarımı yap.
+- Pose/ışık/skin target attributes korunur.
+- Gerekirse eyes-open ve sınırlı expression retarget uygula.
+- Face parser ve occlusion mask ile yüz dışını koru.
+- Tam çözünürlüklü kaynak fotoğrafa maskeli patch yapıştır.
+- Maske dışı piksel eşitliğini otomatik doğrula.
 
-Modelin gerçek girdi/çıktı tensörleri ve dönüştürülmüş Core ML dosyası elde edilmeden model adapter'ı uydurma şekillerle yazma.
+## Web Studio
 
-## NVIDIA API değerlendirmesi
+\`index.html\`, \`styles.css\`, \`app.js\`, \`src/core.js\` ve \`sw.js\` statik PWA'yı oluşturur.
 
-NVIDIA API kataloğundaki Qwen-Image-Edit genel amaçlı görsel düzenleme modelidir; dokümantasyonunda kesin kimlik korumalı yüz değiştirme özelliği tanımlanmamıştır. NIM dokümanları Qwen-Image-Edit'i indirilebilir model olarak gösterir ve self-hosted NIM kurulumu için uygun NVIDIA GPU ile container çalıştırmayı anlatır. Bu sebeple kullanıcıya ait yüz fotoğraflarını Qwen Image Edit'e otomatik yükleme ve bu modeli Face Swap motoru olarak kabul etme.
+- MediaPipe Tasks Vision sürümü sabitlenir; doğru API ile \`HTMLImageElement\` üzerinden \`detect()\` çağrılır.
+- Fotoğraf algılama tarayıcıda çalışır; görsel içeriği üçüncü tarafa yüklenmez.
+- Hedef fotoğraf oturum belleğinde tutulur; hedef fotoğraf IndexedDB'ye kaydedilmez.
+- Kullanıcının eklediği en fazla 20 referans fotoğrafı IndexedDB'de saklanır; tek yüz doğrulaması yapılır.
+- Servis çalışanı yalnızca uygulama kabuğunu ve izin verilen MediaPipe/WASM/model varlıklarını önbelleğe alır.
+- Web uygulamasında gerçek Face Swap modeli yoktur; swap ve indirme eylemleri kapalı kalır.
 
-Kaynaklar:
-- https://build.nvidia.com/qwen/qwen-image-edit
-- https://docs.nvidia.com/nim/visual-genai/latest/overview.html
-- https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html
+Web değişikliklerinde \`npm test\`, \`npm run validate\`, JavaScript sözdizimi ve GitHub Actions sonucu kontrol edilir.
 
-## Model lisansı
+## Native iOS temel
 
-InsightFace, FaceFusion ve diğer model kataloglarında kod ile ağırlık lisansları farklı olabilir. Yüz algılama, embedding, dönüştürme, segmentasyon, restorasyon ve yüz değiştirme bileşenlerinin tamamını ayrı ayrı denetle.
+\`ios/Retake.xcodeproj\` SwiftUI uygulamasıdır. Fotoğraf seçimi PhotosUI, yüz tespiti Vision, yerel depolama Application Support, model metadata Core ML ve API anahtarı saklama Keychain ile yapılır.
 
-## Yerel doğrulama
+- Yüz tespitinde büyük fotoğrafları ana iş parçacığında tam çözünürlükte rasterize etme; ImageIO thumbnail ve background task tercih edilir.
+- Özel yüz fotoğrafları ve model varlıkları iCloud/device backup dışında tutulmalıdır.
+- Gerçek modelin tensor sözleşmesi ve ağırlık lisansı doğrulanmadan adapter veya başarı durumu uydurma.
 
-```bash
-python3 tools/validate_assets.py
-```
+## Model seçimi
 
-Ayrıntılı durum ve kabul kriterleri: `docs/IOS_OFFLINE_AI_STATUS.md`.
+MobileFaceSwap, MobileFSGAN ve GHOST araştırma adaylarıdır; hiçbirinin tüm yardımcı ağırlık lisansları ve iOS dağıtım koşulları otomatik olarak onaylanmış sayılmaz. ArcFace/InsightFace gibi encoder ve landmark bileşenleri ayrıca denetlenmelidir.
+
+Ayrıntılı teknik durum: \`docs/IOS_OFFLINE_AI_STATUS.md\` ve \`ios/README.md\`.

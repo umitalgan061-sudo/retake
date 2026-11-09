@@ -9,15 +9,14 @@ final class RetakeViewModel: ObservableObject {
     @Published private(set) var targetImage: UIImage?
     @Published private(set) var detectedFaces: [DetectedFace] = []
     @Published var selectedFaceIndex: Int?
-    @Published var selectedReferenceID: String?
     @Published private(set) var modelInspection: ModelInspection = .missing
     @Published private(set) var isBusy = false
     @Published var statusMessage = "Fotoğraf seçerek başlayın."
 
     private let assetStore = LocalAssetStore()
-    private let faceDetector = FaceDetectionService()
     private let modelInspector = LocalModelInspector()
     private let modelDownloader = ModelDownloadManager()
+    private let maximumImageBytes = 100 * 1024 * 1024
 
     var canAttemptFaceSwap: Bool {
         // Intentionally false until a licensed model and its verified adapter exist.
@@ -33,13 +32,6 @@ final class RetakeViewModel: ObservableObject {
         do {
             let urls = try await assetStore.referenceFiles()
             referenceFaces = urls.map(ReferenceFace.init(url:))
-            if let selectedReferenceID,
-               !referenceFaces.contains(where: { $0.id == selectedReferenceID }) {
-                self.selectedReferenceID = nil
-            }
-            if self.selectedReferenceID == nil {
-                self.selectedReferenceID = referenceFaces.first?.id
-            }
             if referenceFaces.isEmpty {
                 statusMessage = "Referans yüzlerinizi cihazdan içe aktarın."
             }
@@ -66,17 +58,21 @@ final class RetakeViewModel: ObservableObject {
         for item in items.prefix(remaining) {
             do {
                 guard let data = try await item.loadTransferable(type: Data.self),
-                      let image = UIImage(data: data) else {
+                      !data.isEmpty,
+                      data.count <= maximumImageBytes else {
                     failed += 1
                     continue
                 }
-                // Reference entries must contain exactly one detectable face.
-                // This avoids silently treating group photos as a single identity.
-                let faceCount = try faceDetector.detectFaces(in: image).count
+
+                let faceCount = try await Task.detached(priority: .userInitiated) {
+                    try FaceDetectionService().detectFaces(in: data).count
+                }.value
+
                 guard faceCount == 1 else {
                     failed += 1
                     continue
                 }
+
                 let ext = item.supportedContentTypes.first?.preferredFilenameExtension ?? "jpg"
                 _ = try await assetStore.saveReference(data: data, fileExtension: ext)
                 imported += 1
@@ -89,17 +85,9 @@ final class RetakeViewModel: ObservableObject {
         statusMessage = "Tek yüz içerdiği doğrulanan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
     }
 
-    func selectReference(_ face: ReferenceFace) {
-        selectedReferenceID = face.id
-        statusMessage = "Kaynak referans seçildi: \(face.fileName)"
-    }
-
     func removeReference(_ face: ReferenceFace) async {
         do {
             try await assetStore.deleteReference(fileName: face.fileName)
-            if selectedReferenceID == face.id {
-                selectedReferenceID = nil
-            }
             await refreshReferences()
         } catch {
             statusMessage = "Referans silinemedi: \(error.localizedDescription)"
@@ -150,12 +138,19 @@ final class RetakeViewModel: ObservableObject {
 
         do {
             guard let data = try await item.loadTransferable(type: Data.self),
+                  !data.isEmpty,
+                  data.count <= maximumImageBytes,
                   let image = UIImage(data: data) else {
                 throw TargetImageError.invalidImage
             }
 
+            let faces = try await Task.detached(priority: .userInitiated) {
+                try FaceDetectionService().detectFaces(in: data)
+            }.value
+
+            // Replace the current target only after the new image and detection both succeed.
             targetImage = image
-            detectedFaces = try faceDetector.detectFaces(in: image)
+            detectedFaces = faces
             selectedFaceIndex = detectedFaces.isEmpty ? nil : detectedFaces[0].index
 
             if detectedFaces.isEmpty {
@@ -166,10 +161,7 @@ final class RetakeViewModel: ObservableObject {
                 statusMessage = "\(detectedFaces.count) yüz tespit edildi. Değiştirilecek yüzü seçin."
             }
         } catch {
-            targetImage = nil
-            detectedFaces = []
-            selectedFaceIndex = nil
-            statusMessage = "Fotoğraf işlenemedi: \(error.localizedDescription)"
+            statusMessage = "Fotoğraf işlenemedi: \(error.localizedDescription). Önceki fotoğraf korunuyor."
         }
     }
 
@@ -189,6 +181,6 @@ private enum TargetImageError: LocalizedError {
     case invalidImage
 
     var errorDescription: String? {
-        "Seçilen dosya geçerli bir görüntü olarak açılamadı."
+        "Seçilen görsel okunamadı veya 100 MB boyut sınırını aşıyor."
     }
 }

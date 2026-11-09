@@ -9,6 +9,8 @@ struct ContentView: View {
     @State private var referencePickerItems: [PhotosPickerItem] = []
     @State private var isImportingModel = false
     @State private var modelManifestURL = ""
+    @State private var pendingDeleteFace: ReferenceFace?
+    @State private var alertMessage: String?
 
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: 12)]
 
@@ -49,11 +51,38 @@ struct ContentView: View {
                         Task { await viewModel.installModelBundle(from: url) }
                     }
                 case .failure(let error):
-                    print("Model içe aktarma hatası: \(error.localizedDescription)")
+                    alertMessage = "Model içe aktarma hatası: \(error.localizedDescription)"
                 }
             }
         }
         .tint(Color.mint)
+        .confirmationDialog(
+            "Referans yüz silinsin mi?",
+            isPresented: Binding(
+                get: { pendingDeleteFace != nil },
+                set: { if !$0 { pendingDeleteFace = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Referansı sil", role: .destructive) {
+                guard let face = pendingDeleteFace else { return }
+                pendingDeleteFace = nil
+                Task { await viewModel.removeReference(face) }
+            }
+            Button("Vazgeç", role: .cancel) {
+                pendingDeleteFace = nil
+            }
+        } message: {
+            Text("Bu fotoğraf uygulamanın yerel referans kitaplığından kaldırılacak.")
+        }
+        .alert("Retake", isPresented: Binding(
+            get: { alertMessage != nil },
+            set: { if !$0 { alertMessage = nil } }
+        )) {
+            Button("Tamam", role: .cancel) { alertMessage = nil }
+        } message: {
+            Text(alertMessage ?? "")
+        }
     }
 
     private var header: some View {
@@ -67,9 +96,9 @@ struct ContentView: View {
                 Image(systemName: "iphone.gen3")
                     .foregroundStyle(.secondary)
             }
-            Text("Yerel AI Face Swap")
+            Text("Fotoğraf tabanlı yüz düzenleme")
                 .font(.system(size: 28, weight: .bold, design: .rounded))
-            Text("iPhone üzerinde özel ve çevrimdışı fotoğraf işleme")
+            Text("Kamera yok · Yalnızca galeriden seçilen fotoğraf")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
         }
@@ -183,7 +212,7 @@ struct ContentView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                 } else {
-                    Text("\(viewModel.detectedFaces.count) yüz tespit edildi · Hedef yüzü seçin")
+                    Text("\(viewModel.detectedFaces.count) yüz tespit edildi · Yalnızca seçilen yüz değiştirilecek")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -252,7 +281,7 @@ struct ContentView: View {
     private var referenceFacesCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center) {
-                sectionHeading("2", "Referans yüzler")
+                sectionHeading("2", "Kimlik referansları")
                 Spacer()
                 Text("\(viewModel.referenceFaces.count)/20")
                     .font(.caption.monospacedDigit().weight(.semibold))
@@ -260,7 +289,7 @@ struct ContentView: View {
             }
 
             if viewModel.referenceFaces.isEmpty {
-                Text("Depodaki referans kayıtları gerçek fotoğraf dosyaları değil. Orijinal 20 fotoğrafı buradan cihazına içe aktar.")
+                Text("Aynı kişiye ait en fazla 20 fotoğrafı farklı açılardan ve ifadelerden ekle. Kimlik özellikleri birlikte değerlendirilecek.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -268,23 +297,21 @@ struct ContentView: View {
                     ForEach(viewModel.referenceFaces) { face in
                         ReferenceFaceTile(
                             face: face,
-                            isSelected: viewModel.selectedReferenceID == face.id,
-                            onSelect: { viewModel.selectReference(face) },
-                            onDelete: { Task { await viewModel.removeReference(face) } }
+                            onDelete: { pendingDeleteFace = face }
                         )
                     }
                 }
             }
 
             PhotosPicker(selection: $referencePickerItems, maxSelectionCount: 20, matching: .images) {
-                Label("Fotoğraflardan referans ekle", systemImage: "person.crop.square.badge.plus")
+                Label("Galeriden kimlik fotoğrafları ekle", systemImage: "person.crop.square.badge.plus")
                     .font(.subheadline.weight(.semibold))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.bordered)
             .disabled(viewModel.isBusy || viewModel.referenceFaces.count >= 20)
 
-            Text("Referanslar yalnızca bu uygulamanın özel yerel klasöründe saklanır.")
+            Text("Yalnızca seçilen yüz bölgesi düzenlenecek. Gözler kapalıysa uygun referanslardan doğal göz açıklığı üretilebilecek; saç, arka plan, kıyafet ve diğer yüzler korunacak. Referanslar uygulamanın yerel klasöründe saklanır.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -299,7 +326,7 @@ struct ContentView: View {
             Text(viewModel.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            Text("Bu geliştirme sürümü fotoğraf seçimi ve yerel yüz tespitini yapar. Geçerli, lisansı uygun Face Swap modeli ve model adaptörü bulunmadığı için henüz yeni yüz üretmez. Sahte sonuç gösterilmez.")
+            Text("Bu sürüm galeriden fotoğraf alır ve yüzleri cihazda tespit eder. Yalnızca seçilen yüzü değiştirecek gerçek AI modeli, göz/ifade düzeltme ve yüz maskesiyle birleştirme henüz entegre edilmedi. Sahte sonuç gösterilmez.")
                 .font(.caption)
                 .foregroundStyle(.orange)
             Button {
@@ -345,34 +372,25 @@ struct ContentView: View {
 
 private struct ReferenceFaceTile: View {
     let face: ReferenceFace
-    let isSelected: Bool
-    let onSelect: () -> Void
     let onDelete: () -> Void
 
     var body: some View {
         VStack(spacing: 5) {
             ZStack(alignment: .topTrailing) {
-                Button(action: onSelect) {
-                    Group {
-                        if let image = UIImage(contentsOfFile: face.url.path) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFill()
-                        } else {
-                            RoundedRectangle(cornerRadius: 11)
-                                .fill(Color.white.opacity(0.08))
-                                .overlay(Image(systemName: "person.crop.square").foregroundStyle(.secondary))
-                        }
-                    }
-                    .frame(height: 88)
-                    .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: 11))
-                    .overlay(
+                Group {
+                    if let image = UIImage(contentsOfFile: face.url.path) {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
                         RoundedRectangle(cornerRadius: 11)
-                            .stroke(isSelected ? Color.mint : Color.clear, lineWidth: 3)
-                    )
+                            .fill(Color.white.opacity(0.08))
+                            .overlay(Image(systemName: "person.crop.square").foregroundStyle(.secondary))
+                    }
                 }
-                .buttonStyle(.plain)
+                .frame(height: 88)
+                .frame(maxWidth: .infinity)
+                .clipShape(RoundedRectangle(cornerRadius: 11))
 
                 Button(action: onDelete) {
                     Image(systemName: "xmark.circle.fill")
@@ -386,11 +404,9 @@ private struct ReferenceFaceTile: View {
                 .font(.system(size: 9))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
-            if isSelected {
-                Text("Kaynak yüz")
-                    .font(.system(size: 9, weight: .bold))
-                    .foregroundStyle(.mint)
-            }
+            Text("Kimlik havuzunda")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(.mint)
         }
     }
 }

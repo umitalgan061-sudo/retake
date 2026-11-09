@@ -5,8 +5,9 @@ actor LocalAssetStore {
     private let rootURL: URL
 
     init() {
-        let support = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        rootURL = support.appendingPathComponent("Retake", isDirectory: true)
+        let supportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        rootURL = supportURL.appendingPathComponent("Retake", isDirectory: true)
     }
 
     private var referencesURL: URL {
@@ -20,6 +21,9 @@ actor LocalAssetStore {
     func prepareDirectories() throws {
         try fileManager.createDirectory(at: referencesURL, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: modelsURL, withIntermediateDirectories: true)
+        excludeFromBackup(rootURL)
+        excludeFromBackup(referencesURL)
+        excludeFromBackup(modelsURL)
     }
 
     func referenceFiles() throws -> [URL] {
@@ -43,6 +47,7 @@ actor LocalAssetStore {
             .appendingPathComponent(UUID().uuidString)
             .appendingPathExtension(normalizedExtension)
         try data.write(to: destination, options: [.atomic, .completeFileProtectionUnlessOpen])
+        excludeFromBackup(destination)
         return destination
     }
 
@@ -84,6 +89,7 @@ actor LocalAssetStore {
 
         do {
             try fileManager.copyItem(at: sourceURL, to: staging)
+            excludeFromBackup(staging)
 
             let hadPreviousModel = fileManager.fileExists(atPath: destination.path)
             if hadPreviousModel {
@@ -92,6 +98,7 @@ actor LocalAssetStore {
 
             do {
                 try fileManager.moveItem(at: staging, to: destination)
+                excludeFromBackup(destination)
                 if hadPreviousModel {
                     try? fileManager.removeItem(at: backup)
                 }
@@ -107,6 +114,13 @@ actor LocalAssetStore {
             try? fileManager.removeItem(at: staging)
             throw error
         }
+    }
+
+    private func excludeFromBackup(_ url: URL) {
+        var mutableURL = url
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        try? mutableURL.setResourceValues(values)
     }
 }
 

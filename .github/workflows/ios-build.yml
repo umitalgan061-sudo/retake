@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - "ios/**"
+      - "tools/validate_assets.py"
       - ".github/workflows/ios-build.yml"
   push:
     branches:
@@ -25,6 +26,9 @@ jobs:
 
       - name: Show Xcode version
         run: xcodebuild -version
+
+      - name: Validate asset checker syntax
+        run: python3 -m py_compile tools/validate_assets.py
 
       - name: Build iOS simulator app
         run: |

@@ -4,32 +4,36 @@ Açılacak proje: `Retake.xcodeproj`
 
 Hedef: iPhone 17 Pro Max, iOS 17 veya üzeri.
 
-## Şu anda uygulamada bulunanlar
+## Mevcut uygulama özellikleri
 
 - SwiftUI native uygulama kabuğu
 - PhotosPicker ile hedef fotoğraf seçimi
-- Vision ile cihaz içi yüz dikdörtgeni tespiti
-- Birden fazla yüz olduğunda hedef yüzü seçme
-- En fazla 20 referans fotoğrafını yerel Application Support klasörüne içe aktarma
-- Referansları uygulama içinden silme
-- Core ML model dosyası mevcutsa modelin yüklenmesi ve girdi/çıktı isimlerinin incelenmesi
-- Eksik modelde gerçek işlem yapılmadığının açıkça bildirilmesi
+- Vision ile cihaz içi yüz tespiti
+- Birden fazla yüz varsa hedef yüzü görüntü üzerinde seçme
+- En fazla 20 referans görselini yerel depoya içe aktarma
+- Her referans görüntüsünde tek yüz kontrolü
+- Kaynak referans seçimi ve yerel silme
+- Yerel Core ML model paketi içe aktarma ve girdi/çıktı metadata inceleme
+
+## Ağ kullanımı
+
+Uygulama internet kullanabilir. İlk hedef, doğrulanmış Core ML model paketlerini HTTPS üzerinden indirmek ve cihazda çalıştırmaktır. Model dosyaları için manifestte sürüm, kaynak, lisans, boyut ve SHA-256 zorunlu olmalıdır.
+
+Varsayılan durumda fotoğraflar cihazda kalır. Uzak inference sağlayıcısı devreye alınırsa fotoğrafın üçüncü tarafa gönderileceği işlem öncesinde açıkça belirtilmeli ve kullanıcı onayı alınmalıdır. Anahtarlar iOS Keychain'de saklanmalı; uygulama bundle'ına gömülmemelidir.
+
+## NVIDIA notu
+
+NVIDIA Qwen-Image-Edit genel amaçlı image-edit modelidir. Mevcut dokümantasyonda deterministik, kimlik korumalı Face Swap endpoint'i olarak sunulmaz. NIM'in indirilebilir model paketini çalıştırmak için ayrıca desteklenen NVIDIA GPU altyapısı gerekir. Bu nedenle mevcut NVIDIA API anahtarı doğrudan yüz değiştirme çözümü olarak varsayılmamıştır.
 
 ## Model dosyası
 
-Beklenen paket adı `RetakeFaceSwap.mlmodelc`. Bu isim tek başına bir uyumluluk garantisi değildir. Seçilecek gerçek modelin lisansı ve tensor sözleşmesi incelenmeli; Core ML'e çevrilmeli; gerçek cihazda test edilmelidir.
-
-Mevcut sürümde genel amaçlı tahmini bir inference çağrısı yapılmaz. Yüz değiştirme modelleri birbirinden farklı girdi, ön işleme, yüz hizalama, embedding ve çıktı sözleşmelerine sahiptir. Doğru model adapter'ı olmadan inference yapmak sahte/bozuk çıktı üretir.
-
-## Yerel referans fotoğrafları
-
-GitHub deposundaki eski `reference-faces/` girdileri gerçek fotoğraf içeriği değil. Orijinal 20 fotoğrafı uygulamaya PhotosPicker ile cihazdan yeniden içe aktarın. Uygulama bunları Application Support/Retake/ReferenceFaces altında saklar.
+Beklenen yerel paket adı `RetakeFaceSwap.mlmodelc`. Bu isim tek başına uyumluluk garantisi değildir. Seçilecek gerçek modelin lisansı, tensor sözleşmesi ve Core ML uyumluluğu doğrulanmalıdır.
 
 ## Derleme
 
 1. macOS üzerinde Xcode 16 veya üstünü açın.
-2. `Retake.xcodeproj` dosyasını açın.
+2. `Retake.xcodeproj` projesini açın.
 3. Signing & Capabilities bölümünde kendi Apple Developer Team hesabınızı seçin.
 4. iPhone 17 Pro Max cihazını hedef seçip Run düğmesine basın.
 
-Bu depo içinden Xcode veya iPhone üzerinde derleme/çalıştırma testi yapılamadı; gerçek cihaz doğrulaması ayrıca yapılmalıdır.
+Bu depo içinden gerçek cihaz derlemesi ve çalışma testi yapılamaz; simulator CI ile fiziksel cihaz doğrulaması ayrı tutulmalıdır.

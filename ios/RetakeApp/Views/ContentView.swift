@@ -49,7 +49,7 @@ struct ContentView: View {
                         Task { await viewModel.installModelBundle(from: url) }
                     }
                 case .failure(let error):
-                    print("Model içe aktarma hatası: \\(error.localizedDescription)")
+                    print("Model içe aktarma hatası: \(error.localizedDescription)")
                 }
             }
         }

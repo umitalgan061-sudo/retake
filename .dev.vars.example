@@ -1,0 +1,2 @@
+# Güvenli yerel şablon. Bunu .dev.vars adıyla kopyala ve sadece yerel dosyaya gerçek anahtarını yaz.
+NVIDIA_API_KEY=nvapi-YOUR_KEY_HERE

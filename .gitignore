@@ -58,3 +58,9 @@ test-results/
 # Keep the harmless Functions environment template tracked
 !functions/
 !functions/.env.example
+
+
+# Cloudflare Wrangler local credentials and development values
+.wrangler/
+.dev.vars
+.dev.vars.*

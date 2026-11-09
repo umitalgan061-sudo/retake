@@ -6,7 +6,10 @@
   "description": "Retake personal photo studio web app",
   "scripts": {
     "test": "node --test",
-    "validate": "python3 tools/validate_assets.py"
+    "validate": "python3 tools/validate_assets.py",
+    "deploy:worker": "node tools/deploy-worker.mjs"
   },
-  "engines": { "node": ">=22" }
+  "engines": {
+    "node": ">=22"
+  }
 }

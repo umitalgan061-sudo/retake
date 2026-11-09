@@ -57,6 +57,8 @@ actor LocalAssetStore {
         }
     }
 
+    /// Installs a compiled model with a staging directory and rollback.
+    /// The currently installed model remains intact unless the new copy succeeds.
     func installCompiledModel(from sourceURL: URL) throws {
         try prepareDirectories()
         guard sourceURL.pathExtension.lowercased() == "mlmodelc" else {
@@ -77,10 +79,34 @@ actor LocalAssetStore {
         }
 
         let destination = modelsURL.appendingPathComponent("RetakeFaceSwap.mlmodelc", isDirectory: true)
-        if fileManager.fileExists(atPath: destination.path) {
-            try fileManager.removeItem(at: destination)
+        let staging = modelsURL.appendingPathComponent(".RetakeFaceSwap-\(UUID().uuidString).mlmodelc", isDirectory: true)
+        let backup = modelsURL.appendingPathComponent(".RetakeFaceSwap-backup-\(UUID().uuidString).mlmodelc", isDirectory: true)
+
+        do {
+            try fileManager.copyItem(at: sourceURL, to: staging)
+
+            let hadPreviousModel = fileManager.fileExists(atPath: destination.path)
+            if hadPreviousModel {
+                try fileManager.moveItem(at: destination, to: backup)
+            }
+
+            do {
+                try fileManager.moveItem(at: staging, to: destination)
+                if hadPreviousModel {
+                    try? fileManager.removeItem(at: backup)
+                }
+            } catch {
+                if hadPreviousModel,
+                   fileManager.fileExists(atPath: backup.path),
+                   !fileManager.fileExists(atPath: destination.path) {
+                    try? fileManager.moveItem(at: backup, to: destination)
+                }
+                throw error
+            }
+        } catch {
+            try? fileManager.removeItem(at: staging)
+            throw error
         }
-        try fileManager.copyItem(at: sourceURL, to: destination)
     }
 }
 

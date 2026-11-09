@@ -35,8 +35,8 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   if (url.origin === self.location.origin) {
-    // Kişisel yüz görselleri Cache Storage'a yazılmasın.
-    if (url.pathname.startsWith("/api/images/")) {
+    // Keep private reference photos and their manifest out of Cache Storage.
+    if (url.pathname.startsWith("/api/images/") || url.pathname.startsWith("/reference-faces/")) {
       event.respondWith(fetch(request));
       return;
     }

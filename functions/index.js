@@ -138,9 +138,9 @@ async function invokeFlux(apiKey, assetId) {
     body: JSON.stringify({
       prompt: [
         "Edit the provided two-panel reference board.",
-        "The LEFT panel is one target face crop. The RIGHT panel contains twenty identity reference photos of the same person.",
+        "The LEFT panel is one target face crop. The RIGHT panel contains twenty-five identity reference photos of the same person.",
         "Change only the facial identity of the person in the LEFT panel to resemble the person shown consistently across the RIGHT panel.",
-        "Use all twenty references together. Keep the target head pose, expression, gaze, camera angle, lighting and realistic skin texture.",
+        "Use all twenty-five references together. Keep the target head pose, expression, gaze, camera angle, lighting and realistic skin texture.",
         "If the target eyes are closed, naturally open them using the open-eye appearance shown in the references while retaining the gaze direction.",
         "Preserve the target hairline, hair, ears, neck, clothing, body and background. Do not change or use the right panel as part of the output subject.",
         "Do not add people, text, graphics or a new scene. Return the same image board and aspect ratio."

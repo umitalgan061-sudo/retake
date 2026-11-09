@@ -19,28 +19,16 @@ Detaylı kabul sözleşmesi: `../docs/FACE_ONLY_PIPELINE.md`.
 - PhotosPicker ile hedef fotoğraf seçimi
 - Vision ile cihaz içi yüz tespiti; ImageIO üzerinden 2048 px sınırlandırılmış küçük resim üretimi ve arka plan iş parçacığında analiz.
 - Birden fazla yüz varsa hedef yüzü görüntü üzerinde seçme
-- En fazla 20 referans görselini yerel depoya içe aktarma
+- En fazla 20 referans görselini PhotosPicker veya Files üzerinden yerel depoya içe aktarma
 - Her referans görüntüsünde tek yüz kontrolü
 - Kaynak referans seçimi ve yerel silme
 - Yerel Core ML model paketi içe aktarma ve girdi/çıktı metadata inceleme
-- Tek dosyalı `.mlmodel` paketlerini ekrandaki HTTPS manifest URL alanından indirme, boyut ve SHA-256 doğrulaması, Core ML derlemesi ve yerel kurulum
-- Servis sağlayıcı anahtarlarını cihazın Keychain alanında saklayan altyapı
 
-## Ağ kullanımı ve model kurulumu
+## Çevrimdışı çalışma ve model kurulumu
 
-İnternet modeli indirmek/güncellemek için kullanılabilir. Model indiricisi şu an gerçek bir Face Swap kataloğuna bağlı değildir; lisans incelemesi tamamlanmış, güvenilir bir HTTPS manifest URL'si verildiğinde çalışacak altyapıdır.
+Native iOS uygulamasında model veya fotoğraf için ağ isteği yapılmaz. 20 referans fotoğrafını iPhone Fotoğraflar'a veya Dosyalar'a ekleyip uygulamadaki ilgili içe aktarma düğmesini kullanın. Uygulama her görselde tek bir yüz algılandığını doğrular ve görseli `Application Support/Retake/ReferenceFaces` içine özel olarak kopyalar. Bu işlem aynı kimliği doğrulamaz. Face Swap ağırlıkları lisans ve gerçek iOS çalışma sözleşmesi doğrulandıktan sonra uygulama kaynaklarına yerel olarak eklenmelidir. Model kartındaki içe aktarma, yalnızca cihazda önceden bulunan derlenmiş `RetakeFaceSwap.mlmodelc` paketini inceleme içindir; uygulamada şu anda paketlenmiş bir swap modeli yoktur.
 
-Manifest şu alanları taşımalıdır: `modelID`, `version`, `artifactURL`, `byteCount`, `sha256`, `codeLicense`, `weightsLicense`, `licenseEvidenceURL` ve `licenseReviewStatus`. `modelID` değeri `RetakeFaceSwap`, artifact uzantısı `.mlmodel`, lisans inceleme durumu ise `approved` olmalıdır. Model dosyası için yalnızca izin verilen GitHub/Hugging Face HTTPS hostları kabul edilir.
-
-Model kartındaki HTTPS manifest URL alanına adres girilerek indirme başlatılır. İndirici dosyanın tam boyutunu ve SHA-256 değerini kontrol eder, sonra Core ML ile derler, modelin giriş/çıkış tanımlarını yükleyerek kontrol eder ve ancak bundan sonra yerel modele geçirir. Geçersiz dosya mevcut modeli değiştirmez. Şu anda kullanıma hazır bir manifest URL'si yayımlanmış değildir.
-
-**Güven sınırı:** SHA-256, manifestte verilen dosyanın bütünlüğünü kontrol eder; manifesti yayınlayan tarafın kimliğini tek başına kanıtlamaz. Üretim dağıtımı öncesinde model yayıncısının imzalı manifesti ve açık anahtar sabitlemesi ayrıca tanımlanmalıdır. Şu an doğrulanmış model yayıncısı veya gerçek Face Swap manifest URL'si bulunmadığından otomatik indirme etkinleştirilmedi.
-
-Varsayılan durumda fotoğraflar cihazda kalır. Uzak inference sağlayıcısı devreye alınırsa fotoğrafın üçüncü tarafa gönderileceği işlem öncesinde açıkça belirtilmeli ve kullanıcı onayı alınmalıdır.
-
-## API anahtarları
-
-iOS uygulamasına `.env` dosyası koymak güvenli bir sır saklama yöntemi değildir; uygulama bundle'ına giren dosyalar kullanıcıdan gizli kalmaz. `KeychainStore` API anahtarlarını `WhenUnlockedThisDeviceOnly` korumasıyla cihazın Keychain alanında saklamak için eklendi. Henüz kullanılmayan NVIDIA anahtarını istemiyoruz: elimizde bu anahtarla çağrılabilecek belgelenmiş bir Face Swap endpoint'i yok.
+Fotoğraf seçimi, Vision yüz tespiti ve referans depolaması cihaz üzerindedir. Gerçek Face Swap modeli, adapter ve maskeli birleştirme tamamlanana kadar işlem düğmesi kapalı kalır. Web/PWA sürümünün çevrimdışı olup olmadığı bu native iOS garantisinin parçası değildir.
 
 ## Model adayları — 9 Kasım 2026 incelemesi
 
@@ -61,4 +49,4 @@ NVIDIA Qwen-Image-Edit genel amaçlı image-edit modelidir. Mevcut dokümantasyo
 3. Signing & Capabilities bölümünde kendi Apple Developer Team hesabınızı seçin.
 4. iPhone 17 Pro Max cihazını hedef seçip Run düğmesine basın.
 
-Bu depo içinden gerçek cihaz derlemesi ve çalışma testi yapılamaz; simulator CI ile fiziksel cihaz doğrulaması ayrı tutulmalıdır.
+Bu depo içindeki Linux geliştirme ortamında Xcode ve iPhone donanımı bulunmadığından iOS derlemesi, gerçek cihaz inference'ı ve uçak modu testi burada doğrulanamaz. Simulator CI ile fiziksel cihaz doğrulaması ayrı tutulmalıdır.

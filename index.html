@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#0b0d12">
   <meta name="description" content="Retake kişisel fotoğraf stüdyosu. Yalnızca fotoğraftaki seçili yüzü düzenle; yüz dışındaki alanları koru.">
   <meta name="color-scheme" content="dark light">
+  <meta name="retake-api-base" content="">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>Retake — Kişisel Fotoğraf Stüdyosu</title>
   <link rel="manifest" href="./manifest.webmanifest">
@@ -20,7 +21,7 @@
         <span class="brand-copy"><strong>RETAKE</strong><small>PERSONAL PHOTO STUDIO</small></span>
       </a>
       <div class="topbar-actions">
-        <span class="device-pill"><span class="pulse-dot"></span> Cihazında çalışır</span>
+        <span class="device-pill"><span class="pulse-dot"></span> Yerel yüz algılama</span>
         <button class="icon-button" id="installButton" type="button" hidden aria-label="Uygulamayı yükle" title="Uygulamayı yükle">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3" /></svg>
         </button>
@@ -39,8 +40,8 @@
         </div>
         <div class="intro-meta">
           <span class="meta-label">ÇALIŞMA MODU</span>
-          <strong><span class="status-led"></span> Yerel işlem</strong>
-          <small>Fotoğrafların sunucuya yüklenmez.</small>
+          <strong><span class="status-led"></span> Yerel algılama</strong>
+          <small>Hedef fotoğraf oturum belleğinde; kayıtlı referanslar veritabanından okunur.</small>
         </div>
       </section>
 
@@ -75,21 +76,19 @@
 
           <section class="panel references-panel" aria-labelledby="referencesTitle">
             <div class="panel-heading">
-              <div class="step-heading"><span class="step-number">02</span><div><h2 id="referencesTitle">Referans kitaplığın</h2><p>Aynı kişiye ait, farklı açılardan ve ifadelerden fotoğraflar ekle.</p></div></div>
+              <div class="step-heading"><span class="step-number">02</span><div><h2 id="referencesTitle">Kayıtlı yüz havuzu</h2><p>Veritabanındaki 20 referans otomatik yüklenir; yeniden fotoğraf eklemen gerekmez.</p></div></div>
               <span id="referenceCount" class="count-pill">0 / 20</span>
             </div>
-            <input id="referenceInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple>
-            <div id="referencesEmpty" class="references-empty">
-              <div class="reference-placeholder" aria-hidden="true"><span>+</span><span>+</span><span>+</span></div>
-              <div><strong>Henüz referans eklemedin</strong><p>20 fotoğrafın tamamı aynı kişiye ait olmalı. AI kimlik modeli bağlandığında referansların tamamı birlikte değerlendirilecek; görseller cihazında kalır.</p></div>
+            <div id="referencesEmpty" class="references-empty" aria-live="polite">
+              <div class="reference-db-mark" aria-hidden="true">DB</div>
+              <div><strong>Veritabanındaki yüzler yükleniyor</strong><p>Kayıtlı referanslar salt okunur biçimde mevcut görsel API'sinden alınır.</p></div>
             </div>
             <div id="referencesGrid" class="references-grid" aria-live="polite"></div>
             <div class="references-footer">
-              <button id="addReferencesButton" class="secondary-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Referans ekle</button>
-              <button id="clearReferencesButton" class="text-button danger-text" type="button" hidden>Tümünü temizle</button>
-              <span class="helper-text">Aynı kişinin en fazla 20 fotoğrafı · Her fotoğrafta tek yüz</span>
+              <button id="reloadReferencesButton" class="secondary-button" type="button">Veritabanından yenile</button>
+              <span class="helper-text">20 kayıtlı yüz · Tek kimlik havuzu</span>
             </div>
-          </section>
+          </section>          </section>
         </div>
 
         <aside class="side-column">
@@ -102,22 +101,22 @@
               <div class="output-orbit orbit-one"></div><div class="output-orbit orbit-two"></div>
               <div class="output-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 8c-9.5 0-17.2 7.7-17.2 17.2S22.5 42.4 32 42.4s17.2-7.7 17.2-17.2S41.5 8 32 8Z"/><path d="M8.5 56c3.8-8.5 12.4-13.6 23.5-13.6S51.7 47.5 55.5 56"/><path d="m43 12 3.5-5M52 23h5"/></svg></div>
               <strong>Sonucun burada görünecek</strong>
-              <p>Yalnızca seçtiğin yüz; aynı kişiye ait 20 referansın tamamından oluşturulacak kimlik profiline göre yeniden oluşturulacak. Gözler ve ifade gerektiğinde doğal biçimde düzeltilecek. Yüz dışındaki pikseller korunacak.</p>
+              <p>Kimlik kaynağı veritabanındaki kayıtlı 20 yüzdür. Hedef fotoğrafın pozu ve sahnesi korunur. Gerçek Face Swap üretim servisi bağlanana kadar bu ekranda yüz değişimi yapılmaz.</p>
               <span class="stage-caption">BEKLEYEN İŞLEM</span>
             </div>
             <div class="engine-status">
               <div class="engine-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></svg></div>
-              <div><strong id="engineTitle">AI yüz değiştirme motoru bekleniyor</strong><p id="engineDescription">Yalnızca yüz bölgesine çalışan kimlik aktarımı, göz/ifade düzeltmesi ve maske ile birleştirme motoru henüz bağlanmadı.</p></div>
+              <div><strong id="engineTitle">AI yüz değiştirme motoru bekleniyor</strong><p id="engineDescription">Yalnızca yüz bölgesine çalışan gerçek kimlik aktarım servisi henüz bağlı değil. MediaPipe tek başına yüz değiştirme yapmaz.</p></div>
             </div>
             <button id="swapButton" class="primary-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>Yüz değiştir<span>Yakında</span></button>
             <button id="downloadButton" class="secondary-button full-width" type="button" disabled>Sonucu indir</button>
-            <p class="disabled-note">Yalnızca seçilen yüzün değişmesi, yüz dışındaki alanların aynı kalması ve gerçek AI modeli doğrulanması tamamlanınca işlem açılacak.</p>
+            <p class="disabled-note">Güvenilir bir Face Swap modeli veya API'si bağlanmadan sahte sonuç üretilmez. Gerçek motor, kayıtlı 20 referansı birlikte kullanmalıdır.</p>
           </section>
 
           <section class="panel privacy-panel" aria-labelledby="privacyTitle">
             <div class="privacy-heading"><span class="privacy-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><h2 id="privacyTitle">Fotoğrafların sende kalır</h2></div>
-            <ul class="privacy-list"><li><span></span>Hedef fotoğrafı yalnızca oturum belleğinde tutulur.</li><li><span></span>Referanslar bu tarayıcının yerel veritabanında saklanır.</li><li><span></span>Görseller bir AI servisine yüklenmez.</li></ul>
-            <p class="privacy-footnote">Kamera kullanılmaz. Yalnızca galeriden seçilen fotoğraflar işlenir. Hedef fotoğraf oturum belleğinde, referanslar yerel veritabanında kalır. MediaPipe kullanım ölçümleri Google'a iletilebilir; görüntü içeriği bu ölçümlere dahil edilmez.</p>
+            <ul class="privacy-list"><li><span></span>Hedef fotoğraf yalnızca oturum belleğinde tutulur.</li><li><span></span>20 referans mevcut görsel API'sinden salt okunur alınır.</li><li><span></span>Face Swap servisi bağlı olmadığı için fotoğraflar AI işlemine gönderilmez.</li></ul>
+            <p class="privacy-footnote">Kamera kullanılmaz. Referanslar veritabanından okunur; yeniden yüklenmez, IndexedDB'ye kopyalanmaz ve Service Worker önbelleğine alınmaz. Hedef fotoğraf oturum belleğinde tutulur.</p>
           </section>
         </aside>
       </div>

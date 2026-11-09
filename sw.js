@@ -1,6 +1,6 @@
-const SHELL_CACHE = "retake-shell-v1";
+const SHELL_CACHE = "retake-shell-v2";
 const AI_CACHE = "retake-ai-assets-v1";
-const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/face-only.js", "./manifest.webmanifest", "./icons/retake.svg"];
+const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./manifest.webmanifest", "./icons/retake.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -35,6 +35,11 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   if (url.origin === self.location.origin) {
+    // Kişisel yüz görselleri Cache Storage'a yazılmasın.
+    if (url.pathname.startsWith("/api/images/")) {
+      event.respondWith(fetch(request));
+      return;
+    }
     if (request.mode === "navigate") {
       event.respondWith(
         fetch(request).then((response) => {

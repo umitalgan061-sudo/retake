@@ -12,8 +12,8 @@ Web ve iOS uygulamalarında kamera açılmaz. `getUserMedia`, WebRTC canlı vide
 2. Dosya türü ve 25 MB üst sınırı doğrulanır. Hedef görsel yalnızca sayfa belleğinde tutulur.
 3. MediaPipe Face Landmarker birden fazla yüzü cihazda algılar.
 4. Kullanıcı yüz kutusuna veya yüz seçim düğmesine basarak hedef yüzü seçer.
-5. Kullanıcı aynı kişiye ait en fazla 20 adet tek yüz içeren kimlik referansı seçer.
-6. Referans görseller IndexedDB içinde yerel tarayıcı depolamasına kaydedilir ve sonraki oturumda geri yüklenir. Şu an tek yüz kontrolü vardır; aynı kimlik doğrulaması henüz eklenmemiştir.
+5. Uygulama önceden kaydedilmiş 20 referansı `GET /api/images/{id}` üzerinden otomatik çeker.
+6. Referanslar salt okunur gösterilir; kullanıcıdan yeniden yükleme istenmez. Fotoğraflar IndexedDB'ye yazılmaz ve Service Worker Cache Storage'a alınmaz.
 
 ## Modüller
 
@@ -34,9 +34,11 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 ## Yerel depolama ve gizlilik
 
 - Hedef fotoğraf IndexedDB'ye yazılmaz; sayfa oturumu sona erdiğinde bellek referansı serbest bırakılır.
-- Referans fotoğrafları IndexedDB'de blob olarak saklanır. Uygulama fotoğraf blob'larını herhangi bir Face Swap servisine veya sunucu API'sine göndermez.
+- Referans fotoğrafları mevcut API üzerinden salt okunur çekilir; uygulama bunları yeniden yüklemez veya IndexedDB'ye yazmaz.
+- API varsayılan olarak aynı origin'de `/api/images/{id}` yolunda bulunmalıdır. Farklı origin kullanılıyorsa `meta[name="retake-api-base"]` ve CSP `connect-src` birlikte yapılandırılmalıdır.
+- Service Worker `/api/images/` yanıtlarını önbelleğe almaz; yüz görselleri Cache Storage'a kaydedilmez.
 - Tarayıcı depolamasının temizlenmesi veya özel gezinme modu referans fotoğraflarını silebilir. Önemli dosyaların ayrıca yedeklenmesi kullanıcı sorumluluğundadır.
-- Service Worker ağ üzerinden yalnızca uygulama kaynakları, sabitlenmiş MediaPipe paket yolu ve resmi model dosyasını önbelleğe alır. Fotoğraf verileri cache'e eklenmez.
+- Service Worker yalnızca uygulama kabuğunu, sabitlenmiş MediaPipe paket yolunu ve resmi landmark modelini önbelleğe alır. `/api/images/` altındaki fotoğraflar cache'e eklenmez.
 
 ## PWA ve çevrimdışı davranış
 

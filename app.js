@@ -1,15 +1,11 @@
 import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
 import {
-  MAX_REFERENCE_FACES,
   formatBytes,
   getLandmarkBounds,
   validateImageFile
 } from "./src/core.js";
+import { REFERENCE_CATALOG, getReferenceImageUrl } from "./src/reference-catalog.js";
 
-const DB_NAME = "retake-local-library";
-const DB_VERSION = 1;
-const STORE_NAME = "references";
-const DETECTOR_VERSION = "mediapipe-face-landmarker-1.2.2";
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 
@@ -25,9 +21,7 @@ const elements = {
   faceSelection: $("#faceSelection"),
   faceCount: $("#faceCount"),
   faceChips: $("#faceChips"),
-  referenceInput: $("#referenceInput"),
-  addReferences: $("#addReferencesButton"),
-  clearReferences: $("#clearReferencesButton"),
+  reloadReferences: $("#reloadReferencesButton"),
   referencesEmpty: $("#referencesEmpty"),
   referencesGrid: $("#referencesGrid"),
   referenceCount: $("#referenceCount"),
@@ -41,11 +35,12 @@ const elements = {
 
 const state = {
   detector: null,
-  database: null,
   target: null,
   references: [],
+  referencesLoading: false,
+  referenceLoadError: null,
+  referenceLoadToken: 0,
   selectedFaceIndex: null,
-  busy: false,
   toastTimer: null,
   installPrompt: null
 };
@@ -59,50 +54,6 @@ function showToast(message) {
 
 function setRuntimeStatus(message) {
   elements.runtimeStatus.textContent = message;
-}
-
-function setBusy(busy) {
-  state.busy = busy;
-  elements.addReferences.disabled = busy || !state.detector || state.references.length >= MAX_REFERENCE_FACES;
-  elements.targetInput.disabled = busy;
-  elements.referenceInput.disabled = busy;
-}
-
-function openDatabase() {
-  return new Promise((resolve, reject) => {
-    if (!("indexedDB" in window)) {
-      reject(new Error("Bu tarayıcı yerel fotoğraf kitaplığını desteklemiyor."));
-      return;
-    }
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const database = request.result;
-      if (!database.objectStoreNames.contains(STORE_NAME)) {
-        const store = database.createObjectStore(STORE_NAME, { keyPath: "id" });
-        store.createIndex("createdAt", "createdAt", { unique: false });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error("Yerel veritabanı açılamadı."));
-    request.onblocked = () => reject(new Error("Yerel veritabanı başka bir sekme tarafından kilitlendi."));
-  });
-}
-
-function databaseRequest(mode, operation) {
-  return new Promise((resolve, reject) => {
-    if (!state.database) {
-      reject(new Error("Yerel fotoğraf kitaplığı kullanılamıyor."));
-      return;
-    }
-    const transaction = state.database.transaction(STORE_NAME, mode);
-    const request = operation(transaction.objectStore(STORE_NAME));
-    let result;
-    request.onsuccess = () => { result = request.result; };
-    request.onerror = () => reject(request.error || new Error("Yerel kayıt işlemi başarısız."));
-    transaction.oncomplete = () => resolve(result);
-    transaction.onerror = () => reject(transaction.error || new Error("Yerel kayıt işlemi başarısız."));
-    transaction.onabort = () => reject(transaction.error || new Error("Yerel kayıt işlemi iptal edildi."));
-  });
 }
 
 function createObjectURL(blob) {
@@ -249,22 +200,39 @@ function clearTargetPhoto() {
 
 function renderReferences() {
   elements.referencesGrid.replaceChildren();
-  elements.referenceCount.textContent = state.references.length + " / " + MAX_REFERENCE_FACES;
-  elements.referencesEmpty.hidden = state.references.length > 0;
-  elements.clearReferences.hidden = state.references.length === 0;
+  const readyCount = state.references.filter((item) => item.status === "ready").length;
+  elements.referenceCount.textContent = readyCount + " / " + REFERENCE_CATALOG.length;
+  elements.referencesEmpty.hidden = readyCount > 0;
+
+  if (readyCount === 0) {
+    const title = elements.referencesEmpty.querySelector("strong");
+    const description = elements.referencesEmpty.querySelector("p");
+    title.textContent = state.referencesLoading
+      ? "Veritabanındaki yüzler yükleniyor"
+      : "Kayıtlı yüz havuzuna ulaşılamadı";
+    description.textContent = state.referencesLoading
+      ? "Kayıtlı 20 referans doğrudan mevcut görsel veritabanından okunuyor. Yeniden fotoğraf eklemen gerekmiyor."
+      : (state.referenceLoadError || "Sunucudaki /api/images/{id} uç noktasını kontrol et ve yeniden dene.");
+  }
 
   state.references.forEach((reference) => {
     const card = document.createElement("article");
     card.className = "reference-card";
 
-    const preview = document.createElement("div");
-    preview.className = "reference-select";
-
-    const image = document.createElement("img");
-    image.src = reference.url;
-    image.alt = "Kimlik referansı: " + reference.name;
-    image.loading = "lazy";
-    image.decoding = "async";
+    if (reference.status === "ready" && reference.url) {
+      const image = document.createElement("img");
+      image.className = "reference-image";
+      image.src = reference.url;
+      image.alt = reference.name;
+      image.loading = "lazy";
+      image.decoding = "async";
+      card.append(image);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "reference-error";
+      placeholder.textContent = reference.status === "loading" ? "Yükleniyor…" : "Görsel alınamadı";
+      card.append(placeholder);
+    }
 
     const name = document.createElement("span");
     name.className = "reference-name";
@@ -272,140 +240,91 @@ function renderReferences() {
 
     const label = document.createElement("span");
     label.className = "reference-state";
-    label.textContent = "KİMLİK HAVUZUNDA";
+    label.textContent = reference.status === "ready"
+      ? "VERİTABANINDA"
+      : (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR");
 
-    preview.append(image, name, label);
-
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "reference-delete";
-    remove.textContent = "Kitaplıktan kaldır";
-    remove.setAttribute("aria-label", reference.name + " referansını sil");
-    remove.addEventListener("click", () => removeReference(reference.id));
-
-    card.append(preview, remove);
+    card.append(name, label);
     elements.referencesGrid.append(card);
   });
 
-  elements.addReferences.disabled =
-    state.busy || !state.detector || state.references.length >= MAX_REFERENCE_FACES || !state.database;
+  elements.reloadReferences.disabled = state.referencesLoading;
+  elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Veritabanından yenile";
 }
 
-async function loadSavedReferences() {
-  if (!state.database) return;
-  const records = await databaseRequest("readonly", (store) => store.getAll());
-  records.sort((a, b) => a.createdAt - b.createdAt);
-  state.references = records.map((record) => ({
-    ...record,
-    url: createObjectURL(record.blob)
-  }));
+async function loadDatabaseReferences({ force = false } = {}) {
+  const token = ++state.referenceLoadToken;
+  state.referencesLoading = true;
+  state.referenceLoadError = null;
+  state.references = REFERENCE_CATALOG.map((reference) => ({ ...reference, status: "loading" }));
   renderReferences();
-}
 
-function yieldToBrowser() {
-  return new Promise((resolve) => requestAnimationFrame(() => resolve()));
-}
+  const configuredBase = document.querySelector('meta[name="retake-api-base"]')?.content?.trim() || "";
+  const apiBase = configuredBase || window.location.origin;
 
-async function importReferencePhotos(files) {
-  if (state.busy) return;
-  if (!state.detector) {
-    showToast("Referansları doğrulamak için önce yüz algılama motorunun yüklenmesini bekleyin.");
-    return;
-  }
-  const selectedFiles = Array.from(files || []);
-  if (selectedFiles.length === 0) return;
+  const results = await Promise.allSettled(REFERENCE_CATALOG.map(async (reference) => {
+    const endpoint = getReferenceImageUrl(reference.id, apiBase, window.location.origin);
+    const response = await fetch(endpoint, {
+      method: "GET",
+      credentials: new URL(endpoint).origin === window.location.origin ? "same-origin" : "omit",
+      cache: force ? "reload" : "no-store",
+      headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" }
+    });
 
-  const remaining = MAX_REFERENCE_FACES - state.references.length;
-  if (remaining <= 0) {
-    showToast("20 referans fotoğrafı sınırına ulaştın.");
-    return;
-  }
-
-  setBusy(true);
-  let added = 0;
-  let skipped = 0;
-  const queue = selectedFiles.slice(0, remaining);
-
-  try {
-    for (let index = 0; index < queue.length; index += 1) {
-      const file = queue[index];
-      const validation = validateImageFile(file);
-      if (!validation.valid) {
-        skipped += 1;
-        continue;
-      }
-
-      let loaded;
-      try {
-        loaded = await loadImage(file);
-        const faces = detectFaces(loaded.image);
-        if (faces.length !== 1) {
-          skipped += 1;
-          URL.revokeObjectURL(loaded.url);
-          loaded = null;
-          continue;
-        }
-
-        const record = {
-          id: crypto.randomUUID(),
-          name: file.name || ("Referans " + (state.references.length + 1)),
-          blob: file,
-          mimeType: file.type,
-          size: file.size,
-          createdAt: Date.now() + index,
-          detectorVersion: DETECTOR_VERSION
-        };
-        await databaseRequest("readwrite", (store) => store.put(record));
-        state.references.push({ ...record, url: loaded.url });
-        loaded = null;
-        added += 1;
-      } catch (error) {
-        skipped += 1;
-        if (loaded?.url) URL.revokeObjectURL(loaded.url);
-        console.warn("Referans içe aktarılamadı:", error);
-      }
-
-      renderReferences();
-      setRuntimeStatus("Referanslar denetleniyor: " + (index + 1) + " / " + queue.length);
-      await yieldToBrowser();
+    if (!response.ok) {
+      throw new Error("API " + response.status + " yanıtı verdi.");
     }
 
-    renderReferences();
-    showToast(added + " referans eklendi · " + skipped + " dosya atlandı.");
-  } finally {
-    setBusy(false);
-    renderReferences();
-    setRuntimeStatus(state.detector ? "Yüz algılama hazır · Fotoğraflar cihazda işleniyor" : "Yüz algılama kullanılamıyor");
-    elements.referenceInput.value = "";
-  }
-}
+    const blob = await response.blob();
+    if (!blob.size) throw new Error("Veritabanı boş görsel döndürdü.");
 
-async function removeReference(id) {
-  const reference = state.references.find((item) => item.id === id);
-  if (!reference || !window.confirm('"' + reference.name + '" referansını kitaplıktan kaldırmak istiyor musun?')) return;
-  try {
-    await databaseRequest("readwrite", (store) => store.delete(id));
-    URL.revokeObjectURL(reference.url);
-    state.references = state.references.filter((item) => item.id !== id);
-    renderReferences();
-    showToast("Referans kitaplıktan kaldırıldı.");
-  } catch (error) {
-    showToast(error.message || "Referans silinemedi.");
-  }
-}
+    const loaded = await loadImage(blob);
+    return {
+      ...reference,
+      status: "ready",
+      url: loaded.url,
+      image: loaded.image,
+      mimeType: response.headers.get("content-type") || blob.type,
+      size: blob.size
+    };
+  }));
 
-async function clearReferences() {
-  if (state.references.length === 0) return;
-  if (!window.confirm("Kitaplıktaki " + state.references.length + " referans fotoğrafının tamamı silinsin mi?")) return;
-  try {
-    await databaseRequest("readwrite", (store) => store.clear());
-    state.references.forEach((item) => URL.revokeObjectURL(item.url));
-    state.references = [];
-    renderReferences();
-    showToast("Referans kitaplığı temizlendi.");
-  } catch (error) {
-    showToast(error.message || "Kitaplık temizlenemedi.");
+  if (token !== state.referenceLoadToken) {
+    results.forEach((result) => {
+      if (result.status === "fulfilled") URL.revokeObjectURL(result.value.url);
+    });
+    return 0;
   }
+
+  state.references.forEach((reference) => {
+    if (reference.url) URL.revokeObjectURL(reference.url);
+  });
+
+  state.references = results.map((result, index) => result.status === "fulfilled"
+    ? result.value
+    : ({
+        ...REFERENCE_CATALOG[index],
+        status: "error",
+        error: result.reason?.message || "Bilinmeyen API hatası"
+      }));
+
+  const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
+  const failedCount = REFERENCE_CATALOG.length - loadedCount;
+  state.referencesLoading = false;
+  state.referenceLoadError = failedCount
+    ? (loadedCount
+        ? loadedCount + " referans yüklendi; " + failedCount + " kayıt alınamadı."
+        : "Kayıtlı yüzler API'den alınamadı. " +
+          (state.references.find((item) => item.status === "error")?.error || ""))
+    : null;
+
+  renderReferences();
+  if (failedCount) {
+    showToast(loadedCount + " / " + REFERENCE_CATALOG.length + " kayıtlı referans yüklendi.");
+  } else {
+    showToast("20 kayıtlı referans başarıyla yüklendi.");
+  }
+  return loadedCount;
 }
 
 async function initializeDetector() {
@@ -432,7 +351,7 @@ async function initializeDetector() {
     }
 
     elements.engineDescription.textContent =
-      "Yüz algılama cihaz üzerinde hazır. Gerçek kimlik korumalı Face Swap modeli henüz entegre edilmedi.";
+      "Yüz algılama cihaz üzerinde hazır. Kayıtlı referanslar veritabanından okunuyor; gerçek Face Swap motoru henüz bağlı değil.";
     if (state.target) {
       state.target.faces = detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
@@ -449,7 +368,7 @@ async function initializeDetector() {
     console.error("MediaPipe başlatılamadı:", error);
     elements.engineTitle.textContent = "Yüz algılama motoru yüklenemedi";
     elements.engineDescription.textContent =
-      "İlk kullanımda internet bağlantısını kontrol et ve sayfayı yenile. Fotoğraflar bu durumda da sunucuya gönderilmez.";
+      "Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol edip sayfayı yenile.";
     setRuntimeStatus("Yüz algılama başlatılamadı");
     showToast("Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol et.");
   }
@@ -534,9 +453,7 @@ function initializeInteractions() {
   });
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
-  elements.referenceInput.addEventListener("change", (event) => importReferencePhotos(event.target.files));
-  elements.addReferences.addEventListener("click", () => elements.referenceInput.click());
-  elements.clearReferences.addEventListener("click", clearReferences);
+  elements.reloadReferences.addEventListener("click", () => loadDatabaseReferences({ force: true }));
   elements.themeButton.addEventListener("click", toggleTheme);
 
   window.addEventListener("beforeinstallprompt", (event) => {
@@ -555,9 +472,10 @@ function initializeInteractions() {
   window.addEventListener("pagehide", (event) => {
     if (event.persisted) return;
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
-    state.references.forEach((item) => URL.revokeObjectURL(item.url));
+    state.references.forEach((item) => {
+      if (item.url) URL.revokeObjectURL(item.url);
+    });
     state.detector?.close();
-    state.database?.close();
   });
 }
 
@@ -565,22 +483,16 @@ async function initializeApp() {
   initializeTheme();
   initializeInteractions();
 
-  try {
-    state.database = await openDatabase();
-    await loadSavedReferences();
-    try {
-      await navigator.storage?.persist?.();
-    } catch {
-      // Persistent storage is a best-effort browser capability.
-    }
-  } catch (error) {
-    console.warn("Yerel veritabanı kullanılamıyor:", error);
-    elements.referencesEmpty.querySelector("p").textContent =
-      "Bu tarayıcı yerel depolamayı desteklemiyor. Referans kitaplığı kullanılamıyor.";
-    elements.addReferences.disabled = true;
-  }
+  await Promise.allSettled([
+    loadDatabaseReferences(),
+    initializeDetector()
+  ]);
 
-  await initializeDetector();
+  const loaded = state.references.filter((reference) => reference.status === "ready").length;
+  setRuntimeStatus(
+    (state.detector ? "Yüz algılama hazır" : "Yüz algılama kullanılamıyor") +
+    " · Veritabanı: " + loaded + " / " + REFERENCE_CATALOG.length + " referans"
+  );
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
     navigator.serviceWorker.register("./sw.js").catch((error) => {

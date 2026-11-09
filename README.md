@@ -20,12 +20,12 @@ Statik web uygulaması: \`index.html\`
 - Telefon, tablet ve masaüstüne uyumlu arayüz.
 - Fotoğraf seçme ve sürükle-bırak desteği.
 - MediaPipe Face Landmarker 1.2.2 ile cihazda çoklu yüz algılama ve hedef seçimi.
-- 20 adede kadar tek-yüz referans fotoğrafı doğrulama.
-- Referans görsellerini IndexedDB içinde yerel saklama; hedef görseli sadece oturum belleğinde tutma.
+- Veritabanında önceden kayıtlı 20 referansı `GET /api/images/{id}` üzerinden otomatik ve salt okunur yükleme.
+- Referans fotoğrafları yeniden yükletilmez, IndexedDB'ye kopyalanmaz; hedef görsel yalnızca oturum belleğinde tutulur.
 - Koyu/açık tema ve kurulabilir Progressive Web App (PWA).
 - Uygulama kabuğu, MediaPipe WebAssembly dosyaları ve yüz modeli için servis çalışanı önbelleği. İlk açılışta internet gerekir; önbellek oluştuğunda desteklenen tarayıcılarda çevrimdışı açılış mümkündür.
 
-Fotoğraflar bir Face Swap API'sine yüklenmez. MediaPipe görüntü algılamayı cihazda çalıştırır; kütüphanenin kullanım ölçümleri Google'a gönderilebilir. Google'ın gizlilik notu: https://goo.gle/mediapipe-privacy
+Hedef fotoğraf ve referans görselleri bir Face Swap servisine gönderilmez. Referanslar mevcut görsel API'sinden okunur. `index.html` içindeki `meta[name="retake-api-base"]` boş bırakılırsa API aynı origin üzerinde `/api/images/{id}` yolundan çağrılır. API farklı domaindeyse bu meta alanına API origin'i yazılmalı ve Content-Security-Policy içindeki `connect-src` buna göre genişletilmelidir. MediaPipe yüz algılamayı cihazda çalıştırır; kütüphane ölçümleri Google'a gönderilebilir: https://goo.gle/mediapipe-privacy
 
 ### Web'i çalıştırma
 

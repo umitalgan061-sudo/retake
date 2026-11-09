@@ -8,6 +8,7 @@ struct ContentView: View {
     @State private var targetPickerItem: PhotosPickerItem?
     @State private var referencePickerItems: [PhotosPickerItem] = []
     @State private var isImportingModel = false
+    @State private var modelManifestURL = ""
 
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: 12)]
 
@@ -129,6 +130,31 @@ struct ContentView: View {
                 .accessibilityLabel("Modeli yeniden denetle")
             }
             Text("Dosyalar uygulamasından derlenmiş RetakeFaceSwap.mlmodelc klasörünü seçin.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            Divider().overlay(Color.white.opacity(0.1))
+
+            TextField("HTTPS model manifest URL'si", text: $modelManifestURL)
+                .textFieldStyle(.roundedBorder)
+                .keyboardType(.URL)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            Button {
+                Task { await viewModel.installModelManifest(from: modelManifestURL) }
+            } label: {
+                Label("Manifestten modeli indir ve kur", systemImage: "arrow.down.circle")
+                    .font(.caption.weight(.semibold))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(
+                viewModel.isBusy ||
+                modelManifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            )
+
+            Text("Yalnızca izin verilen HTTPS kaynaklarından gelen, lisans incelemesi onaylı ve SHA-256 bilgisi bulunan manifestler kabul edilir. Henüz hazır bir model kataloğu URL'si tanımlı değildir.")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }

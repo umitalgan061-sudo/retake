@@ -14,7 +14,7 @@ Hedef: iPhone 17 Pro Max, iOS 17 veya üzeri.
 - Her referans görüntüsünde tek yüz kontrolü
 - Kaynak referans seçimi ve yerel silme
 - Yerel Core ML model paketi içe aktarma ve girdi/çıktı metadata inceleme
-- Tek dosyalı `.mlmodel` paketlerini HTTPS üzerinden indirme, boyut ve SHA-256 doğrulaması, Core ML derlemesi ve yerel kurulum
+- Tek dosyalı `.mlmodel` paketlerini ekrandaki HTTPS manifest URL alanından indirme, boyut ve SHA-256 doğrulaması, Core ML derlemesi ve yerel kurulum
 - Servis sağlayıcı anahtarlarını cihazın Keychain alanında saklayan altyapı
 
 ## Ağ kullanımı ve model kurulumu
@@ -23,7 +23,7 @@ Hedef: iPhone 17 Pro Max, iOS 17 veya üzeri.
 
 Manifest şu alanları taşımalıdır: `modelID`, `version`, `artifactURL`, `byteCount`, `sha256`, `codeLicense`, `weightsLicense`, `licenseEvidenceURL` ve `licenseReviewStatus`. `modelID` değeri `RetakeFaceSwap`, artifact uzantısı `.mlmodel`, lisans inceleme durumu ise `approved` olmalıdır. Model dosyası için yalnızca izin verilen GitHub/Hugging Face HTTPS hostları kabul edilir.
 
-İndirici dosyanın tam boyutunu ve SHA-256 değerini kontrol eder, sonra Core ML ile derler, modelin giriş/çıkış tanımlarını yükleyerek kontrol eder ve ancak bundan sonra yerel modele geçirir. Geçersiz dosya mevcut modeli değiştirmez.
+Model kartındaki HTTPS manifest URL alanına adres girilerek indirme başlatılır. İndirici dosyanın tam boyutunu ve SHA-256 değerini kontrol eder, sonra Core ML ile derler, modelin giriş/çıkış tanımlarını yükleyerek kontrol eder ve ancak bundan sonra yerel modele geçirir. Geçersiz dosya mevcut modeli değiştirmez. Şu anda kullanıma hazır bir manifest URL'si yayımlanmış değildir.
 
 **Güven sınırı:** SHA-256, manifestte verilen dosyanın bütünlüğünü kontrol eder; manifesti yayınlayan tarafın kimliğini tek başına kanıtlamaz. Üretim dağıtımı öncesinde model yayıncısının imzalı manifesti ve açık anahtar sabitlemesi ayrıca tanımlanmalıdır. Şu an doğrulanmış model yayıncısı veya gerçek Face Swap manifest URL'si bulunmadığından otomatik indirme etkinleştirilmedi.
 

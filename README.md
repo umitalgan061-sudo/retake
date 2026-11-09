@@ -1,8 +1,17 @@
 # Retake
 
-Kişisel kullanım için geliştirilen Face Swap projesi. Nihai hedef, iPhone 17 Pro Max üzerinde tamamen çevrimdışı çalışan yerel bir iOS uygulamasıdır.
+Kişisel kullanım için geliştirilen Face Swap projesi. Hedef cihaz iPhone 17 Pro Max.
 
 > **Durum:** Native iOS temel uygulaması eklendi. Gerçek Face Swap inference modeli henüz entegre edilmedi.
+
+## İnternet ve veri politikası
+
+İnternet kullanımı serbesttir. Ağ bağlantısı şunlar için kullanılabilir:
+- Doğrulanmış model paketlerini indirme ve güncelleme
+- Uygulama güncellemelerini kontrol etme
+- İsteğe bağlı, ayrıca açıkça etkinleştirilen uzak inference sağlayıcıları
+
+Varsayılan fotoğraf işleme yolu cihaz üzerinde olmalıdır. Bir fotoğraf uzak bir AI servisine gönderilecekse uygulama bunu açıkça belirtmeli ve ilk gönderimden önce kullanıcı onayı almalıdır. API anahtarları kaynak koda veya GitHub'a yazılmamalı; iOS Keychain'de saklanmalıdır.
 
 ## Native iOS uygulaması
 
@@ -23,10 +32,20 @@ Mevcut temel özellikler:
 - Gerçek, lisansı uygun Face Swap model ağırlıkları
 - Modelin kesin girdi/çıktı sözleşmesine göre inference adapter'ı
 - Yüz değiştirme çıktısının hedef fotoğrafa maskeli birleştirilmesi
-- iPhone 17 Pro Max üzerinde gerçek cihaz ve uçak modu testleri
-- Düzenlenmiş sonucun Fotoğraflar arşivine kaydedilmesi
+- Doğrulanmış model paketi indirme/güncelleme akışı
+- İsteğe bağlı bulut sağlayıcısı için gerçek Face Swap endpoint'i ve açık rıza akışı
+- iPhone 17 Pro Max üzerinde gerçek cihaz testi ve sonuç fotoğrafını galeriye kaydetme
 
 Model dosyası yokken uygulama yüz değiştirme yapıyormuş gibi davranmaz; işlem düğmesi devre dışıdır.
+
+## NVIDIA değerlendirmesi
+
+NVIDIA NIM kataloğundaki Qwen-Image-Edit genel amaçlı görüntü düzenleme modelidir; özel bir kimlik korumalı Face Swap modeli olarak belgelenmemiştir. Model sayfasında indirilebilir olarak listelenir. NIM belgeleri kendi GPU donanımında container çalıştırma akışını gösterir. Bu nedenle yalnızca bir NVIDIA API anahtarının bu iOS uygulamasına hazır bir Face Swap servisi sunduğu varsayılmayacaktır.
+
+Kaynaklar:
+- https://build.nvidia.com/qwen/qwen-image-edit
+- https://docs.nvidia.com/nim/visual-genai/latest/overview.html
+- https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html
 
 ## Eski web prototipi
 
@@ -38,7 +57,7 @@ Model dosyası yokken uygulama yüz değiştirme yapıyormuş gibi davranmaz; i�
 python3 tools/validate_assets.py
 ```
 
-Teknik mimari, model lisansları ve eksik adımlar için [iOS çevrimdışı AI geçiş planına](docs/IOS_OFFLINE_AI_STATUS.md) bakın.
+Teknik mimari, model lisansları ve eksik adımlar için [iOS geçiş planına](docs/IOS_OFFLINE_AI_STATUS.md) bakın.
 
 ## Gizlilik
 

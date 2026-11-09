@@ -25,7 +25,6 @@
       "tests/**",
       "tools/**",
       "models/**",
-      "reference-faces/**",
       "README.md",
       "HAFIZE.md",
       "package.json",

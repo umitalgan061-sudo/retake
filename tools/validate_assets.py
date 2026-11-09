@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,7 +82,7 @@ def check_model(relative_path: str, model_type: str) -> tuple[bool, str]:
         return False, "gerçek model ağırlığı yerine API/asset referans metni"
     if len(data) < MIN_MODEL_BYTES:
         return False, f"şüpheli derecede küçük: {len(data):,} bayt (en az {MIN_MODEL_BYTES:,} bekleniyor)"
-    if data and all(byte in b"\\t\\n\\r" or 32 <= byte <= 126 for byte in data[: min(len(data), 4096)]):
+    if data and all(byte in b"\t\n\r" or 32 <= byte <= 126 for byte in data[: min(len(data), 4096)]):
         return False, "metin dosyasına benziyor; ikili model ağırlığı değil"
     return True, f"{model_type} ikili dosyası için temel kontrol geçti ({len(data):,} bayt)"
 

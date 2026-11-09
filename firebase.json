@@ -30,7 +30,9 @@
       "HAFIZE.md",
       "package.json",
       "package-lock.json",
-      "*.md"
+      "*.md",
+      "worker/**",
+      "wrangler.toml"
     ],
     "headers": [
       {

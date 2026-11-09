@@ -105,3 +105,40 @@ export function createNvidiaEditPrompt() {
     "Return the same two-panel image with the original aspect ratio. This is a local portrait edit, not a full-scene regeneration."
   ].join(" ");
 }
+
+
+const MAX_NVIDIA_OUTPUT_BYTES = 14 * 1024 * 1024;
+
+/**
+ * Normalize the NVIDIA API Catalog response in the browser.
+ * The Worker streams the upstream JSON untouched to stay within the
+ * Cloudflare Free CPU budget.
+ */
+export function imageDataUrlFromNvidiaResponse(payload) {
+  const candidates = [
+    payload?.artifacts?.[0]?.base64,
+    payload?.artifacts?.[0]?.image,
+    payload?.images?.[0]?.b64_json,
+    payload?.data?.[0]?.b64_json,
+    payload?.image_base64,
+    payload?.image
+  ];
+
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string" || !candidate.length) continue;
+    if (/^data:image\/(png|jpeg|webp);base64,/i.test(candidate)) {
+      const encoded = candidate.slice(candidate.indexOf(",") + 1);
+      if (Math.floor(encoded.length * 0.75) > MAX_NVIDIA_OUTPUT_BYTES) {
+        throw new RangeError("NVIDIA çıktısı 14 MB sınırını aşıyor.");
+      }
+      return candidate;
+    }
+    if (/^[A-Za-z0-9+/]+={0,2}$/.test(candidate)) {
+      if (Math.floor(candidate.length * 0.75) > MAX_NVIDIA_OUTPUT_BYTES) {
+        throw new RangeError("NVIDIA çıktısı 14 MB sınırını aşıyor.");
+      }
+      return "data:image/png;base64," + candidate;
+    }
+  }
+  throw new Error("NVIDIA yanıtında desteklenen base64 görsel çıktısı bulunamadı.");
+}

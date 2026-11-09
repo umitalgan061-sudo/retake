@@ -1,0 +1,7 @@
+name = "retake-nvidia-edit"
+main = "worker/index.js"
+compatibility_date = "2026-11-09"
+workers_dev = true
+
+[vars]
+RETAKE_ALLOWED_ORIGINS = "https://retake06.web.app,https://retake06.firebaseapp.com"

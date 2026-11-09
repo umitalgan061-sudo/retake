@@ -11,7 +11,8 @@ import {
   NVIDIA_TARGET_PANEL_WIDTH,
   getFaceCropRect,
   createFaceAlphaMask,
-  createNvidiaEditPrompt
+  createNvidiaEditPrompt,
+  imageDataUrlFromNvidiaResponse
 } from "./src/nvidia-pipeline.js";
 import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 
@@ -82,7 +83,13 @@ function setRuntimeStatus(message) {
 
 function nvidiaApiBase() {
   const configured = document.querySelector('meta[name="retake-ai-base"]')?.content?.trim();
-  return (configured || (window.location.origin + "/api/retake")).replace(/\/+$/, "");
+  if (!configured) return "";
+  try {
+    const parsed = new URL(configured);
+    return parsed.protocol === "https:" ? parsed.origin.replace(/\/+$/, "") : "";
+  } catch {
+    return "";
+  }
 }
 
 function updateSwapAvailability() {
@@ -95,43 +102,51 @@ function updateSwapAvailability() {
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector("span");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Sunucu kurulmalı"));
+    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Giriş gerekli"));
 }
 
 async function checkNvidiaStatus() {
-  try {
-    const response = await fetch(nvidiaApiBase() + "/status", {
-      method: "GET",
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    });
-    const payload = await response.json().catch(() => ({}));
-    state.nvidiaStatus = {
-      checked: true,
-      configured: Boolean(response.ok && payload.configured),
-      message: payload.message || (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
-    };
-  } catch (error) {
+  const base = nvidiaApiBase();
+  if (!base) {
     state.nvidiaStatus = {
       checked: true,
       configured: false,
-      message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+      message: "Cloudflare Worker adresi henüz uygulamaya bağlanmadı."
     };
+  } else {
+    try {
+      const response = await fetch(base + "/status", {
+        method: "GET",
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      const payload = await response.json().catch(() => ({}));
+      state.nvidiaStatus = {
+        checked: true,
+        configured: Boolean(response.ok && payload.configured),
+        message: payload.error || payload.message ||
+          (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
+      };
+    } catch (error) {
+      state.nvidiaStatus = {
+        checked: true,
+        configured: false,
+        message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+      };
+    }
   }
 
   if (state.nvidiaStatus.configured) {
     elements.engineTitle.textContent = "NVIDIA FLUX bağlantısı hazır";
     elements.engineDescription.textContent =
-      "Deneysel görüntü düzenleme motoru hazır. Hedef yüz crop'u ve 20 kimlik referansı yalnızca onayından sonra NVIDIA'ya gönderilir.";
+      "Sunucu bağlantısı hazır. Seçili yüz crop'u ve 20 referans, yalnızca açık onayından sonra NVIDIA'ya gönderilir.";
   } else {
-    elements.engineTitle.textContent = "NVIDIA sunucu anahtarı bekleniyor";
-    elements.engineDescription.textContent =
-      state.nvidiaStatus.message ||
-      "NVIDIA API anahtarı Firebase Functions Secret olarak eklenmeli. Anahtar tarayıcıya veya GitHub'a konmamalı.";
+    elements.engineTitle.textContent = "NVIDIA bağlantısı bekleniyor";
+    elements.engineDescription.textContent = state.nvidiaStatus.message ||
+      "NVIDIA API anahtarı Cloudflare Worker üzerinde sunucu tarafında saklanır.";
   }
   updateSwapAvailability();
 }
-
 function createObjectURL(blob) {
   return URL.createObjectURL(blob);
 }
@@ -430,15 +445,6 @@ async function canvasToBlob(canvas) {
   });
 }
 
-async function blobToDataURL(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(new Error("Görsel verisi okunamadı."));
-    reader.readAsDataURL(blob);
-  });
-}
-
 function drawContainedImage(context, image, x, y, width, height) {
   const sourceWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
@@ -616,24 +622,28 @@ async function runNvidiaFaceEdit() {
     if (boardBlob.size > 10 * 1024 * 1024) {
       throw new Error("Referans panosu 10 MB sınırını aşıyor.");
     }
-    const imageDataUrl = await blobToDataURL(boardBlob);
     setRuntimeStatus("NVIDIA FLUX · görsel gönderiliyor…");
 
     const response = await fetch(nvidiaApiBase() + "/edit", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ imageDataUrl, consent: true })
+      headers: {
+        "Content-Type": "image/png",
+        Accept: "application/json",
+        "X-Retake-Consent": "true"
+      },
+      body: boardBlob
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       const detail = payload.error || ("NVIDIA API " + response.status + " yanıtı verdi.");
       throw new Error(detail);
     }
-    if (typeof payload.imageDataUrl !== "string" || !payload.imageDataUrl.startsWith("data:image/")) {
+    const imageDataUrl = payload.imageDataUrl || imageDataUrlFromNvidiaResponse(payload);
+    if (typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
       throw new Error("NVIDIA geçerli bir görsel çıktısı döndürmedi.");
     }
 
-    const generated = await loadImage(await (await fetch(payload.imageDataUrl)).blob());
+    const generated = await loadImage(await (await fetch(imageDataUrl)).blob());
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
     const resultUrl = createObjectURL(resultBlob);

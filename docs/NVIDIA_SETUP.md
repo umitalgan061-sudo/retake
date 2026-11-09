@@ -1,89 +1,68 @@
-# NVIDIA FLUX entegrasyonu
+# Retake — Cloudflare Worker ve yerel NVIDIA anahtarı
 
-## Ne kullanılıyor?
+Firebase Hosting, mevcut `hafize-23465` projesinde Spark planında kalır. NVIDIA API trafiği Cloudflare Workers Free üzerinden gider; Firebase Functions kullanılmaz.
 
-Bu entegrasyon başka bir AI sağlayıcısı kullanmaz. NVIDIA NVCF Asset API ile görsel yüklenir ve NVIDIA'nın FLUX.1-Kontext-dev görsel düzenleme uç noktasına gönderilir.
+## İstenen kullanım: parola yok, API anahtarı dosyada
 
-Model özel bir Face Swap motoru değildir. Çıktı deneysel kabul edilir; kimlik benzerliği garanti edilmez. FLUX.1-Kontext-dev NVIDIA model kartında indirilebilir ve ticari olmayan kullanım için listelenir. Kişisel deneme dışında kullanım için model sahibinin koşulları ayrıca incelenmelidir.
+- Retake uygulamasında kullanıcı girişi veya ek parola yok.
+- NVIDIA anahtarını depo kökündeki yerel `.dev.vars` dosyasına bir kez yaz.
+- `.dev.vars` Git tarafından yok sayılır; GitHub'a commit edilmez.
+- `npm run deploy:worker` komutu dosyadaki anahtarı alır, Worker kodunu dağıtır ve anahtarı Cloudflare Secret olarak aktarır. Anahtar Worker koduna veya tarayıcıya konmaz.
+- `.dev.vars` yerel/özel kaynak dosyadır. Canlı Worker anahtarı Cloudflare'ın şifrelenmiş Secret alanından okur; deploy betiği dosyadaki değeri otomatik olarak Secret'a aktarır.
 
-## Veri akışı
+## Kurulum
 
-1. Site, kullanıcının seçtiği hedef fotoğrafta yüz tespiti yapar.
-2. Veritabanından gelen 20 kayıtlı fotoğrafı alır.
-3. Seçili hedef yüzün crop'unu ve 20 referansı tek bir 1568×1024 PNG panoda birleştirir.
-4. Açık onaydan sonra bu pano Firebase Function üzerinden NVIDIA'ya gönderilir. Hedef fotoğrafın tam hâli gönderilmez.
-5. NVIDIA sonucu döndürür.
-6. Tarayıcı, oluşturulan yüzü yaklaşık oval bir yüz maskesinin içinde orijinal fotoğrafa birleştirir.
-7. Maske dışındaki pikseller test edilir. Herhangi bir dış piksel değişimi görülürse sonuç reddedilir.
-8. NVIDIA geçici asset kimliği işlemden sonra silinmeye çalışılır.
-
-Maskenin şekli yüz landmark sınırından hesaplanan yaklaşık bir elipstir; semantik saç/örtü segmentasyonu değildir. Sonucu indirmeden önce kontrol et.
-
-## NVIDIA API anahtarını güvenli ekleme
-
-Anahtarı bana gönderme, HTML/JavaScript'e yazma ve GitHub'a commit etme.
-
-Firebase CLI ile:
-
+### 1) Cloudflare girişi
 ```bash
-firebase login
-firebase use hafize-23465
-firebase functions:secrets:set NVIDIA_API_KEY
+npx --yes wrangler@latest login
 ```
+Tarayıcıda Cloudflare hesabına izin ver.
 
-Komut sorunca NVIDIA API anahtarını terminale yapıştır.
-
-İzin verilen web origin adreslerini Functions ortamına eklemek için `functions/.env` dosyası oluştur:
-
-```dotenv
-RETAKE_ALLOWED_ORIGINS=https://retake06.web.app,https://retake06.firebaseapp.com
+### 2) NVIDIA anahtarı dosyası
+Depo kökünde:
+```bash
+cp .dev.vars.example .dev.vars
 ```
+VS Code Explorer'dan `.dev.vars` dosyasını aç. `NVIDIA_API_KEY=nvapi-YOUR_KEY_HERE` satırındaki yer tutucuyu kendi NVIDIA API anahtarınla değiştir. Dosyayı kaydet. Anahtarı terminale veya sohbete yapıştırma.
 
-Site başka bir adreste çalışıyorsa o adresi ekle. Bu dosya Git tarafından yok sayılır; commit etme.
+> Dosya `.gitignore` içindedir. `git status` çıktısında görünmemelidir. `.dev.vars` dosyasını hiçbir şekilde GitHub'a gönderme.
 
-Functions dağıtımı:
-
-```powershell
-firebase deploy --only functions:retakeNvidiaEdit --project hafize-23465
-firebase deploy --only hosting:retake06 --project hafize-23465
+### 3) Worker kodu ve anahtarı tek komutla dağıt
+```bash
+npm run deploy:worker
 ```
+Bu komut sırasıyla Worker kodunu dağıtır ve `.dev.vars` içindeki NVIDIA anahtarını Wrangler stdin üzerinden `NVIDIA_API_KEY` Worker Secret olarak kaydeder. Hassas anahtarı terminal çıktısına yazdırmaz. `wrangler secret put` gizli değerin stdin'den aktarılmasını destekler.
 
-Dağıtım sonunda Function URL'si şu şekildedir:
+İlk seferde Wrangler'ın npm paketi için onay sorması hâlinde `y` yazabilirsin. Daha sonra `workers.dev` adresi terminalde görünür.
 
-```text
-https://europe-west1-hafize-23465.cloudfunctions.net/retakeNvidiaEdit
+### 4) Site bağlantısı
+Dağıtım sonunda oluşan tam `https://retake-nvidia-edit.<hesap-adin>.workers.dev` adresini al. Bu adres gizli değildir. `index.html` içindeki `retake-ai-base` değerine bu adres bağlanacak. Ardından yalnızca Retake Hosting'i dağıt:
+```bash
+npx --yes firebase-tools@latest deploy --only hosting:retake06 --project hafize-23465
 ```
+Diğer yedi Firebase Hosting sitesi hedeflenmez. Firebase Spark planında kalır; Firebase Functions dağıtılmaz.
 
-Bu Function URL'si Retake deposundaki `index.html` dosyasına önceden yazılmıştır. Function başarıyla dağıtıldıktan sonra yalnızca retake06 Hosting hedefini yayımla:
+## Erişim ve güvenlik uyarısı
 
-```html
-<meta name="retake-ai-base" content="https://europe-west1-hafize-23465.cloudfunctions.net/retakeNvidiaEdit">
-```
+Kullanıcı parolası kaldırılmıştır. Worker, tarayıcı CORS için yalnızca `retake06.web.app` ve `retake06.firebaseapp.com` origin'lerine izin verir ve yardımcı olarak IP başına 15 dakikada 5 düzenleme sınırı uygular.
 
-Functions doğrudan URL'si kullanılınca `RETAKE_ALLOWED_ORIGINS` içine sitenin tam origin'i eklenmelidir.
+**CORS bir kimlik doğrulama yöntemi değildir.** Herhangi biri Workers URL'sini öğrenip doğrudan HTTP istemcisiyle çağrı yapabilir veya Origin başlığını taklit edebilir. Kullanıcı parolası istemediğin için Worker endpoint'i fiilen herkese açık bir API haline gelir. Bellek içi hız sınırı dağıtık veya güçlü bir kötüye kullanım önlemi değildir. NVIDIA ücretsiz kotan kötüye kullanılabilir veya tükenebilir. Parolasız kullanımın kaçınılmaz riski budur.
 
-## Gerekli NVIDIA yetkisi
+NVIDIA API anahtarı yine de tarayıcıda, HTML/JS'de veya GitHub'da yer almaz; yalnızca Cloudflare Secret'ta saklanır. NVIDIA'ya görsel gönderilmeden önce uygulama açık onay ister. Worker hedef crop + referans panosunu kabul eder, maksimum 10 MB, ve NVIDIA geçici asset'ini işlem sonunda silmeyi dener.
 
-NVCF varlık oluşturma çağrısı API anahtarında `invoke_function` scope ister. Anahtar 403 döndürürse NVIDIA hesabında bu yetkinin ve görsel endpoint erişiminin açık olması gerekir.
+## Ücretsiz kullanım notları
 
-FLUX.1-Kontext-dev model kartında Downloadable olarak listelendiği için tüm NVIDIA API anahtarlarının bu barındırılan image endpoint'ine erişeceği garanti değildir. 403/404/422 yanıtlarında uygulama işlemi tamamlanmış gibi göstermez; endpoint bu anahtarla kullanılamıyorsa NVIDIA GPU üzerinde kendi NIM dağıtımı gerekir. Bu da yalnızca API anahtarından ibaret değildir.
+Cloudflare Workers Free planında günlük ve CPU limitleri vardır. NVIDIA API Catalog'da ücretsiz hosted erişim model bazında değişir. FLUX.1-Kontext-dev katalogda `Downloadable` olarak listelendiğinden, NVIDIA API key bu hosted endpoint'e erişim garantisi vermez. İlk gerçek düzenleme çağrısı ile 403/404/422 yanıtlarını kontrol et.
 
-## Faturalandırma ve güvenlik
+## 20 kayıtlı yüz referansı
 
-- Firebase Cloud Functions dağıtımı için Firebase projesinin Blaze planında olması gerekebilir.
-- Function tek instance, 15 dakikada IP başına en fazla 5 düzenleme isteği ve 10 MB giriş sınırı kullanır. Bu, kişisel kullanım için başlangıç korumasıdır; güçlü kullanıcı kimlik doğrulaması/App Check yerine geçmez.
-- NVIDIA anahtarı sadece Cloud Secret Manager üzerinden Function'a bağlanır.
-- Görsel içerikleri log'lara yazılmaz.
-- Geçici NVCF asset'i istek sonunda silinir; silme başarısızsa NVIDIA'nın saklama politikası geçerlidir.
+Bu değişiklik 20 Hafize görselini taşımaz. Eski `img_...` kayıtları Hafize'nin yerel/oturum korumalı SQLite görsel deposunda. `retake06.web.app` yerel SQLite veritabanına erişemez. Referansları özel depoya güvenli biçimde taşıyan ayrı bir aktarım adımı gerekir; fotoğrafları GitHub'a veya public Hosting'e kopyalama.
 
-## retake06 Hosting hedefi
+## Sorun giderme
 
-Proje `hafize-23465` ve Hosting site kimliği `retake06` olarak ayarlanmıştır. `.firebaserc` hedef eşlemesi bu depoda kayıtlıdır. `firebase.json` yalnızca retake06 için Hosting hedefi tanımlar; `functions/`, `ios/`, `docs/`, `tests/` ve `tools/` klasörleri public dağıtımdan hariç tutulur. Diğer yedi Hosting sitesine deploy yapılmaz.
-
-PowerShell komutlarını Retake depo klasörünün kökünde çalıştır. `firebase deploy --only hosting:retake06 --project hafize-23465` komutu yalnız retake06 alan adını günceller.
-
-## Mevcut 20 görselin kaynağı
-
-Eski `img_...` kimlikleri Hafize uygulamasının `/api/images/:id` uç noktasına aittir. Bu endpoint `data/hafize.db` içindeki sahibine bağlı SQLite kayıtlarını ve yerel dosya deposunu okur; platform güvenlik katmanı oturum/principal gerektirir. Hafize sunucusu varsayılan olarak `127.0.0.1:4173` adresinde dinler. Bu nedenle `retake06.web.app` içinden aynı-origin `/api/images/{id}` isteği bu kayıtları vermez.
-
-Görseller public Hosting içine kopyalanmamalıdır. Önce mevcut 20 görsel, yalnız sahibin oturumuyla okunup özel Firebase Storage alanına bir defalık aktarılmalı; sonrasında Retake Functions katmanı sahip doğrulaması yaparak referansları sunmalıdır. Bu aktarım tamamlanana kadar Retake referans kartları erişim hatası gösterecektir.
+- `NVIDIA_API_KEY Worker Secret olarak tanımlanmamış`: `.dev.vars` satırını kontrol edip `npm run deploy:worker` çalıştır.
+- `401`: NVIDIA API anahtarı geçersiz veya süresi dolmuş olabilir.
+- `403`: NVIDIA anahtarının `invoke_function` yetkisini ve hosted endpoint erişimini kontrol et.
+- `404/422`: FLUX.1-Kontext-dev bu hesapta hosted API olarak açık olmayabilir.
+- `402/429`: NVIDIA kota, hız sınırı veya ücretsiz erişim limiti.
+- `npm run deploy:worker` Cloudflare oturumu istiyorsa önce `npx --yes wrangler@latest login` çalıştır.

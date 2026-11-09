@@ -7,6 +7,9 @@ on:
       - "styles.css"
       - "app.js"
       - "src/**"
+      - "worker/**"
+      - "wrangler.toml"
+      - "docs/NVIDIA_SETUP.md"
       - "tests/**"
       - "manifest.webmanifest"
       - "sw.js"
@@ -20,6 +23,9 @@ on:
       - "styles.css"
       - "app.js"
       - "src/**"
+      - "worker/**"
+      - "wrangler.toml"
+      - "docs/NVIDIA_SETUP.md"
       - "tests/**"
       - "manifest.webmanifest"
       - "sw.js"
@@ -49,6 +55,7 @@ jobs:
           node --check app.js
           node --check src/core.js
           node --check src/nvidia-pipeline.js
+          node --check worker/index.js
           node --check functions/index.js
           node --check functions/lib/nvidia.js
           node --check sw.js

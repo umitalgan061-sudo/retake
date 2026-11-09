@@ -8,7 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
-    "index.html", "styles.css", "app.js", "src/core.js", "tests/core.test.js",
+    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js",
+    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "docs/FACE_ONLY_PIPELINE.md",
     "package.json", "manifest.webmanifest", "sw.js", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )
@@ -55,6 +56,30 @@ def main() -> int:
                       else "eski kod veya sabitlenmemiş bağımlılık: "
                            + ", ".join(forbidden or ["MediaPipe sürümü sabit değil"]),
         })
+
+
+    source_files = [ROOT / "index.html", ROOT / "app.js"]
+    source_files.extend((ROOT / "ios" / "RetakeApp").rglob("*.swift"))
+    camera_markers = (
+        "getUserMedia", "getDisplayMedia", "navigator.mediaDevices", "MediaStream",
+        "AVCaptureSession", "AVCaptureDeviceInput", "AVCaptureVideoDataOutput",
+        "AVCapturePhotoOutput", "UIImagePickerController", "cameraFlipBtn", "startCamera",
+    )
+    camera_hits: list[str] = []
+    for path in source_files:
+        if not path.is_file():
+            continue
+        source = path.read_text(encoding="utf-8", errors="replace")
+        for marker in camera_markers:
+            if marker in source:
+                camera_hits.append(f"{path.relative_to(ROOT)}:{marker}")
+    checks.append({
+        "check": "no-camera",
+        "file": "web/iOS source",
+        "ok": not camera_hits,
+        "detail": "kamera ve canlı video API'si yok" if not camera_hits
+                  else "yasak kamera API'si bulundu: " + ", ".join(camera_hits),
+    })
 
     workflow_path = ROOT / ".github/workflows/web-quality.yml"
     checks.append({

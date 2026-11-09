@@ -45,7 +45,6 @@ const state = {
   target: null,
   references: [],
   selectedFaceIndex: null,
-  selectedReferenceID: null,
   busy: false,
   toastTimer: null,
   installPrompt: null
@@ -256,17 +255,14 @@ function renderReferences() {
 
   state.references.forEach((reference) => {
     const card = document.createElement("article");
-    card.className = "reference-card" + (reference.id === state.selectedReferenceID ? " selected" : "");
+    card.className = "reference-card";
 
-    const select = document.createElement("button");
-    select.type = "button";
-    select.className = "reference-select";
-    select.setAttribute("aria-pressed", String(reference.id === state.selectedReferenceID));
-    select.setAttribute("aria-label", reference.name + " referansını seç");
+    const preview = document.createElement("div");
+    preview.className = "reference-select";
 
     const image = document.createElement("img");
     image.src = reference.url;
-    image.alt = "Referans yüz: " + reference.name;
+    image.alt = "Kimlik referansı: " + reference.name;
     image.loading = "lazy";
     image.decoding = "async";
 
@@ -276,13 +272,9 @@ function renderReferences() {
 
     const label = document.createElement("span");
     label.className = "reference-state";
-    label.textContent = reference.id === state.selectedReferenceID ? "SEÇİLİ KAYNAK" : "TEK YÜZ DOĞRULANDI";
+    label.textContent = "KİMLİK HAVUZUNDA";
 
-    select.append(image, name, label);
-    select.addEventListener("click", () => {
-      state.selectedReferenceID = reference.id;
-      renderReferences();
-    });
+    preview.append(image, name, label);
 
     const remove = document.createElement("button");
     remove.type = "button";
@@ -291,7 +283,7 @@ function renderReferences() {
     remove.setAttribute("aria-label", reference.name + " referansını sil");
     remove.addEventListener("click", () => removeReference(reference.id));
 
-    card.append(select, remove);
+    card.append(preview, remove);
     elements.referencesGrid.append(card);
   });
 
@@ -307,9 +299,6 @@ async function loadSavedReferences() {
     ...record,
     url: createObjectURL(record.blob)
   }));
-  if (!state.selectedReferenceID || !state.references.some((item) => item.id === state.selectedReferenceID)) {
-    state.selectedReferenceID = state.references[0]?.id || null;
-  }
   renderReferences();
 }
 
@@ -381,9 +370,6 @@ async function importReferencePhotos(files) {
       await yieldToBrowser();
     }
 
-    if (!state.selectedReferenceID && state.references.length > 0) {
-      state.selectedReferenceID = state.references[0].id;
-    }
     renderReferences();
     showToast(added + " referans eklendi · " + skipped + " dosya atlandı.");
   } finally {
@@ -401,7 +387,6 @@ async function removeReference(id) {
     await databaseRequest("readwrite", (store) => store.delete(id));
     URL.revokeObjectURL(reference.url);
     state.references = state.references.filter((item) => item.id !== id);
-    if (state.selectedReferenceID === id) state.selectedReferenceID = state.references[0]?.id || null;
     renderReferences();
     showToast("Referans kitaplıktan kaldırıldı.");
   } catch (error) {
@@ -416,7 +401,6 @@ async function clearReferences() {
     await databaseRequest("readwrite", (store) => store.clear());
     state.references.forEach((item) => URL.revokeObjectURL(item.url));
     state.references = [];
-    state.selectedReferenceID = null;
     renderReferences();
     showToast("Referans kitaplığı temizlendi.");
   } catch (error) {

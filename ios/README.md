@@ -4,6 +4,15 @@ Açılacak proje: `Retake.xcodeproj`
 
 Hedef: iPhone 17 Pro Max, iOS 17 veya üzeri.
 
+## Kesin davranış
+
+- Kamera/AVCapture/canlı video yoktur. Hedef ve referanslar yalnızca PhotosPicker/FileImporter ile alınır.
+- Hedef fotoğrafın yalnızca seçilen yüz bölgesi düzenlenecektir. Saç, arka plan, kıyafet ve diğer kişiler korunur.
+- 20 kimlik referans fotoğrafı aynı kişiye ait olmalıdır; tek yüz tespiti aynı kimlik olduklarını doğrulamaz.
+- Gözler kapalıysa uygun referanslardan doğal göz açma; gerektiğinde kontrollü yüz ifadesi düzeltmesi sadece yüz crop'unda çalışır.
+
+Detaylı kabul sözleşmesi: `../docs/FACE_ONLY_PIPELINE.md`.
+
 ## Mevcut uygulama özellikleri
 
 - SwiftUI native uygulama kabuğu

@@ -9,7 +9,6 @@ final class RetakeViewModel: ObservableObject {
     @Published private(set) var targetImage: UIImage?
     @Published private(set) var detectedFaces: [DetectedFace] = []
     @Published var selectedFaceIndex: Int?
-    @Published var selectedReferenceID: String?
     @Published private(set) var modelInspection: ModelInspection = .missing
     @Published private(set) var isBusy = false
     @Published var statusMessage = "Fotoğraf seçerek başlayın."
@@ -33,13 +32,6 @@ final class RetakeViewModel: ObservableObject {
         do {
             let urls = try await assetStore.referenceFiles()
             referenceFaces = urls.map(ReferenceFace.init(url:))
-            if let selectedReferenceID,
-               !referenceFaces.contains(where: { $0.id == selectedReferenceID }) {
-                self.selectedReferenceID = nil
-            }
-            if self.selectedReferenceID == nil {
-                self.selectedReferenceID = referenceFaces.first?.id
-            }
             if referenceFaces.isEmpty {
                 statusMessage = "Referans yüzlerinizi cihazdan içe aktarın."
             }
@@ -93,17 +85,9 @@ final class RetakeViewModel: ObservableObject {
         statusMessage = "Tek yüz içerdiği doğrulanan: \(imported) · Atlanan: \(failed) · Toplam: \(referenceFaces.count)/20"
     }
 
-    func selectReference(_ face: ReferenceFace) {
-        selectedReferenceID = face.id
-        statusMessage = "Kaynak referans seçildi: \(face.fileName)"
-    }
-
     func removeReference(_ face: ReferenceFace) async {
         do {
             try await assetStore.deleteReference(fileName: face.fileName)
-            if selectedReferenceID == face.id {
-                selectedReferenceID = nil
-            }
             await refreshReferences()
         } catch {
             statusMessage = "Referans silinemedi: \(error.localizedDescription)"

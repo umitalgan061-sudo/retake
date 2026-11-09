@@ -1,6 +1,6 @@
 const SHELL_CACHE = "retake-shell-v1";
 const AI_CACHE = "retake-ai-assets-v1";
-const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./manifest.webmanifest", "./icons/retake.svg"];
+const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/face-only.js", "./manifest.webmanifest", "./icons/retake.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

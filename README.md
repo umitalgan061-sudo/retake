@@ -1,8 +1,17 @@
 # Retake
 
-Retake, kişisel kullanım için hazırlanan fotoğraf stüdyosudur. Web arayüzü ve native iOS uygulaması aynı ürün hedefini paylaşır: fotoğrafı cihazda açmak, hedef yüzü seçmek, 20'ye kadar tek-yüz referans görseli yönetmek ve lisansı/teknik sözleşmesi doğrulanmış gerçek bir AI Face Swap motoruyla sonuç üretmek.
+Retake, kamera kullanmayan ve yalnızca galeriden seçilen fotoğraflar üzerinde çalışan kişisel yüz düzenleme uygulamasıdır. Hedef fotoğrafta sadece seçilen yüz bölgesi değiştirilir; saç, arka plan, kıyafet, diğer insanlar ve yüz dışındaki alanlar korunur. Kimlik için aynı kişiye ait en fazla 20 referans fotoğrafı birlikte kullanılır.
 
 > **Gerçek durum:** Web ve iOS tarafında fotoğraf seçimi, yüz algılama ve referans yönetimi altyapısı bulunur. Gerçek Face Swap inference modeli ve çıktı birleştirme motoru henüz tamamlanmamıştır. İşlem düğmesi bu yüzden bilerek devre dışıdır.
+
+## Kesin ürün kuralları
+
+- Kamera, canlı video ve kamera izinleri yoktur; sadece fotoğraf seçici/dosya aktarımı vardır.
+- 20 kimlik fotoğrafı aynı kişiye ait olmalıdır; tek yüz tespiti tek başına aynı kimlik doğrulaması değildir.
+- Gözler kapalıysa aynı kişiye ait açık göz referanslarıyla doğal göz açma yapılabilir. İfade düzeltmesi yalnızca gerektiğinde ve yüz alanında uygulanır.
+- Sonuç, yumuşak yüz maskesiyle orijinal fotoğrafa birleştirilir. Maske dışındaki piksellerin değişmemesi zorunludur.
+
+Detaylı model sözleşmesi: `docs/FACE_ONLY_PIPELINE.md`.
 
 ## Web Studio
 
@@ -49,6 +58,8 @@ Xcode projesi: \`ios/Retake.xcodeproj\`
 Gerçek iOS inference modeli, adapter, maskeli compositing ve Photos'a dışa aktarma henüz tamamlanmadı.
 
 ## AI motoru için kabul kriterleri
+
+Face-only crop, 20 referans kimlik birleştirme, göz/ifade retargeting, face parsing/occlusion mask ve maske dışı piksel doğrulaması tek bir uçtan uca testte geçmelidir.
 
 1. Face swapper, kimlik encoder, yüz hizalama/tespit ve gerekirse restorasyon/maske bileşenlerinin tüm ağırlık lisansları ayrı ayrı doğrulanmalı.
 2. Modelin gerçek tensor giriş/çıkış sözleşmesi belgelenmeli; varsayımsal adapter yazılmamalı.

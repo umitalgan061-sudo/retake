@@ -2,9 +2,15 @@
 
 ## Nihai hedef
 
-iPhone 17 Pro Max ve modern tarayıcılarda çalışan, lisans zinciri doğrulanmış gerçek AI Face Swap motoruyla yüksek kaliteli fotoğraf çıktısı üreten kişisel uygulama.
+iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki seçilen yüz bölgesini değiştiren kişisel uygulama. Kamera/canlı video özelliği yoktur.
 
 ## Değişmez şartlar
+
+0. Kamera API'si, canlı video, kamera önizlemesi veya kamera izni kesinlikle eklenmez. Yalnızca fotoğraf seçici kullanılır.
+0.1. Değişiklik yalnızca seçilen yüz crop'u ve yüz maskesi içinde yapılır; yüz dışı pikseller orijinalle aynı kalır.
+0.2. En çok 20 referans fotoğrafı aynı kimliğe ait olmalıdır; farklı kişiler bir identity bank içinde karıştırılmaz.
+0.3. Göz/ifade retarget yalnızca ihtiyaç varsa ve yalnızca hedef yüz crop'unda çalışır. Kapalı göz doğal açılabilir, fakat saç/arka plan/diğer kişiler değiştirilmez.
+
 
 1. Canvas, landmark ve affine warp tek başına AI Face Swap değildir.
 2. Gerçek inference yoksa işlem başarılı gibi gösterilmez; ilgili düğme devre dışı kalır.
@@ -14,6 +20,18 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, lisans zinciri doğrulan
 6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. Native iOS için Keychain; web uygulamasında gizli anahtar gerekiyorsa istemciye koymak yerine güvenli sunucu tarafı proxy gerekir.
 7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
 8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
+
+## Face-only generation contract
+
+Detaylı işlem hattı: `docs/FACE_ONLY_PIPELINE.md`.
+
+- 20 kaynak fotoğrafını kaliteye göre hizala ve tek identity profile oluştur.
+- Hedefte kullanıcı tarafından seçilen yüz crop'unda kimlik aktarımı yap.
+- Pose/ışık/skin target attributes korunur.
+- Gerekirse eyes-open ve sınırlı expression retarget uygula.
+- Face parser ve occlusion mask ile yüz dışını koru.
+- Tam çözünürlüklü kaynak fotoğrafa maskeli patch yapıştır.
+- Maske dışı piksel eşitliğini otomatik doğrula.
 
 ## Web Studio
 

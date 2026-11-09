@@ -2,14 +2,18 @@
 
 Son güncelleme: 9 Kasım 2026
 
+## Kamera yok
+
+Web ve iOS uygulamalarında kamera açılmaz. `getUserMedia`, WebRTC canlı video, `AVCaptureSession` ve kamera izni eklenemez. Yalnızca fotoğraf yükleme/PhotosPicker desteklenir.
+
 ## Kullanıcı akışı
 
 1. Kullanıcı hedef fotoğrafını dosya seçiciyle veya sürükle-bırakla açar.
 2. Dosya türü ve 25 MB üst sınırı doğrulanır. Hedef görsel yalnızca sayfa belleğinde tutulur.
 3. MediaPipe Face Landmarker birden fazla yüzü cihazda algılar.
 4. Kullanıcı yüz kutusuna veya yüz seçim düğmesine basarak hedef yüzü seçer.
-5. Kullanıcı en fazla 20 adet tek yüz içeren referans fotoğrafı seçer.
-6. Referans görseller IndexedDB içinde yerel tarayıcı depolamasına kaydedilir ve sonraki oturumda geri yüklenir.
+5. Kullanıcı aynı kişiye ait en fazla 20 adet tek yüz içeren kimlik referansı seçer.
+6. Referans görseller IndexedDB içinde yerel tarayıcı depolamasına kaydedilir ve sonraki oturumda geri yüklenir. Şu an tek yüz kontrolü vardır; aynı kimlik doğrulaması henüz eklenmemiştir.
 
 ## Modüller
 
@@ -38,11 +42,15 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 
 İlk kurulumda HTTPS/localhost üzerinden çevrimiçi açılış gerekir. Service Worker uygulama kabuğunu, MediaPipe WASM dosyalarını ve model dosyasını indirip cache'e ekler. Bu varlıklar önbelleğe alındıktan sonra desteklenen tarayıcılarda arayüz ve yüz algılama çevrimdışı da çalışabilir. Tarayıcı cache'i her zaman silebilir; çevrimdışı kullanım garantisi disk alanı ve tarayıcı politikalarına bağlıdır.
 
+## Yüz dışı piksel koruma
+
+Üretim hattı sadece seçilen yüz crop'unda çalışır. 20 referans aynı kimlikten olmalı ve kalite ağırlıklı tek kimlik profiline dönüştürülmelidir. Hedef fotoğraf poz/ışık/kompozisyonu sağlar. Kapalı gözler varsa uygun açık göz referanslarından doğal göz açıklığı üretilir; ifade değişimi yalnızca gerektiğinde yapılır. Face parsing ve occlusion mask saç, gözlük, eller, nesneler, arka plan ve diğer yüzleri dışarıda bırakmalıdır. Sonuç orijinal çözünürlüklü fotoğrafa yalnızca yüz maskesinin içine birleştirilir; maskenin dışı piksel olarak değişmemelidir.
+
 ## Gerçek Face Swap motoru neden kapalı?
 
 MediaPipe Face Landmarker, yüz landmark'ı ve sınırlarını verir; yüz kimliğini başka bir fotoğrafa aktaran bir Face Swap modeli değildir. Eski Canvas affine-warp demosu kaldırıldı; çünkü gerçek bir kimlik korumalı model çıktısı üretmiyordu. Web sürümünde işlem/indirme düğmeleri, model ve model-özel inference/kompozitleme hattı doğrulanana kadar devre dışıdır.
 
-Web gerçek AI entegrasyonu için modelin lisans zinciri, WebAssembly/WebGPU uyumluluğu, bellek/performans sınırı ve giriş/çıkış tensörleri ayrıca doğrulanmalıdır. iOS Core ML modeli tek başına tarayıcıda çalıştırılamaz.
+Web gerçek AI entegrasyonu için modelin lisans zinciri, WebAssembly/WebGPU uyumluluğu, bellek/performans sınırı, 20-referans identity aggregation, expression retargeting ve yüz maskeli birleştirme ayrıca doğrulanmalıdır. iOS Core ML modeli tek başına tarayıcıda çalıştırılamaz.
 
 ## Geliştirici doğrulaması
 

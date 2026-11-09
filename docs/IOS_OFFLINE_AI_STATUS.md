@@ -3,6 +3,17 @@
 Son denetim: 9 Kasım 2026  
 Hedef cihaz: iPhone 17 Pro Max
 
+## Kesin ürün davranışı
+
+- Kamera/AVCapture/canlı video akışı yoktur. Yalnızca PhotosPicker veya dosya içe aktarma kullanılır.
+- Kullanıcı yalnızca düzenlenecek yüzü seçer. Tüm fotoğraf yeniden üretilmez.
+- En fazla 20 kimlik referansı aynı kişiye ait olmalıdır. Kalite ağırlıklı embedding profili oluşturulması gerekir; mevcut sürümde aynı kimlik doğrulaması henüz yoktur.
+- Gözler kapalıysa uygun açık göz referanslarından doğal göz retarget yapılabilir. İfade düzeltmesi sadece ihtiyaç varsa ve sadece yüz crop'unda uygulanır.
+- Saç, arka plan, kıyafet, vücut, gözlük/ön örtücüler, diğer yüzler ve maske dışındaki pikseller korunur.
+- Sonuç orijinal çözünürlüğe geri birleştirilir; maske dışı piksel farkı sıfır olmalıdır.
+
+Teknik kabul sözleşmesi: `docs/FACE_ONLY_PIPELINE.md`.
+
 ## Güncel ürün kararı
 
 İnternet kullanımı yasak değildir. Model ve yardımcı varlıklar HTTPS üzerinden indirilebilir ve güncellenebilir. Tercih edilen akış fotoğrafı cihazda işleyen Core ML modelidir. Kullanıcı açıkça onaylarsa daha sonra uygun bir uzak inference sağlayıcısı da eklenebilir.
@@ -22,7 +33,7 @@ Bu dal `ios/Retake.xcodeproj` adlı SwiftUI iOS uygulamasını içerir.
 
 ## Henüz tamamlanmamış kritik parçalar
 
-Bu dal **henüz gerçek yüz değiştirme yapmaz**.
+Bu dal **henüz gerçek yüz değiştirme yapmaz**. Mevcut web ve native iOS sürümleri kameraya erişmez; yalnızca galeri fotoğraflarını kullanır.
 
 - Lisans zinciri tamamen onaylanmış, indirilebilir gerçek Face Swap model ağırlıkları yok.
 - Belirli bir modelin gerçek tensor sözleşmesine göre yüz hizalama/embedding ve inference adapter'ı uygulanmış değil.
@@ -48,6 +59,18 @@ Web arayüzü eski kamera/Canvas affine-warp prototipinden fotoğraf odaklı, du
 MediaPipe giriş görselini cihaz üzerinde işler; kitaplık kullanım/performans ölçümlerini Google'a iletebilir. Web uygulamasında gerçek kimlik korumalı Face Swap motoru bulunmadığı için işlem ve indirme düğmeleri kapalıdır. Yüz landmark'ı üzerine çizilen kutular yüz değiştirme sonucu değildir.
 
 Teknik web ayrıntısı: `docs/WEB_STUDIO.md`.
+
+## Yeni aday: APPLE (CVPR 2026)
+
+APPLE, kimlik aktarımını hedef fotoğrafın poz, ifade, ışık ve cilt özelliklerini korumayla dengeleyen diffusion tabanlı bir yöntemdir. Resmî kod deposu Apache-2.0 olarak işaretlidir; ancak README student inference için `torchrun` ile 3 GPU, teacher akışı için 3–4 GPU, üç ayrı Conda ortamı, 3DMM/gaze ön işleme ve Arc2Face yolu tarif eder. Bu yüzden hazır iPhone/Core ML modeli değildir. Checkpoint ve yardımcı ağırlıkların tüm lisansları ayrıca incelenmeden dağıtıma eklenemez.
+
+## İfade / göz retarget adayı: LivePortrait
+
+LivePortrait proje sayfası göz ve dudak açıklığı retarget örnekleri verir. Bu, kapalı gözü doğal açma ve ifade düzeltme alt aşaması için teknik olarak anlamlıdır; fakat tek başına 20 referanstan kimlik aktaracak bir face swapper değildir. Resmî kurulum PyTorch ve önceden eğitilmiş ağırlık indirimi gerektirir; hazır iOS Core ML paketi doğrulanmamıştır.
+
+## Yüz maskesi araştırması
+
+FaceFusion dokümanları face parser ve occlusion mask ayrımını, skin, iki göz, kaş, burun, ağız ve dudak bölgelerini ayrı maskeleyebilme olanağını gösterir. Bu mimari referans olarak kullanılabilir; ancak FaceFusion OpenRAIL-AS, model varlıkları ise birbirinden bağımsız lisanslara sahiptir. Özellikle ArcFace/INSwapper gibi bazı ağırlıklar Non-Commercial olarak listelenmiştir.
 
 ## Model adayları ve lisans kararı
 
@@ -92,6 +115,10 @@ NVIDIA kataloğundaki Qwen-Image-Edit genel amaçlı görüntü düzenleme model
 
 - MobileFaceSwap makalesi: https://ojs.aaai.org/index.php/AAAI/article/view/20203
 - MobileFaceSwap resmi kod deposu: https://github.com/Seanseattle/MobileFaceSwap
+- APPLE CVPR 2026: https://github.com/cvlab-kaist/APPLE
+- LivePortrait: https://github.com/KlingAIResearch/LivePortrait
+- FaceFusion Face Masker: https://docs.facefusion.io/usage/cli-arguments/face-masker
+- FaceFusion licenses: https://docs.facefusion.io/introduction/licenses
 - MobileFSGAN resmi kod deposu: https://github.com/hoim/mobilefsgan
 - GHOST resmi kod ve model indirme betiği: https://github.com/ai-forever/ghost
 - Apple Core ML model derleme API'si: https://developer.apple.com/documentation/coreml/mlmodel/compilemodel%28at%3A%29
@@ -108,6 +135,9 @@ Public GitHub deposuna kişisel yüz fotoğrafları, yüz embedding'leri veya li
 - [x] API anahtarı saklama için iOS Keychain altyapısı eklendi.
 - [ ] iPhone 17 Pro Max üzerine kurulum ve fiziksel cihaz testi.
 - [ ] 20 gerçek JPEG/PNG referans görüntüsünün cihazda doğrulanması.
+- [ ] Aynı kişiye ait 20 referansın kimlik encoder'ı ile ortak profile dönüştürülmesi.
+- [ ] Face-only parser/occlusion mask ve maske dışı piksel eşitliği testi.
+- [ ] Göz açma ve sınırlı expression retarget alt hattı.
 - [ ] Lisans zinciri doğrulanmış gerçek Face Swap modelinin seçilmesi ve indirilmesi.
 - [ ] Modelin kesin input/output sözleşmesine göre adapter, hizalama ve maskeli compositing.
 - [ ] Gerçek inference çıktısının Photos kütüphanesine kaydedilmesi.

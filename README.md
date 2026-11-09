@@ -10,11 +10,13 @@ Xcode projesi: `ios/Retake.xcodeproj`
 
 Mevcut temel özellikler:
 - SwiftUI uygulama kabuğu
-- PhotosPicker ile fotoğraf seçimi
+- PhotosPicker ile hedef fotoğrafı seçme
 - Vision ile cihaz içi yüz tespiti
 - Çok yüzlü fotoğraflarda hedef yüzü görsel olarak seçme
-- 20 referans fotoğrafını telefondan içe aktarıp yerelde saklama
-- Derlenmiş Core ML model klasörünü yerel olarak içe aktarma ve model açıklamasını inceleme
+- En fazla 20 referans fotoğrafını telefondan içe aktarma; her referans tam bir yüz içeriyorsa kabul edilir
+- Referanslar arasından kaynak yüzü seçme ve yerel kaydı silme
+- Referansları özel Application Support klasöründe saklama
+- Derlenmiş Core ML model klasörünü yerel olarak içe aktarma ve model girdi/çıktı açıklamalarını inceleme
 
 ## Henüz tamamlanmayanlar
 
@@ -22,6 +24,7 @@ Mevcut temel özellikler:
 - Modelin kesin girdi/çıktı sözleşmesine göre inference adapter'ı
 - Yüz değiştirme çıktısının hedef fotoğrafa maskeli birleştirilmesi
 - iPhone 17 Pro Max üzerinde gerçek cihaz ve uçak modu testleri
+- Düzenlenmiş sonucun Fotoğraflar arşivine kaydedilmesi
 
 Model dosyası yokken uygulama yüz değiştirme yapıyormuş gibi davranmaz; işlem düğmesi devre dışıdır.
 

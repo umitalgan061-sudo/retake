@@ -56,6 +56,7 @@ jobs:
           node --check src/core.js
           node --check src/nvidia-pipeline.js
           node --check worker/index.js
+          node --check tools/deploy-worker.mjs
           node --check functions/index.js
           node --check functions/lib/nvidia.js
           node --check sw.js

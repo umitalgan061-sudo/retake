@@ -36,9 +36,9 @@ Model eksikken işlem düğmesi bilerek devre dışıdır. Uygulama sahte görü
 
 ## Mevcut depo varlıkları
 
-GitHub ağacındaki `models/det_10g.onnx`, `models/w600k_r50.onnx` ve `models/face_landmarker.task` dosyalarının her biri 51 bayt. Blob içerikleri model ağırlığı değil, `/api/documents/...` metnidir.
+İlk depoda bulunan `models/det_10g.onnx`, `models/w600k_r50.onnx` ve `models/face_landmarker.task` girdilerinin her biri 51 baytlık `/api/documents/...` metin referanslarıydı; gerçek model ağırlığı değillerdi. Bu placeholder girdileri geliştirme dalından kaldırıldı. Şu anda depo içinde kullanılabilir model ağırlığı bulunmuyor.
 
-`reference-faces/` altındaki 20 dosyanın her biri 36 bayt. İçerikleri JPEG/PNG değil, `/api/images/...` metnidir.
+İlk depoda bulunan 20 `reference-faces/` girdisinin her biri 36 baytlık `/api/images/...` metin referanslarıydı; gerçek JPEG/PNG fotoğrafları değillerdi. Bu placeholder girdileri geliştirme dalından kaldırıldı. Orijinal yirmi fotoğraf bu depoda mevcut değil; iPhone'dan PhotosPicker ile özel yerel depoya aktarılmaları gerekiyor.
 
 Yerel varlık kontrolü:
 

@@ -11,7 +11,7 @@ Bu depo, Firebase Hosting'de yalnızca `retake06` sitesini kullanmaya devam eder
 - Görsel aktarımı: tarayıcı PNG dosyasını doğrudan Worker'a gönderir; Base64'e çevrilmez. Worker, NVIDIA NVCF asset akışını kullanır ve başarılı/başarısız işlem sonrasında geçici asset'i silmeyi dener.
 - Worker CPU işlemi hafif tutulur; NVIDIA ağ isteği beklenirken Cloudflare CPU kotası tüketilmez.
 
-Cloudflare Workers Free güncel limitleri: 100.000 istek/gün, istek başına 10 ms CPU ve 128 MB bellek. NVIDIA Developer Program, API Catalog'daki hosted NIM endpoint'lerine prototipleme için ücretsiz erişim sunar; fakat model/endpoint bazında kullanılabilirlik, hız sınırı ve kota değişebilir. FLUX.1-Kontext-dev endpoint'inin bu NVIDIA hesabında gerçekten açık olduğu ilk deneme ile doğrulanmalıdır. Ücretsiz erişim, sınırsız kullanım garantisi değildir.
+Cloudflare Workers Free güncel limitleri: 100.000 istek/gün, istek başına 10 ms CPU ve 128 MB bellek. NVIDIA Developer Program, API Catalog'daki uygun hosted NIM endpoint'lerine prototipleme için ücretsiz erişim sunar; fakat model/endpoint bazında kullanılabilirlik, hız sınırı ve kota değişebilir. Önemli: NVIDIA kataloğunda FLUX.1-Kontext-dev şu anda "Downloadable" olarak listeleniyor, "Free Endpoint" olarak işaretli değil. Bu nedenle ücretsiz API anahtarının bu model için NVIDIA-hosted inference erişimi verdiği garanti değildir. İlgili endpoint hesabında etkin değilse 403/404 alınabilir; bu durumda bu modelin NVIDIA üzerinde ücretsiz hosted kullanımı mümkün olmayabilir. Ücretsiz erişim, sınırsız kullanım garantisi değildir.
 
 ## İlk kurulum (Codespaces terminali)
 

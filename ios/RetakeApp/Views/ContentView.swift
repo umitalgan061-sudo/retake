@@ -1,11 +1,13 @@
 import PhotosUI
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var viewModel = RetakeViewModel()
     @State private var targetPickerItem: PhotosPickerItem?
     @State private var referencePickerItems: [PhotosPickerItem] = []
+    @State private var isImportingModel = false
 
     private let columns = [GridItem(.adaptive(minimum: 88), spacing: 12)]
 
@@ -31,6 +33,20 @@ struct ContentView: View {
             }
             .onChange(of: referencePickerItems) { _, newItems in
                 Task { await viewModel.importReferences(newItems) }
+            }
+            .fileImporter(
+                isPresented: $isImportingModel,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    if let url = urls.first {
+                        Task { await viewModel.installModelBundle(from: url) }
+                    }
+                case .failure(let error):
+                    print("Model içe aktarma hatası: \\(error.localizedDescription)")
+                }
             }
         }
         .tint(Color.mint)
@@ -89,14 +105,29 @@ struct ContentView: View {
                 }
                 .font(.caption)
             }
-            Button {
-                viewModel.refreshModelInspection()
-            } label: {
-                Label("Modeli yeniden denetle", systemImage: "arrow.clockwise")
-                    .font(.caption.weight(.semibold))
+            HStack {
+                Button {
+                    isImportingModel = true
+                } label: {
+                    Label("Model klasörü içe aktar", systemImage: "folder.badge.plus")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isBusy)
+
+                Button {
+                    viewModel.refreshModelInspection()
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.caption.weight(.semibold))
+                }
+                .buttonStyle(.bordered)
+                .disabled(viewModel.isBusy)
+                .accessibilityLabel("Modeli yeniden denetle")
             }
-            .buttonStyle(.bordered)
-            .disabled(viewModel.isBusy)
+            Text("Dosyalar uygulamasından derlenmiş RetakeFaceSwap.mlmodelc klasörünü seçin.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -108,12 +139,15 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 12) {
             sectionHeading("1", "Düzenlenecek fotoğraf")
             if let image = viewModel.targetImage {
-                Image(uiImage: image)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(maxWidth: .infinity)
-                    .frame(maxHeight: 320)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                TargetFacePreview(
+                    image: image,
+                    faces: viewModel.detectedFaces,
+                    selectedFaceIndex: viewModel.selectedFaceIndex
+                ) { index in
+                    viewModel.selectedFaceIndex = index
+                }
+                .frame(height: 320)
+                .clipShape(RoundedRectangle(cornerRadius: 14))
 
                 if viewModel.detectedFaces.isEmpty {
                     Text("Yüz tespit edilmedi.")

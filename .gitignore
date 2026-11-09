@@ -1,0 +1,44 @@
+.env
+.env.*
+!.env.example
+*.xcconfig.local
+Secrets.xcconfig
+*.p8
+*.pem
+*.key
+*.mobileprovision
+
+# Private biometric images — never commit these to the public repository
+/private-assets/
+/ios/Retake/Resources/PrivateAssets/
+
+# Locally installed model weights and compiled Core ML bundles
+/ios/Retake/Resources/Models/
+*.mlmodelc/
+*.mlpackage/
+
+# Xcode / Swift build output
+DerivedData/
+.build/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+# Local files imported into the native iOS project during development
+/ios/RetakeApp/Resources/Models/
+/ios/RetakeApp/Resources/ReferenceFaces/
+
+# Do not publish face photographs or model weights in this public repository
+/reference-faces/*.jpg
+/reference-faces/*.jpeg
+/reference-faces/*.png
+/reference-faces/*.heic
+/models/*.onnx
+/models/*.task
+/models/*.mlmodel
+/models/*.mlmodelc/
+/models/*.mlpackage/
+*.mlmodelc/
+*.mlpackage/
+*.npy
+*.npz

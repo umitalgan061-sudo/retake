@@ -1,0 +1,42 @@
+name: iOS build
+
+concurrency:
+  group: retake-ios-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    paths:
+      - "ios/**"
+      - "tools/validate_assets.py"
+      - ".github/workflows/ios-build.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "ios/**"
+      - ".github/workflows/ios-build.yml"
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Validate asset checker syntax
+        run: python3 -m py_compile tools/validate_assets.py
+
+      - name: Build iOS simulator app
+        run: |
+          xcodebuild \
+            -project ios/Retake.xcodeproj \
+            -scheme Retake \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build

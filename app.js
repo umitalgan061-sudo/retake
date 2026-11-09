@@ -214,7 +214,7 @@ async function setTargetPhoto(file) {
         detectionMessage = error.message;
       }
     } else {
-      detectionMessage = "Yüz algılama motoru yüklenemedi; fotoğraf yalnızca önizleme için açıldı.";
+      detectionMessage = "Yüz algılama motoru hazırlanıyor; fotoğraf şimdilik önizleme için açıldı.";
     }
 
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
@@ -449,6 +449,16 @@ async function initializeDetector() {
 
     elements.engineDescription.textContent =
       "Yüz algılama cihaz üzerinde hazır. Gerçek kimlik korumalı Face Swap modeli henüz entegre edilmedi.";
+    if (state.target) {
+      state.target.faces = detectFaces(state.target.image);
+      state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
+      elements.targetMeta.textContent =
+        state.target.image.naturalWidth + " × " + state.target.image.naturalHeight + " px · " +
+        formatBytes(state.target.file.size) + " · " +
+        (state.target.faces.length === 0 ? "Fotoğrafta yüz bulunamadı." : state.target.faces.length + " yüz algılandı.");
+      drawTargetPreview();
+      renderFaceChips();
+    }
     setRuntimeStatus("Yüz algılama hazır · Yerel işlem etkin");
     renderReferences();
   } catch (error) {
@@ -558,7 +568,8 @@ function initializeInteractions() {
     elements.installButton.hidden = true;
   });
 
-  window.addEventListener("pagehide", () => {
+  window.addEventListener("pagehide", (event) => {
+    if (event.persisted) return;
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
     state.references.forEach((item) => URL.revokeObjectURL(item.url));
     state.detector?.close();

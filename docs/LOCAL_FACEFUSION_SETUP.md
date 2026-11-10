@@ -1,6 +1,6 @@
 # Retake — Yerel FaceFusion kurulumu (Windows)
 
-Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. 25 referansın tamamı FaceLandmarker ile algılanır; gerekirse BlazeFace yedek algılayıcısı kullanılarak ortak göz koordinatına hizalanır; netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
+Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. 25 referansın tamamı FaceLandmarker ile algılanır; gerekirse BlazeFace yedek algılayıcısı kullanılarak ortak göz koordinatına hizalanır. Netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
 
 ## Sistem
 

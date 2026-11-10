@@ -1,8 +1,8 @@
 # Retake — Face-only identity transfer pipeline
 
-Tarih: 9 Kasım 2026  
+Tarih: 10 Kasım 2026  
 Hedef: iPhone 17 Pro Max + modern web tarayıcıları  
-Durum: Web üzerinde NVIDIA FLUX.1-Kontext-dev ile deneysel görsel düzenleme ve eliptik face-only compositing eklendi. Gerçek kimlik korumalı Face Swap modeli ve kimlik doğrulaması hâlâ yoktur.
+Durum: Web akışı FaceFusion 3.9.2 + AlphaFace 256 yerel yüz değiştirme motoruna taşındı. 25 kaynak fotoğraftan yüzü bulunan 10–25 görüntü kaynak yüz kimlik ortalamasına katılır. Bu işlem model eğitimi/fine-tuning değildir; kalite ve kimlik benzerliği gerçek fotoğraflarla test edilmelidir.
 
 ## 1. Kesin ürün kuralları
 
@@ -16,7 +16,7 @@ Durum: Web üzerinde NVIDIA FLUX.1-Kontext-dev ile deneysel görsel düzenleme v
 8. Sonuç orijinal fotoğrafın tam çözünürlüğüne geri yerleştirilir. Düzenleme maskesi dışındaki her piksel kaynak fotoğrafla aynı kalmalıdır.
 9. Model/maske/kimlik kontrolü başarısız olursa işlem sonucu üretilmiş gibi gösterilmez.
 
-## 2. 20 referanstan tek kimlik profili
+## 2. 10–25 referanstan tek kimlik profili
 
 Referans fotoğrafları yalnızca tek yüz içerme kontrolünden geçmekle kalmamalı; gerçek kimlik encoder'ı eklendiğinde aynı kişiye ait olup olmadıkları da karşılaştırılmalıdır.
 
@@ -122,24 +122,21 @@ Lisans listesi: https://docs.facefusion.io/introduction/licenses
 ## 9. Mevcut kod ile fark
 
 Web sürümünde:
-- fotoğraf seçimi ve çoklu yüz tespiti vardır;
-- kullanıcı hedef yüzü kendisi seçer;
-- 20 kayıtlı referans görsel API'sinden otomatik okunur;
-- açık onaydan sonra hedef yüz crop'u ve 20 referans panosu NVIDIA FLUX'a gönderilir;
-- NVIDIA çıktısı yalnızca eliptik yüz maskesinin içinde orijinal fotoğrafa eklenir;
-- maske dışı piksel bütünlüğü kontrol edilir;
-- API anahtarı Firebase Functions Secret'ta tutulur; istemci koduna eklenmez;
-- kamera API'si kullanılmaz.
+- Fotoğraf seçimi ve MediaPipe yüz tespiti vardır; kullanıcı hedef fotoğrafta değiştirilecek yüzü seçer.
+- `reference-faces/manifest.json` içindeki 25 fotoğraf yüklenir; yüzü tespit edilen 10–25 fotoğrafın tamamı kaynak olarak kullanılır.
+- Referans fotoğrafları ayrı ayrı `127.0.0.1:8765` üzerindeki yerel FaceFusion servisine gönderilir.
+- FaceFusion 3.9.2, `alphaface_256` yüz değiştiriciyi CUDA ile çalıştırır. FaceFusion kaynak kodunda çoklu kaynak karelerinden yüz kimlik temsillerinin ortalaması alınır.
+- FaceFusion hedef yüz crop'u üzerinde çalışır; tam fotoğrafı kompozisyon olarak yeniden oluşturmaz.
+- Sonuç, eliptik yumuşak maske üzerinden orijinal yüksek çözünürlüklü fotoğrafa geri eklenir.
+- Maske dışındaki piksellerin kaynakla aynı olması kontrol edilir.
+- Servis yalnızca loopback `127.0.0.1` üzerinde dinler; NVIDIA hosted API veya Firebase Functions kullanılmaz.
 
-Henüz olmayanlar:
-- 20 fotoğrafın aynı kişiye ait olduğunu doğrulayan identity encoder;
-- kalite ağırlıklı identity embedding/prototype;
-- özel Face Swap generator ve güvenilir eye/expression retargeter;
-- semantik face parser ve occlusion mask;
-- kimlik benzerliği/poz için otomatik kalite kapısı;
-- aynı NVIDIA deneysel hattının native iOS Core ML karşılığı.
-
-FLUX çıktısı deneysel olarak üretilir; özel kimlik korumalı Face Swap başarısı garanti edilmez.
+Sınırlamalar:
+- Çoklu kaynak embedding ortalaması, Apple Retake benzeri kişiye özel üretken model eğitimi değildir.
+- Referans fotoğraflarının aynı kişiye ait olduğu otomatik doğrulanmaz. Farklı kimlik veya çok kötü kalitede görüntüler ortalamayı bozabilir.
+- AlphaFace 256 çıktısı ve kompozit kalitesi; hedef poz, ışık, örtülme ve referansların kalitesine göre değişir.
+- FaceFusion'ın model ağırlığı lisansları ayrıdır. `alphaface_256` ve ArcFace tabanlı yardımcı varlıklar için ticari kullanıma izin verildiği varsayılmamalıdır.
+- Referans fotoğrafları şu anda public GitHub deposundaki `reference-faces/` klasöründe bulunur. Yerel çıkarım bu kaynak görselleri özel yapmaz. Bunları tarayıcı/yerel depoda tutan yükleme profili tamamlanmalı ve eski public Git geçmişi için ayrı temizlik yapılmalıdır.
 
 ## 10. CI gereksinimleri
 

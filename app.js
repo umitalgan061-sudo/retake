@@ -105,7 +105,8 @@ function updateProfileIndicator({ title, detail, progress, status = "loading" } 
   if (titleElement && title) titleElement.textContent = title;
   if (detailElement && detail) detailElement.textContent = detail;
   if (progressElement && Number.isFinite(progress)) {
-    progressElement.style.width = Math.max(0, Math.min(100, progress)) + "%";
+    const roundedProgress = Math.round(Math.max(0, Math.min(100, progress)) / 10) * 10;
+    for (let value = 0; value <= 100; value += 10) progressElement.classList.toggle("progress-" + value, value === roundedProgress);
   }
   if (dotElement) {
     dotElement.classList.toggle("is-ready", status === "ready");

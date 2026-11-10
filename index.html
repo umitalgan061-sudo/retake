@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10120f">
-  <meta name="description" content="Retake ile fotoğrafındaki yüzü yerel olarak düzenle; fotoğrafın geri kalanını koru.">
+  <meta name="description" content="Retake Studio ile fotoğraflarını buzlu cam arayüzde, cihazında ve mahremiyetini koruyarak düzenle.">
   <meta name="color-scheme" content="dark light">
   <meta name="retake-facefusion-base" content="http://127.0.0.1:8765">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com http://127.0.0.1:8765 http://localhost:8765; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
-  <title>Retake — Yüzünü yeniden gör</title>
+  <title>Retake Studio — Kendini yeniden gör</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/retake.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
@@ -30,8 +30,9 @@
         <button class="icon-button" id="installButton" type="button" hidden aria-label="Uygulamayı yükle" title="Uygulamayı yükle">
           <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
         </button>
-        <button class="icon-button" id="themeButton" type="button" aria-label="Açık temaya geç" title="Tema değiştir">
-          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+        <button class="icon-button theme-toggle" id="themeButton" type="button" aria-label="Açık temaya geç" title="Tema değiştir">
+          <svg class="theme-icon theme-icon-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></svg>
+          <svg class="theme-icon theme-icon-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.2 15.4A8.6 8.6 0 0 1 8.6 3.8 8.8 8.8 0 1 0 20.2 15.4Z"/><path d="m16.5 4 .7 1.8L19 6.5l-1.8.7-.7 1.8-.7-1.8-1.8-.7 1.8-.7.7-1.8Z"/></svg>
         </button>
       </div>
     </header>
@@ -39,9 +40,27 @@
     <main class="main-content">
       <section class="hero">
         <div class="hero-copy">
-          <div class="overline"><span class="overline-mark"></span> RETAKE STUDIO <span class="overline-index">YEREL YÜZ DÜZENLEME</span></div>
-          <h1>Kendini<br><em>yeniden gör.</em></h1>
-          <p class="hero-description">Bir fotoğraf yükle, yüzünü düzenle. Sonuç içine sinmezse farklı bir görünüm dengesiyle yeniden oluştur.</p>
+          <div class="overline"><span class="overline-mark"></span> RETAKE STUDIO <span class="overline-index">KİŞİSEL FOTOĞRAF ATÖLYESİ</span></div>
+          <h1>Her karede<br><em>kendin ol.</em></h1>
+          <p class="hero-description">Fotoğrafını seç. Yüzünü kendi tarzında yeniden yorumla. Her şey bu cihazda, kontrol tamamen sende.</p>
+          <div class="hero-steps" aria-label="Düzenleme adımları">
+            <span><i>01</i> Fotoğrafını seç</span><span class="hero-step-line" aria-hidden="true"></span>
+            <span><i>02</i> Yüzünü düzenle</span><span class="hero-step-line" aria-hidden="true"></span>
+            <span><i>03</i> Sonucu kaydet</span>
+          </div>
+        </div>
+        <div class="hero-visual" aria-hidden="true">
+          <div class="sculpture-scene">
+            <span class="sculpture-halo sculpture-halo-one"></span>
+            <span class="sculpture-halo sculpture-halo-two"></span>
+            <span class="liquid-stone stone-large"></span>
+            <span class="liquid-stone stone-small"></span>
+            <span class="liquid-stone stone-wide"></span>
+            <span class="liquid-stone stone-mini"></span>
+            <span class="sculpture-glint glint-one"></span>
+            <span class="sculpture-glint glint-two"></span>
+          </div>
+          <div class="hero-visual-caption"><span>FORM / 01</span><span>AKIŞTAKİ FORM</span></div>
         </div>
       </section>
 

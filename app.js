@@ -1097,7 +1097,7 @@ async function runFaceFusionEdit() {
     elements.outputStatus.textContent = "Yerel hibrit çıktı";
     elements.downloadButton.disabled = false;
     const identityStatus = identityMedian
-      ? `ArcFace medyan cosine benzerliği: ${Number(identityMedian).toFixed(3)}.`
+      ? `ArcFace medyan cosine benzerliği: ${Number(identityMedian).toFixed(3)}; bu değer tek başına kimlik kanıtı değildir.`
       : "ArcFace tutarlılık raporu alınamadı.";
     const outlierLabels = identityOutliers.map((index) => {
       const reference = state.references[index - 1];

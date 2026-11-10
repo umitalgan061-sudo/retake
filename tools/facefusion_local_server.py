@@ -399,7 +399,12 @@ def blend_lower_face(
     detail_sigma = max(1.0, face_width * 0.012)
     appearance_low = cv2.GaussianBlur(appearance, (0, 0), detail_sigma).astype(np.float32)
     appearance_detail = appearance.astype(np.float32) - appearance_low
+    # Apply detail only where FaceFusion's identity pass already changed pixels.
+    # This carries its parser/occlusion protection into the detail layer too.
+    identity_changed = np.max(cv2.absdiff(identity, target), axis=2)
+    identity_gate = (identity_changed >= 2).astype(np.float32)[:, :, None]
     detail_alpha = np.clip(mask * DETAIL_TRANSFER_STRENGTH, 0.0, DETAIL_TRANSFER_STRENGTH)[:, :, None]
+    detail_alpha *= identity_gate
     blended = identity.astype(np.float32) + appearance_detail * detail_alpha
     result = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
 

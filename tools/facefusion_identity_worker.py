@@ -39,6 +39,7 @@ def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
     state_manager.init_item("execution_providers", ["cuda", "cpu"])
     state_manager.init_item("face_detector_model", "yolo_face")
     state_manager.init_item("face_detector_size", "640x640")
+    state_manager.init_item("face_detector_angles", [0])
     state_manager.init_item("face_detector_margin", [0, 0, 0, 0])
     state_manager.init_item("face_detector_score", 0.35)
 

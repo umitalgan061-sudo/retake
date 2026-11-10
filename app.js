@@ -457,9 +457,9 @@ async function canvasToBlob(canvas) {
   });
 }
 
-const KONTEXT_REFERENCE_COUNT = 3;
-const KONTEXT_REFERENCE_WIDTH = 512;
-const KONTEXT_REFERENCE_HEIGHT = 672;
+const KONTEXT_REFERENCE_COUNT = 4;
+const KONTEXT_REFERENCE_WIDTH = 384;
+const KONTEXT_REFERENCE_HEIGHT = 512;
 
 function createReferenceFaceInput(reference) {
   const image = reference.image;

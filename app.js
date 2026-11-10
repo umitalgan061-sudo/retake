@@ -64,6 +64,7 @@ const state = {
   references: [],
   referencesLoading: false,
   referenceFaceCropCount: null,
+  selectedReferenceCount: 0,
   referenceLoadError: null,
   referenceLoadToken: 0,
   selectedFaceIndex: null,
@@ -456,36 +457,44 @@ async function canvasToBlob(canvas) {
   });
 }
 
-function drawContainedImage(context, image, x, y, width, height) {
+const KONекст_REFERENCE_COUNT = 4;
+const KONTEКT_REFERENCE_WIDTH = 512;
+const KONTEКT_REFERENCE_HEIGHT = 672;
+
+function createReferenceFaceInput(reference) {
+  const image = reference.image;
   const sourceWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
-  const scale = Math.min(width / sourceWidth, height / sourceHeight);
-  const drawWidth = sourceWidth * scale;
-  const drawHeight = sourceHeight * scale;
-  context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
-}
+  const faces = detectFaces(image).sort((a, b) => {
+    const areaA = a.width * sourceWidth * a.height * sourceHeight;
+    const areaB = b.width * sourceWidth * b.height * sourceHeight;
+    return areaB - areaA;
+  });
+  const face = faces[0];
+  if (!face) return null;
 
-function drawReferenceFaceCrop(context, image, x, y, width, height) {
-  try {
-    const sourceWidth = image.naturalWidth || image.width;
-    const sourceHeight = image.naturalHeight || image.height;
-    const faces = detectFaces(image)
-      .sort((a, b) => (b.width * b.height) - (a.width * a.height));
-    const face = faces[0];
-    if (!face) throw new Error("Referans fotoğrafında yüz algılanamadı.");
+  const crop = getFaceCropRect(
+    sourceWidth,
+    sourceHeight,
+    face,
+    KONTEКT_REFERENCE_WIDTH / KONTEКT_REFERENCE_HEIGHT
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = KONTEКT_REFERENCE_WIDTH;
+  canvas.height = KONTEКT_REFERENCE_HEIGHT;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Referans yüzü için görsel alanı oluşturulamadı.");
+  context.drawImage(
+    image,
+    crop.x, crop.y, crop.width, crop.height,
+    0, 0, canvas.width, canvas.height
+  );
 
-    const crop = getFaceCropRect(sourceWidth, sourceHeight, face, width / height);
-    context.drawImage(
-      image,
-      crop.x, crop.y, crop.width, crop.height,
-      x, y, width, height
-    );
-    return true;
-  } catch (error) {
-    console.warn("Referans yüzü kırpılamadı; tam görsel kullanılacak.", error);
-    drawContainedImage(context, image, x, y, width, height);
-    return false;
-  }
+  return {
+    canvas,
+    area: face.width * sourceWidth * face.height * sourceHeight,
+    name: reference.name
+  };
 }
 
 function buildLocalComfyInputs() {
@@ -502,12 +511,12 @@ function buildLocalComfyInputs() {
     face
   );
 
-  // ComfyUI ImageStitch receives two separate, equally sized image panels.
+  // The target is the only image being edited. Identity references are encoded separately.
   const targetCanvas = document.createElement("canvas");
   targetCanvas.width = NVIDIA_TARGET_PANEL_WIDTH;
   targetCanvas.height = NVIDIA_BOARD_HEIGHT;
   const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
-  if (!targetContext) throw new Error("Hedef yüz panosu oluşturulamadı.");
+  if (!targetContext) throw new Error("Hedef yüz görseli oluşturulamadı.");
   targetContext.fillStyle = "#10151d";
   targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
   targetContext.drawImage(
@@ -515,54 +524,45 @@ function buildLocalComfyInputs() {
     crop.x, crop.y, crop.width, crop.height,
     0, 0, targetCanvas.width, targetCanvas.height
   );
-  targetContext.fillStyle = "rgba(10, 15, 22, .78)";
-  targetContext.fillRect(0, 0, targetCanvas.width, 38);
-  targetContext.fillStyle = "#ffffff";
-  targetContext.font = "700 16px system-ui";
-  targetContext.fillText("TARGET FACE", 22, 25);
 
-  const referencesCanvas = document.createElement("canvas");
-  referencesCanvas.width = NVIDIA_TARGET_PANEL_WIDTH;
-  referencesCanvas.height = NVIDIA_BOARD_HEIGHT;
-  const context = referencesCanvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("Referans panosu oluşturulamadı.");
-  context.fillStyle = "#18212b";
-  context.fillRect(0, 0, referencesCanvas.width, referencesCanvas.height);
-  context.fillStyle = "#f0f5f7";
-  context.font = "700 17px system-ui";
-  context.fillText(`${MAX_REFERENCE_FACES} FACE-CROPPED REFERENCES`, 22, 29);
-  context.fillStyle = "#9caaba";
-  context.font = "12px system-ui";
-  context.fillText("All photos show the same person", 22, 50);
-
-  const columns = 5;
-  const rows = 5;
-  const startY = 66;
-  const gapX = 10;
-  const gapY = 10;
-  const outerX = 16;
-  const outerWidth = referencesCanvas.width - 32;
-  const cellWidth = (outerWidth - gapX * (columns - 1)) / columns;
-  const cellHeight = (referencesCanvas.height - startY - 20 - gapY * (rows - 1)) / rows;
-  context.imageSmoothingEnabled = true;
-  context.imageSmoothingQuality = "high";
-
-  let faceCroppedReferences = 0;
-  readyReferences.forEach((reference, index) => {
-    const column = index % columns;
-    const row = Math.floor(index / columns);
-    const x = outerX + column * (cellWidth + gapX);
-    const y = startY + row * (cellHeight + gapY);
-    context.fillStyle = "#f7f9fa";
-    context.fillRect(x, y, cellWidth, cellHeight);
-    if (drawReferenceFaceCrop(context, reference.image, x + 5, y + 4, cellWidth - 10, cellHeight - 8)) {
-      faceCroppedReferences += 1;
+  const candidates = [];
+  let failedReferenceCrops = 0;
+  readyReferences.forEach((reference) => {
+    try {
+      const candidate = createReferenceFaceInput(reference);
+      if (candidate) candidates.push(candidate);
+      else failedReferenceCrops += 1;
+    } catch (error) {
+      failedReferenceCrops += 1;
+      console.warn("Referans yüzü hazırlanamadı:", reference.name, error);
     }
   });
 
-  state.referenceFaceCropCount = faceCroppedReferences;
-  showToast(`${faceCroppedReferences}/${MAX_REFERENCE_FACES} referans yüzü yakınlaştırıldı.`);
-  return { targetCanvas, referencesCanvas, crop };
+  candidates.sort((a, b) => b.area - a.area);
+  const selectedReferences = candidates.slice(0, KONTEКT_REFERENCE_COUNT);
+  if (selectedReferences.length !== KONTEКT_REFERENCE_COUNT) {
+    throw new Error(
+      `Ayrı kimlik girdileri için en az ${KONTEКT_REFERENCE_COUNT} yüz gerekli; ${selectedReferences.length} yüz hazırlanabildi. ` +
+      "Referans fotoğraflarının netliğini ve yüz görünürlüğünü kontrol et."
+    );
+  }
+
+  state.referenceFaceCropCount = candidates.length;
+  state.selectedReferenceCount = selectedReferences.length;
+  const omitted = MAX_REFERENCE_FACES - selectedReferences.length;
+  showToast(
+    `${candidates.length}/${MAX_REFERENCE_FACES} yüz bulundu · en net ${selectedReferences.length} referans ayrı ayrı gönderilecek.`
+  );
+  if (failedReferenceCrops > 0) {
+    console.warn(`${failedReferenceCrops} referans fotoğrafında yüz kırpımı yapılamadı.`);
+  }
+
+  return {
+    targetCanvas,
+    referenceCanvases: selectedReferences.map((reference) => reference.canvas),
+    selectedReferenceNames: selectedReferences.map((reference) => reference.name),
+    crop
+  };
 }
 
 function applyGeneratedFacePatch(generatedBoardImage, crop) {
@@ -583,10 +583,9 @@ function applyGeneratedFacePatch(generatedBoardImage, crop) {
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
   const outputWidth = generatedBoardImage.naturalWidth || generatedBoardImage.width;
   const outputHeight = generatedBoardImage.naturalHeight || generatedBoardImage.height;
-  const outputTargetPanelWidth = Math.floor(outputWidth / 2);
   generatedContext.drawImage(
     generatedBoardImage,
-    0, 0, outputTargetPanelWidth, outputHeight,
+    0, 0, outputWidth, outputHeight,
     0, 0, crop.width, crop.height
   );
   const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
@@ -694,7 +693,7 @@ async function runNvidiaFaceEdit() {
 
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +
-    `Seçtiğin yüzün crop'u ve ${MAX_REFERENCE_FACES} referans fotoğrafı bu tarayıcıdan bilgisayarındaki ComfyUI servisine (127.0.0.1:8188) gönderilecek. ` +
+    `Seçtiğin yüzün crop'u ve 25 fotoğraf arasından seçilen en net ${KONTEКT_REFERENCE_COUNT} yüz crop'u bu tarayıcıdan bilgisayarındaki ComfyUI servisine (127.0.0.1:8188) gönderilecek. ` +
     "Model RTX A4000 üzerinde yerel çalışacak; görseller NVIDIA bulut API'sine veya başka bir harici AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
   if (!consent) return;
@@ -707,21 +706,23 @@ async function runNvidiaFaceEdit() {
   elements.outputPlaceholder.hidden = false;
   elements.outputPlaceholder.querySelector("strong").textContent = "Fotoğraflar yerel modele gönderiliyor…";
   elements.outputMessage.textContent =
-    "Hedef yüz crop'u ve 25 referans fotoğrafı bilgisayarındaki ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.";
+    "Hedef fotoğraf ve seçilen dört kimlik referansı ayrı görseller olarak ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.";
 
   let generatedUrl = null;
   try {
     const base = localComfyBase();
-    const { targetCanvas, referencesCanvas, crop } = buildLocalComfyInputs();
-    const [targetBlob, referencesBlob] = await Promise.all([
+    const { targetCanvas, referenceCanvases, crop } = buildLocalComfyInputs();
+    const [targetBlob, ...referenceBlobs] = await Promise.all([
       canvasToBlob(targetCanvas),
-      canvasToBlob(referencesCanvas)
+      ...referenceCanvases.map((canvas) => canvasToBlob(canvas))
     ]);
 
-    setRuntimeStatus("Yerel FLUX · görseller ComfyUI'ye yükleniyor…");
-    const [targetName, referencesName] = await Promise.all([
+    setRuntimeStatus("Yerel FLUX · hedef ve ayrı kimlik referansları ComfyUI'ye yükleniyor…");
+    const [targetName, ...referenceNames] = await Promise.all([
       uploadComfyImage(base, targetBlob, "retake-target-face.png"),
-      uploadComfyImage(base, referencesBlob, "retake-identity-references.png")
+      ...referenceBlobs.map((blob, index) =>
+        uploadComfyImage(base, blob, `retake-identity-reference-${index + 1}.png`)
+      )
     ]);
 
     const workflowResponse = await fetch("./workflows/retake-flux-api.json", {
@@ -731,16 +732,17 @@ async function runNvidiaFaceEdit() {
     if (!workflowResponse.ok) throw new Error("Retake FLUX API iş akışı indirilemedi.");
     const workflow = await workflowResponse.json();
     workflow["191"].inputs.image = targetName;
-    workflow["192"].inputs.image = referencesName;
+    referenceNames.forEach((name, index) => {
+      workflow[String(192 + index)].inputs.image = name;
+    });
     workflow["6"].inputs.text = [
-      "The input is one composite image with two panels arranged side by side.",
-      "LEFT PANEL: This is the target portrait. Replace the person's facial identity with the identity shown in the RIGHT PANEL.",
-      "RIGHT PANEL: These are enlarged face crops of the same reference person from different photos and angles. Treat them as the authoritative source for facial identity.",
-      "Identity transfer is the primary task. Do not keep or reproduce the target person's original facial identity. Match the reference person's stable facial traits, including face shape, eyes, eyebrows, nose, lips, cheeks, jawline and age appearance.",
-      "Apply the new identity naturally to the target face while preserving the target's head pose, expression, gaze direction and camera angle.",
-      "Keep the target hairstyle, hairline, ears, neck, clothing, body, lighting, shadows and background unchanged. Do not copy hairstyles, clothing or backgrounds from the reference photos.",
-      "Use realistic anatomy, natural skin texture and photographic lighting. Do not edit the right panel, add people, add text or create a collage.",
-      "Return the complete two-panel composition in the original arrangement."
+      "Edit the single target portrait image. Four additional reference images are supplied separately as identity references through ReferenceLatent conditioning.",
+      "The target image is the only canvas to edit. The four reference images all show the same reference person and are authoritative identity sources, not additional people to place in the scene.",
+      "Completely replace the target person's facial identity with the identity shared by the four reference images. This is a full facial identity replacement, not a beauty retouch or a minor feature adjustment.",
+      "The new face must match the reference person's overall facial geometry and identity: forehead and temples, face width and shape, eyebrows, eyes and eyelids, nose bridge and tip, cheeks, lips and mouth, jawline, chin and apparent age.",
+      "Do not preserve the target person's original facial identity. Preserve only the target's head pose, camera angle, expression, gaze direction and natural lighting as compatible with the new identity.",
+      "Keep the target person's hairstyle, hairline, ears, neck, clothing, body and background unchanged. Do not copy hair, clothing, accessories or background from the reference images.",
+      "Create one photorealistic portrait image only. Do not create a collage, contact sheet, extra faces, additional people, text or panels."
     ].join(" ");
 
     workflow["31"].inputs.seed = Math.floor(Math.random() * 9007199254740000);
@@ -781,9 +783,9 @@ async function runNvidiaFaceEdit() {
     elements.outputStatus.textContent = "Yerel çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      `Referans yüzleri: ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} yakınlaştırıldı. FLUX.1-Kontext-dev bilgisayarındaki RTX A4000'de çalıştı; kimlik benzerliği garanti edilmez.`;
-    showToast(`Yerel FLUX çıktısı hazır · ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referans yüzü yakınlaştırıldı.`);
-    setRuntimeStatus(`Yerel FLUX · ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referans yüzü · sonuç hazır`);
+      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu; en net ${state.selectedReferenceCount}/${KONTEКT_REFERENCE_COUNT} yüz ayrı kimlik girdisi olarak kullanıldı. Kimlik benzerliği garanti edilmez.`;
+    showToast(`Yerel FLUX çıktısı hazır · ${state.selectedReferenceCount} ayrı kimlik referansı kullanıldı.`);
+    setRuntimeStatus(`Yerel FLUX · ${state.selectedReferenceCount} ayrı referans · sonuç hazır`);
   } catch (error) {
     console.error("Yerel ComfyUI FLUX işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";

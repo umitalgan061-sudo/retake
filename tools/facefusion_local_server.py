@@ -20,6 +20,32 @@ INFERENCE_LOCK = threading.Lock()
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v2"
+FACE_OCCLUDER_MODEL = "xseg_1"
+FACE_PARSER_MODEL = "bisenet_resnet_34"
+FACE_MASK_TYPES = ("box", "occlusion", "region")
+# Deliberately exclude "glasses" so target eyewear is preserved by the parser mask.
+FACE_MASK_REGIONS = (
+    "skin",
+    "left-eyebrow",
+    "right-eyebrow",
+    "left-eye",
+    "right-eye",
+    "nose",
+    "mouth",
+    "upper-lip",
+    "lower-lip"
+)
+
+
+def face_mask_cli_arguments() -> list[str]:
+    """Return FaceFusion 3.9.2 parser/occlusion mask arguments."""
+    return [
+        "--face-occluder-model", FACE_OCCLUDER_MODEL,
+        "--face-parser-model", FACE_PARSER_MODEL,
+        "--face-mask-types", *FACE_MASK_TYPES,
+        "--face-mask-regions", *FACE_MASK_REGIONS,
+        "--face-mask-blur", "0.30"
+    ]
 
 
 def image_extension(content_type: str, payload: bytes) -> str:
@@ -145,8 +171,7 @@ def run_facefusion(
         "--face-swapper-pixel-boost", pixel_boost,
         "--face-swapper-weight", "1.0",
         "--face-selector-mode", "one",
-        "--face-mask-types", "box",
-        "--face-mask-blur", "0.30",
+        *face_mask_cli_arguments(),
         "--execution-providers", "cuda",
         "--execution-device-ids", "0",
         "--output-image-quality", "100",
@@ -205,6 +230,7 @@ def run_with_memory_fallback(
 
 
 def blend_lower_face(
+    target_path: Path,
     identity_path: Path,
     appearance_path: Path,
     output_path: Path,
@@ -216,10 +242,14 @@ def blend_lower_face(
     except Exception as error:
         raise RuntimeError(f"Alt yüz harmanlama için OpenCV/NumPy yüklenemedi: {error}") from error
 
+    target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
     identity = cv2.imread(str(identity_path), cv2.IMREAD_COLOR)
     appearance = cv2.imread(str(appearance_path), cv2.IMREAD_COLOR)
-    if identity is None or appearance is None or identity.shape != appearance.shape:
-        raise RuntimeError("Kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor.")
+    if (
+        target is None or identity is None or appearance is None
+        or target.shape != identity.shape or target.shape != appearance.shape
+    ):
+        raise RuntimeError("Hedef, kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor.")
 
     height, width = identity.shape[:2]
     x = face_bounds["x"]
@@ -244,8 +274,22 @@ def blend_lower_face(
     alpha = np.clip(mask * 0.82, 0.0, 0.82)[:, :, None]
     blended = identity.astype(np.float32) * (1.0 - alpha) + appearance.astype(np.float32) * alpha
     result = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
-    if not cv2.imwrite(str(output_path), result):
-        raise RuntimeError("Hibrit yüz sonucu diske yazılamadı.")
+
+    # FaceFusion has already applied its parser + occlusion masks while pasting
+    # each pass back into the target crop. Derive a final alpha matte from the
+    # actual changed pixels so the browser can preserve every unchanged source
+    # pixel byte-for-byte instead of applying a large landmark ellipse.
+    pixel_delta = np.max(cv2.absdiff(result, target), axis=2)
+    changed = np.where(pixel_delta >= 2, 255, 0).astype(np.uint8)
+    matte_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    changed = cv2.morphologyEx(changed, cv2.MORPH_CLOSE, matte_kernel)
+    changed = cv2.dilate(changed, matte_kernel, iterations=1)
+    alpha = cv2.GaussianBlur(changed, (0, 0), 1.8)
+    rgba = cv2.cvtColor(result, cv2.COLOR_BGR2BGRA)
+    rgba[:, :, 3] = alpha
+
+    if not cv2.imwrite(str(output_path), rgba):
+        raise RuntimeError("Hibrit yüz sonucu ve semantik alfa maskesi diske yazılamadı.")
 
 
 class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
@@ -326,6 +370,10 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "identity_model": IDENTITY_MODEL,
             "appearance_model": APPEARANCE_MODEL,
             "pixel_boost": self.server.face_swapper_pixel_boost,  # type: ignore[attr-defined]
+            "face_mask_types": list(FACE_MASK_TYPES),
+            "face_parser_model": FACE_PARSER_MODEL,
+            "face_occluder_model": FACE_OCCLUDER_MODEL,
+            "face_mask_regions": list(FACE_MASK_REGIONS),
             "profile_references": MAX_REFERENCES,
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
@@ -430,6 +478,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
                 blend_lower_face(
+                    target_path,
                     identity_output,
                     appearance_output,
                     hybrid_output,

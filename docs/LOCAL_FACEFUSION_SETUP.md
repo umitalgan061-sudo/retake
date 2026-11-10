@@ -8,9 +8,10 @@ Bu sürüm, FLUX.1-Kontext-dev yerine FaceFusion 3.9.2 kullanır. FaceFusion yü
 - NVIDIA RTX A4000 16 GB VRAM
 - Anaconda veya Miniconda
 - Git for Windows
+- FFmpeg (kurulum betiği winget varsa otomatik kurmayı dener)
 - İnternet bağlantısı: ilk kurulum ve FaceFusion model ağırlıklarını indirmek için
 
-FaceFusion'ın yayımladığı donanım rehberinde 12 GB VRAM ve üzeri önerilir. RTX A4000 16 GB bu öneriyi karşılar; gerçek performans kullanılan yüz algılayıcı, model ve fotoğraf boyutuna bağlıdır.
+FaceFusion'ın Windows kurulum yönergeleri Git, Conda ve FFmpeg gerektirir. Kurulum betiği FFmpeg'i winget ile kurmayı dener. Resmî Windows yönergeleri için https://docs.facefusion.io/installation/platform/windows adresine bak. FaceFusion'ın yayımladığı donanım rehberinde 12 GB VRAM ve üzeri önerilir. RTX A4000 16 GB bu öneriyi karşılar; gerçek performans kullanılan yüz algılayıcı, model ve fotoğraf boyutuna bağlıdır.
 
 ## 1. Kurulumu yap
 

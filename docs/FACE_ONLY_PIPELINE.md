@@ -60,9 +60,11 @@ Referans fotoğrafları yalnızca tek yüz içerme kontrolünden geçmekle kalma
 
 Sınır kutusu tek başına yeterli değildir. Piksel-seviyesinde semantik yüz maskesi ve örtücü algısı gerekir.
 
-Mevcut NVIDIA deneysel web akışında maske, hedef yüz landmark sınırından türetilen yumuşak elipstir. Semantik face parser/occlusion detector henüz bağlanmadı.
+Yerel FaceFusion hibrit akışında iki geçiş de FaceFusion'ın kendi maske hattını kullanır: `box + occlusion + region`. Örtücü modeli `xseg_1`, parser modeli `bisenet_resnet_34` olarak sabitlenmiştir. Parser; skin, göz, kaş, burun, ağız ve dudak bölgelerini seçer. `glasses` bölgesi özellikle seçilmez; hedef fotoğraftaki gözlüğün değiştirme maskesinin dışında kalması amaçlanır. XSeg occlusion maskesi el veya yüzün önündeki nesneleri korumaya yardımcı olur.
 
-Maske yaklaşık yüz derisi, göz, burun, ağız ve çene çevresini kapsar. Elips saç tellerini, gözlük camını/çerçevesini veya yüzü örten eli semantik olarak ayırt edemez. Bu nedenle maske sınırı kontrollü tutulur ve sonuç kullanıcı tarafından incelenir.
+FaceFusion 3.9.2 CLI, maskeleri `--face-mask-types box occlusion region` biçiminde ayrı argümanlar olarak alır; `box,occlusion` biçiminde virgülle tek değer verilmez. FaceFusion headless CLI ayrı bir maske dosyası döndürmediğinden Retake, iki geçişin son hibrit çıktısını hedef crop ile karşılaştırır ve gerçek değişen piksellerden yumuşak PNG alfa matı üretir. Tarayıcı bu alfa matını kullanarak sadece değişmiş alanları tam çözünürlüklü orijinal fotoğrafa uygular. Alfa 0 olan her piksel orijinalden byte-byte kopyalanır.
+
+Bu yaklaşım semantik korumayı iyileştirir; ancak XSeg ve BiSeNet kusursuz değildir. Çok ince saç telleri, şeffaf gözlük camı, karmaşık el/aksesuar örtüşmeleri ve maske sınırları kullanıcı tarafından incelenmelidir.
 
 Korunması hedeflenen bölgeler:
 - saç, saç çizgisinin yüz dışında kalan bölümü ve saç telleri;

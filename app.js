@@ -15,7 +15,7 @@ import {
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
-import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
+import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import { createReferenceSetKey, getCachedProfile, saveCachedProfile } from "./src/profile-storage.js";
 
@@ -791,7 +791,13 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
     0, 0, crop.width, crop.height
   );
   const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
-  const alphaMask = createFaceAlphaMask(crop.width, crop.height, crop.face);
+  const parserAlphaMask = alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
+  const hasTransparentPixels = parserAlphaMask.some((alpha) => alpha < 0.999);
+  // New local FaceFusion server embeds its parser/occlusion-derived change matte
+  // in PNG alpha. Retain the ellipse only as a backward-compatible fallback.
+  const alphaMask = hasTransparentPixels
+    ? parserAlphaMask
+    : createFaceAlphaMask(crop.width, crop.height, crop.face);
   const blended = compositeMaskedRGBA(
     sourceCrop.data,
     generatedCrop.data,
@@ -916,7 +922,7 @@ async function runFaceFusionEdit() {
     elements.outputStatus.textContent = "Yerel hibrit çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla tek kişisel profile katıldı (toplam ağırlık: ${totalProfileWeight}). AlphaFace kimlik geçişi ve UniFace görünüm geçişi alt yüz bölgesinde harmanlandı. Kimlik ve sakal aktarım kalitesi referansların görünürlüğüne bağlıdır.`;
+      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla tek kişisel profile katıldı (toplam ağırlık: ${totalProfileWeight}). AlphaFace kimlik ve UniFace görünüm geçişleri FaceFusion parser/occlusion maskeleriyle işlendi; PNG alfa maskesi gerçek değişen piksellerden türetildi. Maske dışındaki kaynak pikseller korunur.`;
     showToast(`Hibrit kişisel profil hazır · ${profileCount} referans harmanlandı.`);
     setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
   } catch (error) {

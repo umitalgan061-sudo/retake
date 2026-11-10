@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
+import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
 
 test("copies every pixel outside the face mask byte-for-byte", () => {
   const source = new Uint8Array([
@@ -66,4 +66,20 @@ test("accepts ImageData-style clamped pixel buffers", () => {
   const output = compositeMaskedRGBA(source, generated, new Float32Array([0]), 1, 1);
   assert.ok(output instanceof Uint8ClampedArray);
   assert.deepEqual(Array.from(output), Array.from(source));
+});
+
+test("extracts FaceFusion PNG alpha matte as a normalized mask", () => {
+  const rgba = new Uint8ClampedArray([
+    200, 10, 20, 0,
+    100, 110, 120, 128,
+    30, 40, 50, 255
+  ]);
+  const mask = alphaMaskFromRGBA(rgba, 3, 1);
+  assert.equal(mask[0], 0);
+  assert.ok(Math.abs(mask[1] - 128 / 255) < 1e-7);
+  assert.equal(mask[2], 1);
+});
+
+test("rejects an invalid RGBA alpha matte", () => {
+  assert.throws(() => alphaMaskFromRGBA(new Uint8Array([0, 0, 0]), 1, 1), /width \* height \* 4/);
 });

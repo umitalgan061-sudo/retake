@@ -85,3 +85,22 @@ export function inspectOutsideMaskIntegrity(sourceRGBA, outputRGBA, alphaMask, w
 
   return { ok: changedPixels === 0, changedPixels };
 }
+/**
+ * Extract a normalized alpha mask from an RGBA image.
+ * Transparent pixels are preserved from the original source during compositing.
+ */
+export function alphaMaskFromRGBA(rgba, width, height) {
+  const expectedPixels = width * height;
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new TypeError("width and height must be positive integers");
+  }
+  if (!isByteArray(rgba) || rgba.length !== expectedPixels * CHANNELS) {
+    throw new TypeError("rgba must contain width * height * 4 channels");
+  }
+
+  const mask = new Float32Array(expectedPixels);
+  for (let pixel = 0; pixel < expectedPixels; pixel += 1) {
+    mask[pixel] = rgba[pixel * CHANNELS + 3] / 255;
+  }
+  return mask;
+}

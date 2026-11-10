@@ -39,7 +39,10 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Face swapper weight: 1.0.
 - Execution provider: cuda, device 0.
 - Face selector: one.
-- Face mask: box.
+- Face mask types: `box`, `occlusion`, `region`.
+- Face occluder: `xseg_1`; face parser: `bisenet_resnet_34`.
+- Parser regions: skin, eyebrows, eyes, nose, mouth and lips; `glasses` is intentionally excluded to preserve target eyewear.
+- Final PNG includes an alpha matte derived from pixels actually changed by the two FaceFusion passes. The browser uses this matte instead of the old broad ellipse when available.
 
 Lisanslar model bazında değerlendirilmelidir. FaceFusion kataloğunda alphaface_256 Non-Commercial, uniface_256 ise Unknown lisans durumuyla listelenir. Ticari kullanım hakkı olduğunu varsayma; model ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 

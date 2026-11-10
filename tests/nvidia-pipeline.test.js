@@ -35,6 +35,8 @@ test("creates a soft elliptical face mask and leaves distant pixels untouched", 
   assert.equal(center, 1);
   assert.equal(outside, 0);
   assert.ok(mask.some((alpha) => alpha > 0 && alpha < 1));
+  // Preserve generated pixels below the detected chin so beard detail is not clipped.
+  assert.ok(mask[98 * 100 + 50] > 0);
 });
 
 test("prompt explicitly distinguishes target and twenty-five identity references", () => {

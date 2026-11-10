@@ -1,6 +1,6 @@
 # Retake — Yerel FaceFusion kurulumu (Windows)
 
-Bu sürüm, FLUX.1-Kontext-dev yerine FaceFusion 3.9.2 kullanır. FaceFusion yüz değiştirme için tasarlanmış bir işlem hattıdır. Retake, 25 referans fotoğrafından yüz bulunanların tamamını FaceFusion'a ayrı kaynak görüntüler olarak verir. FaceFusion kaynak kimlik temsillerini ortalar; bu işlem kişiye özel model eğitimi veya fine-tuning değildir.
+Bu sürüm, FLUX.1-Kontext-dev yerine FaceFusion 3.9.2 kullanır. Retake, 25 referans fotoğrafından yüz bulunanları ayrı kaynaklar olarak gönderir. Varsayılan `uniface_256` görünüm odaklı modeldir: ilk kaynak fotoğrafını doğrudan görsel girdi olarak kullanır. Arayüzde sakal/bıyığın en belirgin olduğu fotoğrafı **Ana görünüm** olarak seç; uygulama bu fotoğrafı ilk sıraya koyar. `alphaface_256` alternatifi kaynak yüz kimlik gömmelerini ortalar. Bu yaklaşımların hiçbiri kişiye özel model eğitimi veya fine-tuning değildir.
 
 ## Sistem
 
@@ -35,25 +35,35 @@ Kurulum başarısız olursa hata veren son komutu ve terminaldeki son 30 satır�
 
 ## 2. Model ve lisans
 
-İlk yüz değiştirme işlemi sırasında FaceFusion gerekli model ağırlıklarını indirebilir. Retake şu başlangıç ayarını kullanır:
+İlk yüz değiştirme işlemi sırasında FaceFusion gerekli model ağırlıklarını indirebilir. Retake varsayılan olarak şu görünüm odaklı ayarı kullanır:
 
-- Face swapper: `alphaface_256`
-- Pixel boost: `512x512`
+- Face swapper: `uniface_256` (ana görünüm fotoğrafını görsel kaynak olarak kullanır)
+- Pixel boost: `768x768`
 - Swap weight: `1.0`
 - Execution provider: `cuda`
 - Device: `0`
 - Face selector: `one`
 - Face mask: `box`
 
-**Lisans:** FaceFusion kaynak kodu ve model ağırlıkları ayrı lisanslara sahiptir. `alphaface_256` modelinin FaceFusion model kataloğundaki lisansı Non-Commercial olarak belirtilmiştir. Bu yapılandırmayı kişisel/ticari olmayan kullanım için değerlendir; ürünü ücretli/ticari hizmete dönüştürmeden önce tüm model ve yardımcı ağırlıklarının lisanslarını tek tek doğrula. HyperSwap gibi ResearchRAIL lisanslı modeller bu yapılandırmada kullanılmaz.
+**Lisans:** FaceFusion kaynak kodu ve model ağırlıkları ayrı lisanslara sahiptir. `uniface_256` FaceFusion model kataloğunda `Unknown` lisansıyla listelenir; bu nedenle kullanım hakkı net kabul edilmemelidir. `alphaface_256` ve `blendswap_256` Non-Commercial olarak listelenir. Kişisel/ticari olmayan kullanım dışına çıkmadan önce her modelin lisansını ve kaynak koşullarını tek tek doğrula.
 
-## 3. Yerel servisi çalıştır
+## 3. Ana görünüm fotoğrafını seç ve yerel servisi çalıştır
+
+Web arayüzündeki referans kartlarında sakal/bıyığın en net göründüğü, yüzü kapalı olmayan ve mümkünse önden/üç çeyrek açıyla çekilmiş fotoğrafın altındaki **Ana görünüm seç** düğmesine bas. UniFace bu ilk kaynak görselinden sakal, bıyık ve yüz dokusu gibi görünüş ipuçlarını alır; diğer fotoğrafların tamamı aynı işleme gönderilse de UniFace bunları birleştirip yeni bir kişisel model eğitmez.
 
 FaceFusion kurulumu bittikten sonra Retake deposundaki PowerShell'den:
 
 ```powershell
 .\\tools\\start_facefusion_retake.ps1
 ```
+
+Bu komut `uniface_256` ve `768x768` ile başlar. Kimlik öncelikli eski AlphaFace davranışına dönmek için:
+
+```powershell
+.\\tools\\start_facefusion_retake.ps1 -FaceSwapperModel alphaface_256 -FaceSwapperPixelBoost 512x512
+```
+
+UniFace modelinin ağırlıkları ilk çalıştırmada indirilebilir. Pixel boost seçenekleri `512x512`, `768x768` ve `1024x1024` değerleridir; daha yüksek değer daha fazla süre/VRAM gerektirir.
 
 Servis `http://127.0.0.1:8765` adresinde çalışır ve **yalnızca bilgisayarın loopback arayüzünü** dinler. Modemden port yönlendirme yapma, Windows güvenlik duvarında bu portu genel ağa açma. PowerShell penceresini işlem boyunca açık bırak.
 
@@ -81,12 +91,14 @@ http://127.0.0.1:8765/health
 - MediaPipe tarayıcıda hedef yüzü ve referans yüzleri algılar.
 - Her referans fotoğrafında en büyük yüz bölgesi kırpılır.
 - 10–25 referans fotoğrafı yerel FaceFusion servisine ayrı dosyalar olarak aktarılır.
-- FaceFusion her kaynak fotoğrafta yüz kimlik temsili çıkarır ve kaynak kimliğini ortalama temsil ile birleştirir.
-- FaceFusion, hedef yüz crop'una `alphaface_256` uygular.
+- Retake seçili ana görünüm fotoğrafını kaynak listesinin ilk sırasına yerleştirir.
+- Varsayılan `uniface_256`, ilk kaynak fotoğrafın yüz görünümünü doğrudan girdi olarak kullanır; bu, sakal/bıyık gibi görsel özelliklerin aktarılmasını deneyen görünüm odaklı yoldur.
+- `alphaface_256` seçildiğinde kaynak yüz kimlik gömmeleri ortalanır; sakal/bıyık dokusu doğrudan taşınmayabilir.
+- FaceFusion, hedef yüz crop'una seçili swapper modelini ve `768x768` pixel boost ayarını uygular.
 - Retake tek portre sonucu alır ve mevcut yüz maskesiyle orijinal fotoğrafa geri birleştirir.
 - Maske dışındaki piksellerin orijinalle aynı olması kontrol edilir.
 
-FaceFusion çoklu kaynak görüntülerini bir kimlik ortalamasında birleştirir; **bu işlem Apple Retake'teki gibi kişiye özel üretken model eğitimi değildir.** Apple'ın iç mimarisi açıklanmadığı için birebir aynılık iddiasında bulunmuyoruz. Kimlik benzerliği hedeflenir ama garanti edilmez.
+UniFace'de ana görünüm fotoğrafı görsel kaynak olarak kullanılır; AlphaFace'de kaynak yüz gömmeleri ortalanır. **Bu işlem Apple Retake'teki gibi kişiye özel üretken model eğitimi değildir.** Apple'ın iç mimarisi açıklanmadığı için birebir aynılık iddiasında bulunmuyoruz. Kimlik benzerliği ve yüz kıllarının aktarımı hedeflenir ama garanti edilmez.
 
 ## 6. Sorun giderme
 

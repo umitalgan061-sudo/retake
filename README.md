@@ -4,14 +4,16 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 ## Mevcut web motoru
 
-- Yerel FaceFusion `3.9.2` + `alphaface_256` yüz değiştirme modeli.
+- Yerel FaceFusion `3.9.2` + `uniface_256` görünüm odaklı yüz değiştirme modeli (alternatif: `alphaface_256`).
+- Ana görünüm referansı arayüzde kullanıcı tarafından seçilir; UniFace için sakal/bıyığın en net göründüğü fotoğraf ilk kaynak görüntü olur.
+- Pixel boost varsayılanı `768x768`; daha yüksek ayrıntı için işlem süresini ve VRAM kullanımını artırır.
 - 25 referans fotoğrafına kadar havuz; yüzü bulunan en az 10 fotoğrafın tamamı tek kimlik temsiline katılır.
 - Referans kaynakları FaceFusion'a ayrı görseller olarak gönderilir; kolaj oluşturulmaz.
 - RTX GPU üzerinde CUDA ile çıkarım; NVIDIA hosted API, Firebase Functions veya ücretli inference API kullanılmaz.
 - Retake, tek yüz sonucu orijinal fotoğrafa maskeli olarak birleştirir ve maske dışındaki pikseller için bütünlük kontrolü yapar.
 - Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde dinler.
 
-**Apple Retake ile aynı model değildir.** FaceFusion çoklu kaynak yüz kimlik temsillerinin ortalamasını alır; kişiye özel diffusion model eğitimi/fine-tuning yapmaz. Kimlik benzerliği, saç/aksesuar uyumu ve her fotoğraftaki kalite garanti edilmez. İlk denemelerde sonucu kullanıcı kontrol etmelidir.
+**Apple Retake ile aynı model değildir.** UniFace, seçili ana görünüm fotoğrafını görsel kaynak olarak işler; bu nedenle sakal/bıyık ve yüz dokusu açısından en belirgin fotoğraf ana referans yapılmalıdır. AlphaFace alternatifi çoklu kaynak kimlik gömmelerini ortalar. Her iki yaklaşım da kişiye özel diffusion modeli eğitimi/fine-tuning yapmaz; kimlik benzerliği ve sakal aktarımı garanti edilmez. `uniface_256` modelinin FaceFusion kataloğundaki lisans durumu Unknown olarak listelenir; kullanım öncesi lisans koşullarını ayrıca doğrula.
 
 ## Windows kurulumu
 

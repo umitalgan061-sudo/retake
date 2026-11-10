@@ -17,6 +17,7 @@ import {
 } from "./src/nvidia-pipeline.js";
 import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
+import { createReferenceSetKey, getCachedProfile, saveCachedProfile } from "./src/profile-storage.js";
 
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
@@ -62,6 +63,7 @@ const state = {
   target: null,
   references: [],
   identityProfile: null,
+  referenceSetKey: null,
   referencesLoading: false,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
@@ -375,6 +377,7 @@ function renderReferences() {
 async function loadLocalReferences({ force = false } = {}) {
   const token = ++state.referenceLoadToken;
   state.identityProfile = null;
+  state.referenceSetKey = null;
   state.referencesLoading = true;
   state.referenceLoadError = null;
   state.references.forEach((reference) => {
@@ -411,7 +414,7 @@ async function loadLocalReferences({ force = false } = {}) {
       }
 
       const loaded = await loadImage(blob);
-      return { ...reference, status: "ready", url: loaded.url, image: loaded.image, size: blob.size };
+      return { ...reference, status: "ready", url: loaded.url, image: loaded.image, blob, size: blob.size };
     }));
 
     if (token !== state.referenceLoadToken) {
@@ -424,8 +427,16 @@ async function loadLocalReferences({ force = false } = {}) {
     state.references = results.map((result, index) => result.status === "fulfilled"
       ? result.value
       : ({ ...references[index], status: "error", error: result.reason?.message || "Görsel açılamadı." }));
-    const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
-      const failedCount = MAX_REFERENCE_FACES - loadedCount;
+    const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.blob);
+    const loadedCount = readyReferences.length;
+    const failedCount = MAX_REFERENCE_FACES - loadedCount;
+    if (loadedCount === MAX_REFERENCE_FACES) {
+      try {
+        state.referenceSetKey = await createReferenceSetKey(readyReferences);
+      } catch (error) {
+        console.warn("Referans profil anahtarı oluşturulamadı; bu oturumda profil bellekte tutulacak.", error);
+      }
+    }
     state.referencesLoading = false;
     state.referenceLoadError = failedCount
       ? `${loadedCount}/${MAX_REFERENCE_FACES} görsel yüklendi; ${failedCount} dosyayı manifest ve dosya adıyla karşılaştır.`
@@ -629,8 +640,10 @@ function createAppearanceProfile(candidates) {
   };
 }
 
-function buildLocalFaceFusionInputs() {
-  const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
+async function buildLocalFaceFusionInputs() {
+  const readyReferences = state.references.filter(
+    (reference) => reference.status === "ready" && reference.image && reference.blob
+  );
   if (readyReferences.length !== MAX_REFERENCE_FACES) {
     throw new Error(`İşlem için ${MAX_REFERENCE_FACES} yerel referansın tamamı yüklenmiş olmalı.`);
   }
@@ -656,47 +669,85 @@ function buildLocalFaceFusionInputs() {
     0, 0, targetCanvas.width, targetCanvas.height
   );
 
-  if (!state.identityProfile || state.identityProfile.token !== state.referenceLoadToken) {
-    const candidates = [];
-    let failedReferenceCrops = 0;
-    readyReferences.forEach((reference) => {
-      try {
-        const candidate = createReferenceFaceInput(reference);
-        if (candidate) candidates.push(candidate);
-        else failedReferenceCrops += 1;
-      } catch (error) {
-        failedReferenceCrops += 1;
-        console.warn("Referans yüz profili hazırlanamadı:", reference.name, error);
-      }
-    });
+  const profileKey = state.referenceSetKey || await createReferenceSetKey(readyReferences);
+  if (!state.identityProfile || state.identityProfile.key !== profileKey) {
+    const cached = await getCachedProfile(profileKey);
+    const cachedIsValid = cached &&
+      Array.isArray(cached.referenceBlobs) &&
+      cached.referenceBlobs.length >= MIN_FACEFUSION_REFERENCE_COUNT &&
+      cached.referenceBlobs.length <= MAX_REFERENCE_FACES &&
+      cached.referenceBlobs.every((blob) => blob instanceof Blob && blob.size > 0) &&
+      cached.appearanceProfileBlob instanceof Blob &&
+      cached.appearanceProfileBlob.size > 0 &&
+      Array.isArray(cached.weights) &&
+      cached.weights.length === cached.referenceBlobs.length;
 
-    if (candidates.length < MIN_FACEFUSION_REFERENCE_COUNT) {
-      throw new Error(
-        `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${candidates.length} yüz bulundu.`
+    if (cachedIsValid) {
+      state.identityProfile = {
+        key: profileKey,
+        token: state.referenceLoadToken,
+        referenceBlobs: cached.referenceBlobs,
+        weights: cached.weights,
+        appearanceProfileBlob: cached.appearanceProfileBlob,
+        validCount: cached.validCount,
+        totalWeight: cached.totalWeight
+      };
+      showToast(`Kayıtlı kişisel yüz profili yüklendi · ${cached.validCount}/${MAX_REFERENCE_FACES} referans.`);
+    } else {
+      const candidates = [];
+      let failedReferenceCrops = 0;
+      readyReferences.forEach((reference) => {
+        try {
+          const candidate = createReferenceFaceInput(reference);
+          if (candidate) candidates.push(candidate);
+          else failedReferenceCrops += 1;
+        } catch (error) {
+          failedReferenceCrops += 1;
+          console.warn("Referans yüz profili hazırlanamadı:", reference.name, error);
+        }
+      });
+
+      if (candidates.length < MIN_FACEFUSION_REFERENCE_COUNT) {
+        throw new Error(
+          `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${candidates.length} yüz bulundu.`
+        );
+      }
+
+      const appearance = createAppearanceProfile(candidates);
+      const [referenceBlobs, appearanceProfileBlob] = await Promise.all([
+        Promise.all(candidates.map((candidate) => canvasToBlob(candidate.canvas))),
+        canvasToBlob(appearance.canvas)
+      ]);
+      const profile = {
+        referenceBlobs,
+        weights: appearance.weights,
+        appearanceProfileBlob,
+        validCount: appearance.validCount,
+        totalWeight: appearance.totalWeight
+      };
+      state.identityProfile = {
+        key: profileKey,
+        token: state.referenceLoadToken,
+        ...profile
+      };
+      const persisted = await saveCachedProfile(profileKey, profile);
+      state.referenceFaceCropCount = appearance.validCount;
+      state.selectedReferenceCount = appearance.validCount;
+      if (failedReferenceCrops > 0) {
+        console.warn(`${failedReferenceCrops} referans fotoğrafında yüz profili oluşturulamadı.`);
+      }
+      renderReferences();
+      showToast(
+        persisted
+          ? `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf harmanlandı · profil bu tarayıcıya kaydedildi.`
+          : `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf harmanlandı · profil bu oturumda hazır.`
       );
     }
-
-    const appearance = createAppearanceProfile(candidates);
-    state.identityProfile = {
-      token: state.referenceLoadToken,
-      referenceCanvases: candidates.map((candidate) => candidate.canvas),
-      weights: appearance.weights,
-      appearanceCanvas: appearance.canvas,
-      validCount: appearance.validCount,
-      totalWeight: appearance.totalWeight
-    };
-    state.referenceFaceCropCount = appearance.validCount;
-    state.selectedReferenceCount = appearance.validCount;
-    if (failedReferenceCrops > 0) {
-      console.warn(`${failedReferenceCrops} referans fotoğrafında yüz profili oluşturulamadı.`);
-    }
-    renderReferences();
-    showToast(
-      `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf hizalandı · ağırlıklı kişisel yüz profili oluşturuldu.`
-    );
   }
 
   const profile = state.identityProfile;
+  state.referenceFaceCropCount = profile.validCount;
+  state.selectedReferenceCount = profile.validCount;
   const faceBounds = {
     x: crop.face.x * FACEFUSION_TARGET_WIDTH / crop.width,
     y: crop.face.y * FACEFUSION_TARGET_HEIGHT / crop.height,
@@ -706,9 +757,9 @@ function buildLocalFaceFusionInputs() {
 
   return {
     targetCanvas,
-    referenceCanvases: profile.referenceCanvases,
+    referenceBlobs: profile.referenceBlobs,
     referenceWeights: profile.weights,
-    appearanceProfileCanvas: profile.appearanceCanvas,
+    appearanceProfileBlob: profile.appearanceProfileBlob,
     profileCount: profile.validCount,
     totalProfileWeight: profile.totalWeight,
     faceBounds,
@@ -814,23 +865,19 @@ async function runFaceFusionEdit() {
     const base = localFaceFusionBase();
     const {
       targetCanvas,
-      referenceCanvases,
+      referenceBlobs,
       referenceWeights,
-      appearanceProfileCanvas,
+      appearanceProfileBlob,
       profileCount,
       totalProfileWeight,
       faceBounds,
       crop
-    } = buildLocalFaceFusionInputs();
-    const [targetBlob, profileBlob, ...referenceBlobs] = await Promise.all([
-      canvasToBlob(targetCanvas),
-      canvasToBlob(appearanceProfileCanvas),
-      ...referenceCanvases.map((canvas) => canvasToBlob(canvas))
-    ]);
+    } = await buildLocalFaceFusionInputs();
+    const targetBlob = await canvasToBlob(targetCanvas);
 
     const form = new FormData();
     form.append("target", targetBlob, "retake-target.png");
-    form.append("appearance_profile", profileBlob, "retake-25-photo-appearance-profile.png");
+    form.append("appearance_profile", appearanceProfileBlob, "retake-25-photo-appearance-profile.png");
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });

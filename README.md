@@ -6,7 +6,10 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 - Yerel FaceFusion `3.9.2` ile iki geçişli hibrit motor: kimlik için `alphaface_256`, görünüm/sakal için `uniface_256`.
 - 25 fotoğrafın tamamı ortak göz koordinatına hizalanır ve netlik, açı, yüz alanı, ışık ölçütlerine göre ağırlık alır. 478 noktalı FaceLandmarker başarısız olursa BlazeFace'in altı anahtar noktalı yedek hizalaması kullanılır; yedek hizalamaların ağırlığı en fazla 2'dir.
-- Pixel boost varsayılanı `768x768`; daha yüksek ayrıntı için işlem süresini ve VRAM kullanımını artırır.
+- Pixel boost ilk denemesi `1024x1024`; CUDA bellek hatasında `768x768`, ardından `512x512` denenir. Bu yüz crop inference ölçeğidir, native çıktı büyütme değildir.
+- FaceFusion ArcFace ONNX ile 25 crop için medoid/medyan tutarlılık taraması yapılır; güçlü aykırı referansların kimlik oyu 1'e düşürülür.
+- UniFace'tan alt yüze düşük güçlü yüksek frekanslı ayrıntı aktarılır; AlphaFace geometrisi baskın kalır.
+- GFPGAN 1.4 son iyileştirmesi isteğe bağlıdır ve varsayılan kapalıdır.
 - Tüm geçerli referanslardan ağırlıklı kimlik gömmesi ortalaması ve ağırlıklı hizalanmış piksel görünüm profili oluşturulur.
 - Profilin kırpılmış referansları ve hizalanmış görünüm görseli tarayıcı IndexedDB alanında cihazda saklanır; aynı referans kümesiyle sayfa yenilendiğinde tekrar hizalama yapılmaz.
 - AlphaFace geçişi tüm referanslardan ağırlıklı kimlik ortalaması alır; UniFace geçişi 25 fotoğrafın tamamından oluşan tek hizalı görünüm profiliyle çalışır.
@@ -46,7 +49,7 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - `index.html` statik web arayüzüdür.
 - MediaPipe, tarayıcıda hedef ve referans fotoğraflarındaki yüzleri algılar; profil aynı sekmede bir kez oluşturulup sonraki hedeflerde bellekte yeniden kullanılır.
 - Her referans önce FaceLandmarker, gerekirse BlazeFace kısa menzil ve tam menzil modelleriyle yeniden algılanır. Bir fotoğraf yine de hizalanamazsa işlem durur ve dosya adı gösterilir; 19/25 gibi eksik bir profille devam edilmez.
-- Hedef yüz crop'u, 25 referansın tamamından alınan yüz crop'ları, ağırlıklar ve hizalanmış profil aynı bilgisayardaki FaceFusion servisine gönderilir.
+- Hedef yüz crop'u, 25 referansın tamamından alınan yüz crop'ları, ağırlıklar ve hizalanmış profil aynı bilgisayardaki FaceFusion servisine gönderilir. Sunucu bu crop'ların ArcFace tutarlılık raporunu da çıkarır.
 - AlphaFace ve UniFace sonuçları tek hibrit yüze birleştirilir; alt yüz bölgesinde sakal/bıyık görünümü desteklenir. Sonuç hedefe maske ile uygulanır ve maske dışı piksel bütünlüğü kontrol edilir.
 - İlk kez açarken tarayıcı `retake06.web.app` için yerel ağ erişimi isterse izin verilmelidir.
 

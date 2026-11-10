@@ -25,7 +25,7 @@
   "31": {
     "inputs": {
       "seed": 248601223384623,
-      "steps": 20,
+      "steps": 24,
       "cfg": 1,
       "sampler_name": "euler",
       "scheduler": "simple",
@@ -51,9 +51,9 @@
   },
   "35": {
     "inputs": {
-      "guidance": 2.5,
+      "guidance": 3,
       "conditioning": [
-        "177",
+        "207",
         0
       ]
     },
@@ -77,7 +77,7 @@
   "42": {
     "inputs": {
       "image": [
-        "146",
+        "191",
         0
       ]
     },
@@ -115,32 +115,6 @@
     },
     "class_type": "SaveImage"
   },
-  "146": {
-    "inputs": {
-      "direction": "right",
-      "match_image_size": true,
-      "spacing_width": 0,
-      "spacing_color": "white",
-      "image1": [
-        "191",
-        0
-      ],
-      "image2": [
-        "192",
-        0
-      ]
-    },
-    "class_type": "ImageStitch"
-  },
-  "173": {
-    "inputs": {
-      "images": [
-        "42",
-        0
-      ]
-    },
-    "class_type": "PreviewImage"
-  },
   "177": {
     "inputs": {
       "conditioning": [
@@ -168,8 +142,166 @@
   },
   "192": {
     "inputs": {
-      "image": "references.png"
+      "image": "identity-reference-1.png"
     },
     "class_type": "LoadImage"
+  },
+  "193": {
+    "inputs": {
+      "image": "identity-reference-2.png"
+    },
+    "class_type": "LoadImage"
+  },
+  "194": {
+    "inputs": {
+      "image": "identity-reference-3.png"
+    },
+    "class_type": "LoadImage"
+  },
+  "195": {
+    "inputs": {
+      "image": "identity-reference-4.png"
+    },
+    "class_type": "LoadImage"
+  },
+  "196": {
+    "inputs": {
+      "image": [
+        "192",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale"
+  },
+  "197": {
+    "inputs": {
+      "image": [
+        "193",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale"
+  },
+  "198": {
+    "inputs": {
+      "image": [
+        "194",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale"
+  },
+  "199": {
+    "inputs": {
+      "image": [
+        "195",
+        0
+      ]
+    },
+    "class_type": "FluxKontextImageScale"
+  },
+  "200": {
+    "inputs": {
+      "pixels": [
+        "196",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "201": {
+    "inputs": {
+      "pixels": [
+        "197",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "202": {
+    "inputs": {
+      "pixels": [
+        "198",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "203": {
+    "inputs": {
+      "pixels": [
+        "199",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "204": {
+    "inputs": {
+      "conditioning": [
+        "177",
+        0
+      ],
+      "latent": [
+        "200",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
+  },
+  "205": {
+    "inputs": {
+      "conditioning": [
+        "204",
+        0
+      ],
+      "latent": [
+        "201",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
+  },
+  "206": {
+    "inputs": {
+      "conditioning": [
+        "205",
+        0
+      ],
+      "latent": [
+        "202",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
+  },
+  "207": {
+    "inputs": {
+      "conditioning": [
+        "206",
+        0
+      ],
+      "latent": [
+        "203",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
   }
 }

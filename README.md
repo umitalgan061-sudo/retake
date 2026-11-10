@@ -64,7 +64,7 @@ Diğer Hosting sitelerini güncellememek için `--only hosting:retake06` hedefin
 
 ## Gizlilik ve referans görselleri — önemli
 
-Yerel FaceFusion çıkarımı, hedef ve referans fotoğraflarının NVIDIA/başka bir AI bulut servisine gönderilmediği anlamına gelir. Ancak bu deponun önceki sürümlerinde `reference-faces/` içindeki 25 JPEG dosyası public GitHub deposuna eklenmiştir. Güncel depo ağacı veya Firebase Hosting bu fotoğrafları herkese açık sunabilir; geçmiş Git commit'lerinde de kalmış olabilir. Bu nedenle bu referans fotoğraflarını gizli kabul etme. Referansların yalnızca kullanıcının cihazından seçildiği ve IndexedDB/yerel disk üzerinde saklandığı profil yükleme aşaması ayrıca tamamlanmalıdır. Git geçmişinden fotoğraf silmek ayrı bir geçmiş temizleme işlemidir; yalnızca yeni commit'ten silmek eski commit'leri gizlemez.
+Yüz profili ve çıkarım yerel bilgisayarda yapılır; kırpılmış profil görselleri ve ağırlıklar tarayıcının IndexedDB alanında cihazda saklanır. Ancak 25 orijinal referans JPEG'i public GitHub deposunda ve Firebase Hosting alanında bulunabilir; eski Git commit'lerinde de kalmış olabilir. Yerel profil önbelleği bu kaynak fotoğrafları public olmaktan çıkarmaz. Bunları gizli kabul etme. Fotoğrafları public depodan çıkarmak ve Git geçmişini temizlemek ayrı bir güvenlik çalışmasıdır; yalnızca yeni commit'ten silmek geçmiş kopyaları ortadan kaldırmaz.
 
 Model ağırlıklarının lisansları farklıdır. FaceFusion kataloğunda `alphaface_256` Non-Commercial, `uniface_256` ise Unknown olarak listelenir. Ticari kullanım hakkı olduğunu varsayma; iki modelin ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 

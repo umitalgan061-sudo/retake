@@ -62,7 +62,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v2, identity_model=alphaface_256, appearance_model=uniface_256.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v3, identity_model=alphaface_256, appearance_model=uniface_256.
 
 ## 4. Retake'i çalıştır
 

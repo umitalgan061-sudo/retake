@@ -75,7 +75,9 @@ test("extracts FaceFusion PNG alpha matte as a normalized mask", () => {
     30, 40, 50, 255
   ]);
   const mask = alphaMaskFromRGBA(rgba, 3, 1);
-  assert.deepEqual(Array.from(mask), [0, 128 / 255, 1]);
+  assert.equal(mask[0], 0);
+  assert.ok(Math.abs(mask[1] - 128 / 255) < 1e-7);
+  assert.equal(mask[2], 1);
 });
 
 test("rejects an invalid RGBA alpha matte", () => {

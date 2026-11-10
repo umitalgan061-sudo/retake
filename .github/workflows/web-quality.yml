@@ -20,11 +20,6 @@ on:
       - "docs/LOCAL_FACEFUSION_SETUP.md"
       - "docs/LOCAL_COMFYUI_SETUP.md"
       - "README.md"
-      - "tools/facefusion_local_server.py"
-      - "tools/*.ps1"
-      - "docs/LOCAL_FACEFUSION_SETUP.md"
-      - "docs/LOCAL_COMFYUI_SETUP.md"
-      - "README.md"
       - ".github/workflows/web-quality.yml"
   push:
     branches: [main]
@@ -41,6 +36,11 @@ on:
       - "sw.js"
       - "package.json"
       - "tools/validate_assets.py"
+      - "tools/facefusion_local_server.py"
+      - "tools/*.ps1"
+      - "docs/LOCAL_FACEFUSION_SETUP.md"
+      - "docs/LOCAL_COMFYUI_SETUP.md"
+      - "README.md"
 
 concurrency:
   group: retake-web-\${{ github.event.pull_request.number || github.ref }}

@@ -15,7 +15,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 ## Windows kurulumu
 
-Gereksinimler: Windows 10/11, NVIDIA CUDA destekli GPU (bu geliştirme yapılandırması RTX A4000 16 GB), Conda ve Git.
+Gereksinimler: Windows 10/11, NVIDIA CUDA destekli GPU (bu geliştirme yapılandırması RTX A4000 16 GB), Conda, Git ve FFmpeg.
 
 PowerShell'de Retake deposunu açıp:
 

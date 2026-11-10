@@ -424,11 +424,7 @@ async function loadLocalReferences({ force = false } = {}) {
     state.references = results.map((result, index) => result.status === "fulfilled"
       ? result.value
       : ({ ...references[index], status: "error", error: result.reason?.message || "Görsel açılamadı." }));
-    const readyReferences = state.references.filter((reference) => reference.status === "ready");
-    if (!readyReferences.some((reference) => reference.file === state.primaryReferenceFile)) {
-      state.primaryReferenceFile = readyReferences[0]?.file ?? null;
-    }
-    const loadedCount = readyReferences.length;
+    const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
       const failedCount = MAX_REFERENCE_FACES - loadedCount;
     state.referencesLoading = false;
     state.referenceLoadError = failedCount

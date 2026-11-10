@@ -19,9 +19,10 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - FaceFusion XSeg occlusion + BiSeNet region parser maskeleri iki üretim geçişinde de aktiftir; gözlük sınıfı değiştirme maskesinin dışında tutulur.
 - FaceFusion 3.9.2'nin desteklediği yüz parser bölgeleri arasında saç sınıfı bulunmadığından saç stili kaynak fotoğraftan korunur; saç transferi bu motorda yapılmaz.
 - İlk sonuç ve sonraki alternatifler, alfa matını taşıyan yüz crop'una sınırlı affine oran düzeltmesi uygular: ilk denemede genişlik %2 daraltılır ve yükseklik %5 uzatılır; diğer üç alternatif doğal ya da daha uzun oranları dener. Efekt yüz merkezi çevresinde uygulanır, final fotoğrafın maske dışı pikselleri korunur.
+- Değişen yüzün alfa sınırı, yüz genişliğine göre 3–9 px Gaussian sigma ile yumuşatılır; yalnızca matın iç kısmına çok hafif keskinlik eklenir. Bu, keskin bir yapıştırma çizgisini azaltırken saç/arka plan ve maskenin dışındaki fotoğrafı korur.
 - "Yeniden oluştur" düğmesi dört sınırlı yüz/sakal/geometri dengesini sırayla dener; bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir. Fazla geometrik değişikliklerin gerçekçiliği bozabileceği için oran düzeltmesi en fazla %8 ile sınırlandırılmıştır.
 - Arayüz buzlu cam yüzeyleri ve temaya uyumlu uyarı/onay pencereleriyle hem açık hem koyu modda çalışır.
-- Son hibrit PNG, gerçek değişen piksellerden türetilmiş alfa matı taşır. Tarayıcı bu maskeyi kullanarak yalnızca değişen pikselleri orijinal fotoğrafa uygular.
+- Son hibrit PNG, gerçek değişen piksellerden türetilmiş, yüz sınırında yumuşatılmış alfa matı taşır. Tarayıcı bu maskeyi kullanarak yalnızca değişen pikselleri orijinal fotoğrafa uygular.
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
 

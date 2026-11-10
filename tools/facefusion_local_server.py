@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import subprocess
 import sys
 import tempfile
@@ -25,7 +26,7 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v4"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v5"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -34,6 +35,11 @@ FACE_ENHANCER_BLEND = 25
 FACE_ENHANCER_INTERNAL_BLEND = 100
 FACE_ENHANCER_WEIGHT = 0.25
 DETAIL_TRANSFER_STRENGTH = 0.20
+FACE_MATTE_FEATHER_RATIO = 0.035
+FACE_MATTE_FEATHER_MIN = 3.0
+FACE_MATTE_FEATHER_MAX = 9.0
+FACE_DETAIL_SHARPEN_RATIO = 0.008
+FACE_DETAIL_SHARPEN_STRENGTH = 0.14
 FACE_SWAP_VARIATIONS = (
     (1.00, 0.20, 0.98, 1.05),
     (0.94, 0.24, 1.00, 1.00),
@@ -133,6 +139,20 @@ def face_geometry_affine_matrix(
         [scale_x, 0.0, center_x * (1.0 - scale_x)],
         [0.0, scale_y, center_y * (1.0 - scale_y)]
     ]
+
+
+def face_matte_feather_sigma(face_width: float) -> float:
+    if (
+        isinstance(face_width, bool)
+        or not isinstance(face_width, (int, float))
+        or not math.isfinite(face_width)
+        or face_width <= 0
+    ):
+        raise ValueError("Yüz genişliği pozitif ve sonlu bir sayı olmalı.")
+    return min(
+        FACE_MATTE_FEATHER_MAX,
+        max(FACE_MATTE_FEATHER_MIN, face_width * FACE_MATTE_FEATHER_RATIO)
+    )
 
 
 def validate_reference_count(reference_count: int) -> None:
@@ -519,7 +539,22 @@ def blend_lower_face(
     matte_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     changed = cv2.morphologyEx(changed, cv2.MORPH_CLOSE, matte_kernel)
     changed = cv2.dilate(changed, matte_kernel, iterations=1)
-    alpha = cv2.GaussianBlur(changed, (0, 0), 1.8)
+    alpha = cv2.GaussianBlur(changed, (0, 0), face_matte_feather_sigma(face_width))
+
+    detail_sigma = max(0.8, min(2.0, face_width * FACE_DETAIL_SHARPEN_RATIO))
+    result_float = result.astype(np.float32)
+    low_frequency = cv2.GaussianBlur(result, (0, 0), detail_sigma).astype(np.float32)
+    detail = np.clip(result_float - low_frequency, -18.0, 18.0)
+    detail_core = np.clip(
+        (alpha.astype(np.float32) / 255.0 - 0.55) / 0.40,
+        0.0,
+        1.0
+    )[:, :, None]
+    result = np.clip(
+        np.rint(result_float + detail * detail_core * FACE_DETAIL_SHARPEN_STRENGTH),
+        0,
+        255
+    ).astype(np.uint8)
     rgba = cv2.cvtColor(result, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 

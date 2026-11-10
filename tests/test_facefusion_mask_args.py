@@ -15,8 +15,12 @@ from tools.facefusion_local_server import (
     FACE_ENHANCER_INTERNAL_BLEND,
     FACE_ENHANCER_MODEL,
     FACE_ENHANCER_WEIGHT,
+    FACE_DETAIL_SHARPEN_STRENGTH,
+    FACE_MATTE_FEATHER_MAX,
+    FACE_MATTE_FEATHER_MIN,
     adjust_face_geometry,
     face_geometry_affine_matrix,
+    face_matte_feather_sigma,
     run_facefusion,
 )
 
@@ -80,6 +84,16 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         self.assertAlmostEqual(matrix[0][2], 4.0)
         self.assertAlmostEqual(matrix[1][1], 1.05)
         self.assertAlmostEqual(matrix[1][2], -17.5)
+
+    def test_face_matte_feather_scales_with_face_and_stays_bounded(self):
+        self.assertEqual(face_matte_feather_sigma(40), FACE_MATTE_FEATHER_MIN)
+        self.assertAlmostEqual(face_matte_feather_sigma(160), 5.6)
+        self.assertEqual(face_matte_feather_sigma(400), FACE_MATTE_FEATHER_MAX)
+        self.assertGreater(FACE_DETAIL_SHARPEN_STRENGTH, 0)
+        self.assertLessEqual(FACE_DETAIL_SHARPEN_STRENGTH, 0.15)
+        for invalid_width in (0, -1, float("inf"), True):
+            with self.subTest(width=invalid_width), self.assertRaises(ValueError):
+                face_matte_feather_sigma(invalid_width)
 
     def test_face_geometry_moves_rgb_and_alpha_together_without_opaque_edges(self):
         cv2 = MagicMock()

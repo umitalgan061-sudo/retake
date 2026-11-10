@@ -64,7 +64,12 @@ APPLE, kimlik aktarımını hedef fotoğrafın poz, ifade, ışık ve cilt özel
 
 ## İfade / göz retarget adayı: LivePortrait
 
-LivePortrait proje sayfası göz ve dudak açıklığı retarget örnekleri verir. Bu, kapalı gözü doğal açma ve ifade düzeltme alt aşaması için teknik olarak anlamlıdır; fakat tek başına 20 referanstan kimlik aktaracak bir face swapper değildir. Resmî kurulum PyTorch ve önceden eğitilmiş ağırlık indirimi gerektirir; hazır iOS Core ML paketi doğrulanmamıştır.
+LivePortrait iki ayrı kullanım sunar:
+
+- **Tek fotoğraf retargeting:** Resmî Gradio uygulamasında tek kaynak fotoğrafı üzerinde hedef göz açıklığı, dudak açıklığı, kaş, gülümseme ve bakış yönü slider'ları bulunur. Kaynak fotoğrafın göz açıklığı otomatik ölçülür; kullanıcı hedef oranı ayarlayabilir. Bu yol, yüz değiştirme sonrasında kapalı gözü kontrollü biçimde açmak için araştırılabilir.
+- **Sürücü video oranını aktarma:** `flag_eye_retargeting` ve `flag_lip_retargeting` seçenekleri geliştirici tarafından “not recommend / WIP” olarak işaretlenmiştir. Bu video yolunu otomatik Retake hattına doğrudan bağlamak doğru değildir.
+
+LivePortrait tek başına 25 referanstan kimlik aktaran bir face swapper değildir; yalnızca ifade/göz/dudak düzeltme alt aşaması olabilir. Önce 25 referanslı kimlik ve semantik maske hattı kararlı hâle getirilmeli, ardından gözleri açık referanslardan hedef göz açıklığı için sağlam bir oran tahmini yapılmalı ve LivePortrait sadece gerektiğinde, isteğe bağlı bir post-process olarak çalıştırılmalıdır. Resmî kurulum PyTorch ve önceden eğitilmiş ağırlıklar gerektirir; ayrı Python/Conda ortamı tercih edilmelidir. Hazır iOS Core ML paketi doğrulanmamıştır. Kod MIT olsa da InsightFace tabanlı algılama ağırlıkları için ayrı lisans kontrolü gerekir.
 
 ## Yüz maskesi araştırması
 

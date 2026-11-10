@@ -12,12 +12,18 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "FaceFusion için FFmpeg kuruluyor..." -ForegroundColor Cyan
-        winget install -e --id Gyan.FFmpeg --version 7.0.2 --accept-source-agreements --accept-package-agreements
+        winget install -e --id Gyan.FFmpeg --source winget --accept-source-agreements --accept-package-agreements
         if ($LASTEXITCODE -ne 0) {
-            throw "FFmpeg kurulumu başarısız. Resmî FaceFusion Windows kurulumundaki FFmpeg adımını tamamla."
+            throw "FFmpeg kurulumu başarısız. Winget 'winget' kaynağında Gyan.FFmpeg paketini kuramadı."
         }
+
+        # WinGet may update the user or machine PATH after this PowerShell session started.
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        $env:Path = (@($machinePath, $userPath) -join ";")
+
         if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
-            throw "FFmpeg yüklendi ancak bu PowerShell oturumunun PATH değişkeni güncellenmedi. Terminali kapatıp yeniden aç, ardından betiği tekrar çalıştır."
+            throw "FFmpeg kuruldu ancak ffmpeg.exe PATH üzerinde bulunamadı. PowerShell'i tamamen kapatıp yeniden aç, ardından bu betiği tekrar çalıştır."
         }
     } else {
         throw "FFmpeg bulunamadı ve winget kullanılamıyor. Önce Gyan.FFmpeg kur, yeni PowerShell aç ve tekrar dene."

@@ -16,6 +16,7 @@ import {
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
 import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
+import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
@@ -60,7 +61,7 @@ const state = {
   detector: null,
   target: null,
   references: [],
-  primaryReferenceFile: null,
+  identityProfile: null,
   referencesLoading: false,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
@@ -145,13 +146,9 @@ async function checkFaceFusionStatus() {
   }
 
   if (state.faceFusionStatus.configured) {
-    const model = state.faceFusionStatus.model;
-    elements.engineTitle.textContent = model === "uniface_256"
-      ? "UniFace görünüm motoru hazır"
-      : (model === "blendswap_256" ? "BlendSwap görünüm motoru hazır" : "AlphaFace kimlik motoru hazır");
-    elements.engineDescription.textContent = ["uniface_256", "blendswap_256"].includes(model)
-      ? model + ", seçtiğin ana görünüm fotoğrafını doğrudan kaynak görsel olarak kullanır. Sakal ve bıyığın belirgin olduğu referansı ana görünüm olarak seç; RTX A4000 üzerinde " + (state.faceFusionStatus.pixelBoost || "768x768") + " pixel boost ile işlenir."
-      : "AlphaFace 256, referanslardan ortalama kimlik gömmesi oluşturur. Sakal ve bıyık gibi görünüş ayrıntıları doğrudan kaynak fotoğraf gibi kopyalanmayabilir.";
+    elements.engineTitle.textContent = "25 fotoğraflı kişisel profil motoru hazır";
+    elements.engineDescription.textContent =
+      "Tüm referanslar kalite ve açılarına göre hizalanıp ağırlıklı bir görünüm profiline dönüştürülür. AlphaFace kimlik profilini, UniFace ise harmanlanmış görünüm ve sakal ayrıntılarını işler.";
   } else {
     elements.engineTitle.textContent = "Yerel FaceFusion servisi bekleniyor";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
@@ -366,25 +363,7 @@ function renderReferences() {
       ? "YERELDE"
       : (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR");
 
-    const primaryButton = document.createElement("button");
-    primaryButton.type = "button";
-    primaryButton.className = "reference-primary-button";
-    const isPrimary = reference.file === state.primaryReferenceFile;
-    primaryButton.classList.toggle("is-selected", isPrimary);
-    primaryButton.textContent = isPrimary ? "ANA GÖRÜNÜM" : "Ana görünüm seç";
-    primaryButton.disabled = reference.status !== "ready";
-    primaryButton.setAttribute(
-      "aria-pressed",
-      isPrimary ? "true" : "false"
-    );
-    primaryButton.addEventListener("click", () => {
-      state.primaryReferenceFile = reference.file;
-      clearResult();
-      renderReferences();
-      showToast("Ana görünüm referansı seçildi. UniFace bu fotoğrafın yüz ve sakal görünümünü temel alacak.");
-    });
-
-    card.append(name, label, primaryButton);
+    card.append(name, label);
     elements.referencesGrid.append(card);
   });
 
@@ -395,6 +374,7 @@ function renderReferences() {
 
 async function loadLocalReferences({ force = false } = {}) {
   const token = ++state.referenceLoadToken;
+  state.identityProfile = null;
   state.referencesLoading = true;
   state.referenceLoadError = null;
   state.references.forEach((reference) => {
@@ -481,18 +461,119 @@ const FACEFUSION_REFERENCE_HEIGHT = 682;
 const FACEFUSION_TARGET_WIDTH = 784;
 const FACEFUSION_TARGET_HEIGHT = 1024;
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function measureAlignedReference(canvas, landmarks, face, sourceWidth, sourceHeight) {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  const { width, height } = canvas;
+  const imageData = context.getImageData(0, 0, width, height);
+  const data = imageData.data;
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  const nose = landmarks[1];
+  const eyeMidX = (leftEye.x + rightEye.x) / 2;
+  const eyeDistance = Math.hypot(
+    (rightEye.x - leftEye.x) * sourceWidth,
+    (rightEye.y - leftEye.y) * sourceHeight
+  );
+  const noseOffset = Math.abs(nose.x - eyeMidX) * sourceWidth;
+  const frontalness = clamp(1 - (noseOffset / Math.max(eyeDistance, 1)) / 0.34, 0.12, 1);
+  const faceAreaRatio = face.width * face.height;
+
+  let sumLuma = 0;
+  let sumLumaSquared = 0;
+  let laplacianSum = 0;
+  let laplacianSquared = 0;
+  let samples = 0;
+  const xMin = Math.floor(width * 0.16);
+  const xMax = Math.floor(width * 0.84);
+  const yMin = Math.floor(height * 0.16);
+  const yMax = Math.floor(height * 0.88);
+  const lumaAt = (x, y) => {
+    const offset = (y * width + x) * 4;
+    return data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
+  };
+
+  for (let y = yMin + 1; y < yMax - 1; y += 2) {
+    for (let x = xMin + 1; x < xMax - 1; x += 2) {
+      const luma = lumaAt(x, y);
+      sumLuma += luma;
+      sumLumaSquared += luma * luma;
+      const laplacian = 4 * luma - lumaAt(x - 1, y) - lumaAt(x + 1, y) -
+        lumaAt(x, y - 1) - lumaAt(x, y + 1);
+      laplacianSum += laplacian;
+      laplacianSquared += laplacian * laplacian;
+      samples += 1;
+    }
+  }
+
+  const meanLuma = samples ? sumLuma / samples : 128;
+  const exposure = clamp(1 - Math.abs(meanLuma - 128) / 160, 0.15, 1);
+  const laplacianMean = samples ? laplacianSum / samples : 0;
+  const laplacianVariance = samples
+    ? Math.max(0, laplacianSquared / samples - laplacianMean * laplacianMean)
+    : 0;
+  const sharpness = clamp(Math.log1p(laplacianVariance) / Math.log1p(700), 0.08, 1);
+
+  // Normalize moderate exposure differences before averaging all reference faces.
+  const gain = clamp(126 / Math.max(meanLuma, 1), 0.78, 1.28);
+  if (Math.abs(gain - 1) > 0.01) {
+    for (let index = 0; index < data.length; index += 4) {
+      data[index] = Math.round(clamp(data[index] * gain, 0, 255));
+      data[index + 1] = Math.round(clamp(data[index + 1] * gain, 0, 255));
+      data[index + 2] = Math.round(clamp(data[index + 2] * gain, 0, 255));
+    }
+    context.putImageData(imageData, 0, 0);
+  }
+
+  const weight = calculateReferenceWeight({ faceAreaRatio, frontalness, sharpness, exposure });
+  return { weight, frontalness, sharpness, exposure, faceAreaRatio, imageData };
+}
+
+function createAlignedReferenceCanvas(image, landmarks) {
+  const leftEye = landmarks[33];
+  const rightEye = landmarks[263];
+  if (!leftEye || !rightEye) return null;
+
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const transform = getSimilarityTransform(
+    { x: leftEye.x * sourceWidth, y: leftEye.y * sourceHeight },
+    { x: rightEye.x * sourceWidth, y: rightEye.y * sourceHeight },
+    { x: 168, y: 238 },
+    { x: 344, y: 238 }
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 682;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Yüz profili için hizalama alanı oluşturulamadı.");
+  context.fillStyle = "#777777";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.setTransform(transform.a, transform.b, transform.c, transform.d, transform.e, transform.f);
+  context.drawImage(image, 0, 0);
+  context.setTransform(1, 0, 0, 1, 0, 0);
+  return canvas;
+}
+
 function createReferenceFaceInput(reference) {
   const image = reference.image;
   const sourceWidth = image.naturalWidth || image.width;
   const sourceHeight = image.naturalHeight || image.height;
-  const faces = detectFaces(image).sort((a, b) => {
-    const areaA = a.width * sourceWidth * a.height * sourceHeight;
-    const areaB = b.width * sourceWidth * b.height * sourceHeight;
-    return areaB - areaA;
-  });
-  const face = faces[0];
-  if (!face) return null;
-
+  const detection = state.detector.detect(image);
+  const faces = (detection.faceLandmarks || [])
+    .map((landmarks) => ({ landmarks, bounds: getLandmarkBounds(landmarks) }))
+    .filter((item) => item.bounds)
+    .sort((a, b) => {
+      const areaA = a.bounds.width * sourceWidth * a.bounds.height * sourceHeight;
+      const areaB = b.bounds.width * sourceWidth * b.bounds.height * sourceHeight;
+      return areaB - areaA;
+    });
+  const detected = faces[0];
+  if (!detected) return null;
+  const face = detected.bounds;
   const crop = getFaceCropRect(
     sourceWidth,
     sourceHeight,
@@ -510,11 +591,45 @@ function createReferenceFaceInput(reference) {
     0, 0, canvas.width, canvas.height
   );
 
+  const alignedCanvas = createAlignedReferenceCanvas(image, detected.landmarks);
+  if (!alignedCanvas) return null;
+  const quality = measureAlignedReference(
+    alignedCanvas,
+    detected.landmarks,
+    face,
+    sourceWidth,
+    sourceHeight
+  );
+
   return {
     canvas,
-    area: face.width * sourceWidth * face.height * sourceHeight,
+    alignedCanvas,
+    profilePixels: quality.imageData.data,
+    weight: quality.weight,
+    quality,
     name: reference.name,
     file: reference.file
+  };
+}
+
+function createAppearanceProfile(candidates) {
+  const weightedPixels = weightedAverageRGBA(
+    candidates.map((candidate) => ({
+      data: candidate.profilePixels,
+      weight: candidate.weight
+    }))
+  );
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 682;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Kişisel görünüm profili oluşturulamadı.");
+  context.putImageData(new ImageData(weightedPixels, canvas.width, canvas.height), 0, 0);
+  return {
+    canvas,
+    weights: candidates.map((candidate) => candidate.weight),
+    validCount: candidates.length,
+    totalWeight: candidates.reduce((sum, candidate) => sum + candidate.weight, 0)
   };
 }
 
@@ -532,7 +647,6 @@ function buildLocalFaceFusionInputs() {
     face
   );
 
-  // The target is the only image being edited. Identity references are encoded separately.
   const targetCanvas = document.createElement("canvas");
   targetCanvas.width = FACEFUSION_TARGET_WIDTH;
   targetCanvas.height = FACEFUSION_TARGET_HEIGHT;
@@ -546,47 +660,62 @@ function buildLocalFaceFusionInputs() {
     0, 0, targetCanvas.width, targetCanvas.height
   );
 
-  const candidates = [];
-  let failedReferenceCrops = 0;
-  readyReferences.forEach((reference) => {
-    try {
-      const candidate = createReferenceFaceInput(reference);
-      if (candidate) candidates.push(candidate);
-      else failedReferenceCrops += 1;
-    } catch (error) {
-      failedReferenceCrops += 1;
-      console.warn("Referans yüzü hazırlanamadı:", reference.name, error);
-    }
-  });
+  if (!state.identityProfile || state.identityProfile.token !== state.referenceLoadToken) {
+    const candidates = [];
+    let failedReferenceCrops = 0;
+    readyReferences.forEach((reference) => {
+      try {
+        const candidate = createReferenceFaceInput(reference);
+        if (candidate) candidates.push(candidate);
+        else failedReferenceCrops += 1;
+      } catch (error) {
+        failedReferenceCrops += 1;
+        console.warn("Referans yüz profili hazırlanamadı:", reference.name, error);
+      }
+    });
 
-  const primaryReference = candidates.find((reference) => reference.file === state.primaryReferenceFile);
-  const profileReferences = primaryReference
-    ? [primaryReference, ...candidates.filter((reference) => reference !== primaryReference)]
-    : candidates;
-  if (!primaryReference && profileReferences[0]) {
-    state.primaryReferenceFile = profileReferences[0].file;
+    if (candidates.length < MIN_FACEFUSION_REFERENCE_COUNT) {
+      throw new Error(
+        `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${candidates.length} yüz bulundu.`
+      );
+    }
+
+    const appearance = createAppearanceProfile(candidates);
+    state.identityProfile = {
+      token: state.referenceLoadToken,
+      referenceCanvases: candidates.map((candidate) => candidate.canvas),
+      weights: appearance.weights,
+      appearanceCanvas: appearance.canvas,
+      validCount: appearance.validCount,
+      totalWeight: appearance.totalWeight
+    };
+    state.referenceFaceCropCount = appearance.validCount;
+    state.selectedReferenceCount = appearance.validCount;
+    if (failedReferenceCrops > 0) {
+      console.warn(`${failedReferenceCrops} referans fotoğrafında yüz profili oluşturulamadı.`);
+    }
     renderReferences();
-  }
-  if (profileReferences.length < MIN_FACEFUSION_REFERENCE_COUNT) {
-    throw new Error(
-      `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${profileReferences.length} yüz bulundu.`
+    showToast(
+      `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf hizalandı · ağırlıklı kişisel yüz profili oluşturuldu.`
     );
   }
 
-  state.referenceFaceCropCount = profileReferences.length;
-  state.selectedReferenceCount = profileReferences.length;
-  showToast(
-    `${profileReferences.length}/${MAX_REFERENCE_FACES} referansta yüz bulundu · ana görünüm: ${profileReferences[0]?.name || "ilk referans"}.`
-  );
-  if (failedReferenceCrops > 0) {
-    console.warn(`${failedReferenceCrops} referans fotoğrafında yüz kırpımı yapılamadı.`);
-  }
+  const profile = state.identityProfile;
+  const faceBounds = {
+    x: crop.face.x * FACEFUSION_TARGET_WIDTH / crop.width,
+    y: crop.face.y * FACEFUSION_TARGET_HEIGHT / crop.height,
+    width: crop.face.width * FACEFUSION_TARGET_WIDTH / crop.width,
+    height: crop.face.height * FACEFUSION_TARGET_HEIGHT / crop.height
+  };
 
   return {
     targetCanvas,
-    referenceCanvases: profileReferences.map((reference) => reference.canvas),
-    selectedReferenceNames: profileReferences.map((reference) => reference.name),
-    primaryReferenceName: profileReferences[0]?.name || "İlk geçerli referans",
+    referenceCanvases: profile.referenceCanvases,
+    referenceWeights: profile.weights,
+    appearanceProfileCanvas: profile.appearanceCanvas,
+    profileCount: profile.validCount,
+    totalProfileWeight: profile.totalWeight,
+    faceBounds,
     crop
   };
 }
@@ -667,16 +796,10 @@ async function runFaceFusionEdit() {
     return;
   }
 
-  const primaryReference = state.references.find((reference) => reference.file === state.primaryReferenceFile);
-  const activeModel = state.faceFusionStatus.model || "uniface_256";
-  const modelExplanation = ["uniface_256", "blendswap_256"].includes(activeModel)
-    ? activeModel + " seçilen ana görünüm fotoğrafını doğrudan görsel kaynak olarak kullanır. Sakal/bıyık aktarımı için bu ayrıntıların net göründüğü fotoğrafı ana görünüm seç. "
-    : "AlphaFace çoklu referanslardan kimlik gömmelerini ortalar; sakal/bıyık görünümü doğrudan kopyalanmayabilir. ";
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +
-    "Hedef fotoğrafın yalnızca seçili yüz crop'u ve yüzü bulunan referans fotoğrafları bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
-    "Aktif model: " + activeModel + ". Ana görünüm: " + (primaryReference?.name || "ilk geçerli referans") + ". " +
-    modelExplanation +
+    "Hedef yüz crop'u, yüzü bulunan 10–25 referans ve hizalanmış ağırlıklı görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
+    "Kimlik profili tüm referansların ağırlıklı yüz gömmelerini kullanır; görünüm profili tüm hizalanmış referansları birleştirir. İki yerel model çıktısı tek fotoğrafta harmanlanır. " +
     "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
   if (!consent) return;
@@ -693,22 +816,34 @@ async function runFaceFusionEdit() {
   let generatedUrl = null;
   try {
     const base = localFaceFusionBase();
-    const { targetCanvas, referenceCanvases, primaryReferenceName, crop } = buildLocalFaceFusionInputs();
-    const [targetBlob, ...referenceBlobs] = await Promise.all([
+    const {
+      targetCanvas,
+      referenceCanvases,
+      referenceWeights,
+      appearanceProfileCanvas,
+      profileCount,
+      totalProfileWeight,
+      faceBounds,
+      crop
+    } = buildLocalFaceFusionInputs();
+    const [targetBlob, profileBlob, ...referenceBlobs] = await Promise.all([
       canvasToBlob(targetCanvas),
+      canvasToBlob(appearanceProfileCanvas),
       ...referenceCanvases.map((canvas) => canvasToBlob(canvas))
     ]);
 
     const form = new FormData();
     form.append("target", targetBlob, "retake-target.png");
+    form.append("appearance_profile", profileBlob, "retake-25-photo-appearance-profile.png");
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
+    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds }));
 
-    setRuntimeStatus(`FaceFusion · ${referenceBlobs.length} referans kimlik profiline aktarılıyor…`);
-    elements.outputPlaceholder.querySelector("strong").textContent = "RTX A4000 yüzü değiştiriyor…";
+    setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · ağırlıklı kimlik ve görünüm profili`);
+    elements.outputPlaceholder.querySelector("strong").textContent = "25 fotoğraflı yüz profili uygulanıyor…";
     elements.outputMessage.textContent =
-      `${referenceBlobs.length} referanstan ortalama kimlik temsili oluşturuluyor. İlk çalıştırmada model dosyaları indirilebilir.`;
+      `${profileCount} hizalanmış referans AlphaFace kimlik profiline ve görünüm harmanına aktarılıyor. İki yerel geçiş çalıştırılacak.`;
 
     const response = await fetch(base + "/api/face-swap", {
       method: "POST",
@@ -734,13 +869,13 @@ async function runFaceFusionEdit() {
     elements.outputPlaceholder.hidden = true;
     elements.outputStage.classList.add("has-result");
     elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "Kişisel profil sonucu";
-    elements.outputStatus.textContent = "Yerel çıktı";
+    elements.outputTitle.textContent = "25 fotoğraflı profil sonucu";
+    elements.outputStatus.textContent = "Yerel hibrit çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu. Ana görünüm: ${primaryReferenceName}. ${state.faceFusionStatus.model || "FaceFusion"} · ${state.faceFusionStatus.pixelBoost || "768x768"}. Yüz dışındaki pikseller korunarak birleştirildi; sakal/bıyık aktarımı referansın görünürlüğüne ve modelin çıktısına bağlıdır.`;
-    showToast(`FaceFusion çıktısı hazır · ${state.selectedReferenceCount} referans kullanıldı.`);
-    setRuntimeStatus(`FaceFusion · ${state.selectedReferenceCount} referans · sonuç hazır`);
+      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla tek kişisel profile katıldı (toplam ağırlık: ${totalProfileWeight}). AlphaFace kimlik geçişi ve UniFace görünüm geçişi alt yüz bölgesinde harmanlandı. Kimlik ve sakal aktarım kalitesi referansların görünürlüğüne bağlıdır.`;
+    showToast(`Hibrit kişisel profil hazır · ${profileCount} referans harmanlandı.`);
+    setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
   } catch (error) {
     console.error("Yerel FaceFusion işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";

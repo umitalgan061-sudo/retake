@@ -830,6 +830,7 @@ async function buildLocalFaceFusionInputs() {
         reference.profileMethod = "cache";
         reference.profileError = null;
       });
+      renderReferences();
       state.identityProfile = {
         key: profileKey,
         token: state.referenceLoadToken,

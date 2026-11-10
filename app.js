@@ -12,8 +12,6 @@ import {
   REFERENCE_MANIFEST_URL
 } from "./src/reference-catalog.js";
 import {
-  NVIDIA_BOARD_HEIGHT,
-  NVIDIA_TARGET_PANEL_WIDTH,
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
@@ -68,7 +66,7 @@ const state = {
   referenceLoadError: null,
   referenceLoadToken: 0,
   selectedFaceIndex: null,
-  nvidiaStatus: { checked: false, configured: false },
+  faceFusionStatus: { checked: false, configured: false },
   isSwapping: false,
   result: null,
   toastTimer: null,
@@ -86,9 +84,9 @@ function setRuntimeStatus(message) {
   elements.runtimeStatus.textContent = message;
 }
 
-function localComfyBase() {
-  const configured = document.querySelector('meta[name="retake-comfy-base"]')?.content?.trim();
-  const value = configured || "http://127.0.0.1:8188";
+function localFaceFusionBase() {
+  const configured = document.querySelector('meta[name="retake-facefusion-base"]')?.content?.trim();
+  const value = configured || "http://127.0.0.1:8765";
   try {
     const parsed = new URL(value);
     return parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname)
@@ -103,62 +101,53 @@ function updateSwapAvailability() {
   const referenceCount = state.references.filter((item) => item.status === "ready").length;
   const hasTarget = Boolean(state.target && Number.isInteger(state.selectedFaceIndex) &&
     state.target.faces[state.selectedFaceIndex]);
-  const enabled = state.nvidiaStatus.configured && state.detector &&
+  const enabled = state.faceFusionStatus.configured && state.detector &&
     referenceCount === MAX_REFERENCE_FACES && hasTarget && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector("span");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "Yerel FLUX hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Bilgisayara bağlan"));
+    (enabled ? "Kişisel yüz profili hazır" : (state.faceFusionStatus.configured ? "Fotoğraf seç" : "Bilgisayara bağlan"));
 }
 
-async function checkNvidiaStatus() {
-  const base = localComfyBase();
+async function checkFaceFusionStatus() {
+  const base = localFaceFusionBase();
   if (!base) {
-    state.nvidiaStatus = {
-      checked: true,
-      configured: false,
-      message: "Yerel ComfyUI adresi geçersiz."
-    };
+    state.faceFusionStatus = { checked: true, configured: false, message: "Yerel FaceFusion adresi geçersiz." };
   } else {
     try {
-      const response = await fetch(base + "/system_stats", {
+      const response = await fetch(base + "/health", {
         method: "GET",
         cache: "no-store",
         headers: { Accept: "application/json" }
       });
-      if (!response.ok) throw new Error("ComfyUI HTTP " + response.status);
-      const nodeResponse = await fetch(base + "/object_info/UnetLoaderGGUF", {
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
-      if (!nodeResponse.ok) {
-        throw new Error("ComfyUI çalışıyor ancak UnetLoaderGGUF düğümü bulunamadı. GGUF eklentisini ve ComfyUI başlangıç kayıtlarını kontrol et.");
-      }
-      state.nvidiaStatus = {
+      const health = await response.json().catch(() => ({}));
+      if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
+      if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
+      state.faceFusionStatus = {
         checked: true,
         configured: true,
-        message: "Yerel ComfyUI ve GGUF düğümü hazır."
+        message: "FaceFusion 3.9.2 ve CUDA hazır."
       };
     } catch (error) {
-      const detail = error?.message || "Yerel ComfyUI bağlantısı kurulamadı.";
-      state.nvidiaStatus = {
+      const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
+      state.faceFusionStatus = {
         checked: true,
         configured: false,
         message: detail.includes("Failed to fetch") || detail.includes("NetworkError")
-          ? "127.0.0.1:8188 bağlantısı kurulamadı. ComfyUI'yi --enable-cors-header https://retake06.web.app parametresiyle başlat; tarayıcı yerel ağ izni sorarsa izin ver."
+          ? "127.0.0.1:8765 bağlantısı kurulamadı. tools\\start_facefusion_retake.ps1 dosyasını çalıştır; tarayıcı yerel ağ izni sorarsa izin ver."
           : detail
       };
     }
   }
 
-  if (state.nvidiaStatus.configured) {
-    elements.engineTitle.textContent = "Yerel FLUX hazır";
+  if (state.faceFusionStatus.configured) {
+    elements.engineTitle.textContent = "Kişisel yüz motoru hazır";
     elements.engineDescription.textContent =
-      `ComfyUI bilgisayarında çalışıyor. 25 referans arasından seçilen en net ${KONTEXT_REFERENCE_COUNT} yüz ayrı kimlik girdisi olarak RTX A4000'de işlenecek.`;
+      "FaceFusion, yüzü bulunan referans fotoğraflarının tamamından ortalama kimlik temsili oluşturur ve RTX A4000 üzerinde hedef yüze uygular.";
   } else {
-    elements.engineTitle.textContent = "Yerel FLUX servisi bekleniyor";
-    elements.engineDescription.textContent = state.nvidiaStatus.message;
+    elements.engineTitle.textContent = "Yerel FaceFusion servisi bekleniyor";
+    elements.engineDescription.textContent = state.faceFusionStatus.message;
   }
   updateSwapAvailability();
 }
@@ -253,7 +242,7 @@ function clearResult() {
   elements.outputSymbol.hidden = false;
   elements.outputTitle.textContent = "Önizleme";
   elements.outputStatus.textContent = "Beklemede";
-  elements.outputMessage.textContent = "Yerel FLUX modeli hazır olduğunda sonuç burada görünecek.";
+  elements.outputMessage.textContent = "FaceFusion motoru hazır olduğunda sonuç burada görünecek.";
   updateSwapAvailability();
 }
 
@@ -457,9 +446,11 @@ async function canvasToBlob(canvas) {
   });
 }
 
-const KONTEXT_REFERENCE_COUNT = 4;
-const KONTEXT_REFERENCE_WIDTH = 384;
-const KONTEXT_REFERENCE_HEIGHT = 512;
+const MIN_FACEFUSION_REFERENCE_COUNT = 10;
+const FACEFUSION_REFERENCE_WIDTH = 512;
+const FACEFUSION_REFERENCE_HEIGHT = 682;
+const FACEFUSION_TARGET_WIDTH = 784;
+const FACEFUSION_TARGET_HEIGHT = 1024;
 
 function createReferenceFaceInput(reference) {
   const image = reference.image;
@@ -477,11 +468,11 @@ function createReferenceFaceInput(reference) {
     sourceWidth,
     sourceHeight,
     face,
-    KONTEXT_REFERENCE_WIDTH / KONTEXT_REFERENCE_HEIGHT
+    FACEFUSION_REFERENCE_WIDTH / FACEFUSION_REFERENCE_HEIGHT
   );
   const canvas = document.createElement("canvas");
-  canvas.width = KONTEXT_REFERENCE_WIDTH;
-  canvas.height = KONTEXT_REFERENCE_HEIGHT;
+  canvas.width = FACEFUSION_REFERENCE_WIDTH;
+  canvas.height = FACEFUSION_REFERENCE_HEIGHT;
   const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) throw new Error("Referans yüzü için görsel alanı oluşturulamadı.");
   context.drawImage(
@@ -497,7 +488,7 @@ function createReferenceFaceInput(reference) {
   };
 }
 
-function buildLocalComfyInputs() {
+function buildLocalFaceFusionInputs() {
   const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
   if (readyReferences.length !== MAX_REFERENCE_FACES) {
     throw new Error(`İşlem için ${MAX_REFERENCE_FACES} yerel referansın tamamı yüklenmiş olmalı.`);
@@ -513,8 +504,8 @@ function buildLocalComfyInputs() {
 
   // The target is the only image being edited. Identity references are encoded separately.
   const targetCanvas = document.createElement("canvas");
-  targetCanvas.width = NVIDIA_TARGET_PANEL_WIDTH;
-  targetCanvas.height = NVIDIA_BOARD_HEIGHT;
+  targetCanvas.width = FACEFUSION_TARGET_WIDTH;
+  targetCanvas.height = FACEFUSION_TARGET_HEIGHT;
   const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
   if (!targetContext) throw new Error("Hedef yüz görseli oluşturulamadı.");
   targetContext.fillStyle = "#10151d";
@@ -538,19 +529,17 @@ function buildLocalComfyInputs() {
     }
   });
 
-  candidates.sort((a, b) => b.area - a.area);
-  const selectedReferences = candidates.slice(0, KONTEXT_REFERENCE_COUNT);
-  if (selectedReferences.length !== KONTEXT_REFERENCE_COUNT) {
+  const profileReferences = candidates;
+  if (profileReferences.length < MIN_FACEFUSION_REFERENCE_COUNT) {
     throw new Error(
-      `Ayrı kimlik girdileri için en az ${KONTEXT_REFERENCE_COUNT} yüz gerekli; ${selectedReferences.length} yüz hazırlanabildi. ` +
-      "Referans fotoğraflarının netliğini ve yüz görünürlüğünü kontrol et."
+      `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${profileReferences.length} yüz bulundu.`
     );
   }
 
-  state.referenceFaceCropCount = candidates.length;
-  state.selectedReferenceCount = selectedReferences.length;
+  state.referenceFaceCropCount = profileReferences.length;
+  state.selectedReferenceCount = profileReferences.length;
   showToast(
-    `${candidates.length}/${MAX_REFERENCE_FACES} yüz bulundu · en net ${selectedReferences.length} referans ayrı ayrı gönderilecek.`
+    `${profileReferences.length}/${MAX_REFERENCE_FACES} referansta yüz bulundu · tamamı kimlik ortalamasına katılacak.`
   );
   if (failedReferenceCrops > 0) {
     console.warn(`${failedReferenceCrops} referans fotoğrafında yüz kırpımı yapılamadı.`);
@@ -558,8 +547,8 @@ function buildLocalComfyInputs() {
 
   return {
     targetCanvas,
-    referenceCanvases: selectedReferences.map((reference) => reference.canvas),
-    selectedReferenceNames: selectedReferences.map((reference) => reference.name),
+    referenceCanvases: profileReferences.map((reference) => reference.canvas),
+    selectedReferenceNames: profileReferences.map((reference) => reference.name),
     crop
   };
 }
@@ -625,60 +614,10 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
   return canvasToBlob(fullCanvas);
 }
 
-async function uploadComfyImage(base, blob, filename) {
-  const form = new FormData();
-  form.append("image", blob, filename);
-  form.append("type", "input");
-  form.append("overwrite", "true");
-
-  const response = await fetch(base + "/upload/image", {
-    method: "POST",
-    body: form
-  });
-  const payload = await response.json().catch(() => ({}));
-  if (!response.ok || !payload.name) {
-    throw new Error(payload.error || "ComfyUI görseli yükleyemedi (HTTP " + response.status + ").");
-  }
-  return payload.name;
-}
-
-async function waitForComfyResult(base, promptId, timeoutMs = 15 * 60 * 1000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise((resolve) => window.setTimeout(resolve, 1200));
-    const response = await fetch(base + "/history/" + encodeURIComponent(promptId), {
-      cache: "no-store",
-      headers: { Accept: "application/json" }
-    });
-    if (!response.ok) throw new Error("ComfyUI işlem geçmişi okunamadı (HTTP " + response.status + ").");
-    const history = await response.json();
-    const entry = history[promptId];
-    const images = entry?.outputs?.["136"]?.images;
-    if (Array.isArray(images) && images.length > 0) {
-      const image = images[0];
-      const query = new URLSearchParams({
-        filename: image.filename,
-        subfolder: image.subfolder || "",
-        type: image.type || "output"
-      });
-      const imageResponse = await fetch(base + "/view?" + query.toString(), {
-        cache: "no-store"
-      });
-      if (!imageResponse.ok) throw new Error("ComfyUI sonuç görseli alınamadı (HTTP " + imageResponse.status + ").");
-      return imageResponse.blob();
-    }
-    if (entry?.status?.completed === true || entry?.status?.status_str === "error") {
-      const details = JSON.stringify(entry.status.messages || []);
-      throw new Error("ComfyUI iş akışı tamamlanamadı: " + details.slice(0, 1200));
-    }
-  }
-  throw new Error("ComfyUI işlemi 15 dakika içinde tamamlanmadı. Bilgisayarındaki ComfyUI kuyruğunu kontrol et.");
-}
-
-async function runNvidiaFaceEdit() {
+async function runFaceFusionEdit() {
   if (state.isSwapping) return;
-  if (!state.nvidiaStatus.configured) {
-    showToast("Önce bilgisayarındaki ComfyUI servisini başlat.");
+  if (!state.faceFusionStatus.configured) {
+    showToast("Önce bilgisayarındaki FaceFusion servisini başlat.");
     return;
   }
   if (!state.target || !Number.isInteger(state.selectedFaceIndex)) {
@@ -692,81 +631,54 @@ async function runNvidiaFaceEdit() {
 
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +
-    `Seçtiğin yüzün crop'u ve 25 fotoğraf arasından seçilen en net ${KONTEXT_REFERENCE_COUNT} yüz crop'u bu tarayıcıdan bilgisayarındaki ComfyUI servisine (127.0.0.1:8188) gönderilecek. ` +
-    "Model RTX A4000 üzerinde yerel çalışacak; görseller NVIDIA bulut API'sine veya başka bir harici AI servisine gönderilmeyecek. Devam edilsin mi?"
+    "Hedef fotoğrafın yalnızca seçili yüz crop'u ve yüzü algılanan tüm referans fotoğrafları bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
+    "FaceFusion tüm referanslardan ortalama bir kimlik temsili çıkaracak ve RTX A4000 üzerinde yüz değiştirme yapacak. " +
+    "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
   if (!consent) return;
 
   state.isSwapping = true;
   updateSwapAvailability();
   clearResult();
-  elements.outputTitle.textContent = "Yerel FLUX ile işleniyor";
+  elements.outputTitle.textContent = "Kişisel yüz profili uygulanıyor";
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   elements.outputPlaceholder.hidden = false;
-  elements.outputPlaceholder.querySelector("strong").textContent = "Fotoğraflar yerel modele gönderiliyor…";
-  elements.outputMessage.textContent =
-    `Hedef fotoğraf ve seçilen ${KONTEXT_REFERENCE_COUNT} kimlik referansı ayrı görseller olarak ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.`;
+  elements.outputPlaceholder.querySelector("strong").textContent = "Referans kimliği hazırlanıyor…";
+  elements.outputMessage.textContent = "Hedef yüz ve yüzü algılanan referans fotoğrafları yerel FaceFusion motoruna aktarılıyor.";
 
   let generatedUrl = null;
   try {
-    const base = localComfyBase();
-    const { targetCanvas, referenceCanvases, crop } = buildLocalComfyInputs();
+    const base = localFaceFusionBase();
+    const { targetCanvas, referenceCanvases, crop } = buildLocalFaceFusionInputs();
     const [targetBlob, ...referenceBlobs] = await Promise.all([
       canvasToBlob(targetCanvas),
       ...referenceCanvases.map((canvas) => canvasToBlob(canvas))
     ]);
 
-    setRuntimeStatus("Yerel FLUX · hedef ve ayrı kimlik referansları ComfyUI'ye yükleniyor…");
-    const [targetName, ...referenceNames] = await Promise.all([
-      uploadComfyImage(base, targetBlob, "retake-target-face.png"),
-      ...referenceBlobs.map((blob, index) =>
-        uploadComfyImage(base, blob, `retake-identity-reference-${index + 1}.png`)
-      )
-    ]);
-
-    const workflowResponse = await fetch("./workflows/retake-flux-api.json", {
-      cache: "no-store",
-      headers: { Accept: "application/json" }
+    const form = new FormData();
+    form.append("target", targetBlob, "retake-target.png");
+    referenceBlobs.forEach((blob, index) => {
+      form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    if (!workflowResponse.ok) throw new Error("Retake FLUX API iş akışı indirilemedi.");
-    const workflow = await workflowResponse.json();
-    workflow["191"].inputs.image = targetName;
-    referenceNames.forEach((name, index) => {
-      workflow[String(192 + index)].inputs.image = name;
-    });
-    workflow["6"].inputs.text = [
-      `Edit the single target portrait image. ${KONTEXT_REFERENCE_COUNT} additional reference images are supplied separately as identity references through ReferenceLatent conditioning.`,
-      "The target image is the only canvas to edit. All reference images show the same reference person and are authoritative identity sources, not additional people to place in the scene.",
-      "Completely replace the target person's facial identity with the identity shared by all reference images. This is a full facial identity replacement, not a beauty retouch or a minor feature adjustment.",
-      "The new face must match the reference person's overall facial geometry and identity: forehead and temples, face width and shape, eyebrows, eyes and eyelids, nose bridge and tip, cheeks, lips and mouth, jawline, chin and apparent age.",
-      "Do not preserve the target person's original facial identity. Preserve only the target's head pose, camera angle, expression, gaze direction and natural lighting as compatible with the new identity.",
-      "Keep the target person's hairstyle, hairline, ears, neck, clothing, body and background unchanged. Do not copy hair, clothing, accessories or background from the reference images.",
-      "Create one photorealistic portrait image only. Do not create a collage, contact sheet, extra faces, additional people, text or panels."
-    ].join(" ");
 
-    workflow["31"].inputs.seed = Math.floor(Math.random() * 9007199254740000);
-    workflow["136"].inputs.filename_prefix = "Retake-Local-FLUX";
-    setRuntimeStatus("Yerel FLUX · RTX A4000 üzerinde çalışıyor…");
-    elements.outputPlaceholder.querySelector("strong").textContent = "RTX A4000 fotoğrafı düzenliyor…";
-    elements.outputMessage.textContent = "ComfyUI iş kuyruğuna gönderildi. Bu aşama bilgisayarındaki ekran kartında çalışır.";
+    setRuntimeStatus(`FaceFusion · ${referenceBlobs.length} referans kimlik profiline aktarılıyor…`);
+    elements.outputPlaceholder.querySelector("strong").textContent = "RTX A4000 yüzü değiştiriyor…";
+    elements.outputMessage.textContent =
+      `${referenceBlobs.length} referanstan ortalama kimlik temsili oluşturuluyor. İlk çalıştırmada model dosyaları indirilebilir.`;
 
-    const queueResponse = await fetch(base + "/prompt", {
+    const response = await fetch(base + "/api/face-swap", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({
-        prompt: workflow,
-        client_id: "retake-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now())
-      })
+      body: form,
+      cache: "no-store"
     });
-    const queuePayload = await queueResponse.json().catch(() => ({}));
-    if (!queueResponse.ok || !queuePayload.prompt_id) {
-      const validation = queuePayload.node_errors
-        ? JSON.stringify(queuePayload.node_errors).slice(0, 1200)
-        : (queuePayload.error || "ComfyUI iş akışını kuyruğa alamadı.");
-      throw new Error(validation);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
     }
-
-    const generatedBlob = await waitForComfyResult(base, queuePayload.prompt_id);
+    const generatedBlob = await response.blob();
+    if (!generatedBlob.size || !generatedBlob.type.startsWith("image/")) {
+      throw new Error("FaceFusion geçerli bir sonuç görseli döndürmedi.");
+    }
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
@@ -778,24 +690,24 @@ async function runNvidiaFaceEdit() {
     elements.outputPlaceholder.hidden = true;
     elements.outputStage.classList.add("has-result");
     elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "Yerel FLUX sonucu";
+    elements.outputTitle.textContent = "Kişisel profil sonucu";
     elements.outputStatus.textContent = "Yerel çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu; en net ${state.selectedReferenceCount}/${KONTEXT_REFERENCE_COUNT} yüz ayrı kimlik girdisi olarak kullanıldı. Kimlik benzerliği garanti edilmez.`;
-    showToast(`Yerel FLUX çıktısı hazır · ${state.selectedReferenceCount} ayrı kimlik referansı kullanıldı.`);
-    setRuntimeStatus(`Yerel FLUX · ${state.selectedReferenceCount} ayrı referans · sonuç hazır`);
+      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu; tamamı ortalama kimlik temsiline katıldı. Yüz dışındaki pikseller korunarak birleştirildi. Kimlik benzerliği garanti edilmez.`;
+    showToast(`FaceFusion çıktısı hazır · ${state.selectedReferenceCount} referans kullanıldı.`);
+    setRuntimeStatus(`FaceFusion · ${state.selectedReferenceCount} referans · sonuç hazır`);
   } catch (error) {
-    console.error("Yerel ComfyUI FLUX işlemi başarısız:", error);
+    console.error("Yerel FaceFusion işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";
     elements.outputStatus.textContent = "Hata";
     elements.outputPlaceholder.hidden = false;
-    elements.outputPlaceholder.querySelector("strong").textContent = "Yerel FLUX işlemi başarısız";
-    elements.outputMessage.textContent = error.message || "ComfyUI isteği başarısız oldu.";
+    elements.outputPlaceholder.querySelector("strong").textContent = "Yerel FaceFusion işlemi başarısız";
+    elements.outputMessage.textContent = error.message || "FaceFusion isteği başarısız oldu.";
     elements.outputStage.classList.remove("has-result");
     elements.outputSymbol.hidden = false;
-    showToast(error.message || "Yerel FLUX düzenleme başarısız.");
-    setRuntimeStatus("Yerel FLUX · hata");
+    showToast(error.message || "FaceFusion yüz değiştirme başarısız.");
+    setRuntimeStatus("FaceFusion · hata");
   } finally {
     if (generatedUrl) URL.revokeObjectURL(generatedUrl);
     state.isSwapping = false;
@@ -807,7 +719,7 @@ function downloadResult() {
   if (!state.result?.url) return;
   const link = document.createElement("a");
   link.href = state.result.url;
-  link.download = "retake-nvidia-face-edit-" + Date.now() + ".png";
+  link.download = "retake-facefusion-" + Date.now() + ".png";
   document.body.append(link);
   link.click();
   link.remove();
@@ -837,7 +749,7 @@ async function initializeDetector() {
     }
 
     elements.engineDescription.textContent =
-      "MediaPipe yüzleri cihazda GPU ile algılamayı dener, desteklenmezse CPU'ya geçer. Yerel Face Swap modeli yoktur.";
+      "MediaPipe yüzleri tarayıcıda algılar. Kimlik aktarımı, bilgisayarındaki CUDA destekli FaceFusion modeliyle yapılır.";
     if (state.target) {
       state.target.faces = detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
@@ -943,7 +855,7 @@ function initializeInteractions() {
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
   elements.reloadReferences.addEventListener("click", () => loadLocalReferences({ force: true }));
-  elements.swapButton.addEventListener("click", runNvidiaFaceEdit);
+  elements.swapButton.addEventListener("click", runFaceFusionEdit);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
 
@@ -978,7 +890,7 @@ async function initializeApp() {
   await Promise.allSettled([
     loadLocalReferences(),
     initializeDetector(),
-    checkNvidiaStatus()
+    checkFaceFusionStatus()
   ]);
 
   const loaded = state.references.filter((reference) => reference.status === "ready").length;

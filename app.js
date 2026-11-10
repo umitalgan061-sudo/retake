@@ -73,6 +73,7 @@ const state = {
   references: [],
   identityProfile: null,
   referenceSetKey: null,
+  profileIsBuilding: false,
   referencesLoading: false,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
@@ -352,7 +353,13 @@ function renderReferences() {
   const readyCount = state.references.filter((item) => item.status === "ready").length;
   elements.referenceCount.textContent = readyCount + " / " + MAX_REFERENCE_FACES;
   elements.referencesEmpty.hidden = readyCount > 0;
-  if (state.identityProfile?.validCount === MAX_REFERENCE_FACES) {
+  if (state.profileIsBuilding) {
+    updateProfileIndicator({
+      title: "Yüz profili oluşturuluyor",
+      detail: "Referanslar hizalanıyor, kalite ağırlıkları ve kimlik profili hesaplanıyor.",
+      progress: 72
+    });
+  } else if (state.identityProfile?.validCount === MAX_REFERENCE_FACES) {
     updateProfileIndicator({
       title: "Kişisel yüz profili hazır",
       detail: "Kimlik ve görünüm profili bu tarayıcıda önbelleğe alındı.",
@@ -829,6 +836,7 @@ function createAppearanceProfile(candidates) {
 }
 
 async function buildLocalFaceFusionInputs() {
+  state.profileIsBuilding = true;
   updateProfileIndicator({
     title: "Yüz profili oluşturuluyor",
     detail: "Referanslar hizalanıyor, kalite ağırlıkları hesaplanıyor ve önbellek hazırlanıyor.",
@@ -891,6 +899,7 @@ async function buildLocalFaceFusionInputs() {
         validCount: cached.validCount,
         totalWeight: cached.totalWeight
       };
+      state.profileIsBuilding = false;
       updateProfileIndicator({
         title: "Kişisel yüz profili hazır",
         detail: "Daha önce oluşturulan profil bu cihazın yerel önbelleğinden açıldı.",
@@ -960,6 +969,7 @@ async function buildLocalFaceFusionInputs() {
         ...profile
       };
       const persisted = await saveCachedProfile(profileKey, profile);
+      state.profileIsBuilding = false;
       updateProfileIndicator({
         title: "Kişisel yüz profili hazır",
         detail: persisted
@@ -1180,6 +1190,15 @@ async function runFaceFusionEdit() {
     );
     setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
   } catch (error) {
+    state.profileIsBuilding = false;
+    if (!state.identityProfile?.validCount) {
+      updateProfileIndicator({
+        title: "Profil hazırlanamadı",
+        detail: error?.message || "Yerel profil oluşturma adımı başarısız.",
+        progress: 0,
+        status: "error"
+      });
+    }
     console.error("Yerel FaceFusion işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";
     elements.outputStatus.textContent = "Hata";

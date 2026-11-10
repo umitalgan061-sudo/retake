@@ -18,7 +18,8 @@ function isApprovedAIAsset(url) {
   if (url.origin === "https://cdn.jsdelivr.net") return url.pathname.startsWith("/npm/@mediapipe/tasks-vision@1.2.2/");
   return url.origin === "https://storage.googleapis.com" && [
     "/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-    "/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite"
+    "/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+    "/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
   ].includes(url.pathname);
 }
 

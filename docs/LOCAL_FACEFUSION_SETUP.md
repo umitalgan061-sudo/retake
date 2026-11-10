@@ -1,6 +1,6 @@
 # Retake — Yerel FaceFusion kurulumu (Windows)
 
-Bu sürüm, FLUX.1-Kontext-dev yerine FaceFusion 3.9.2 kullanır. Retake, 25 referans fotoğrafından yüz bulunanları ayrı kaynaklar olarak gönderir. Varsayılan `uniface_256` görünüm odaklı modeldir: ilk kaynak fotoğrafını doğrudan görsel girdi olarak kullanır. Arayüzde sakal/bıyığın en belirgin olduğu fotoğrafı **Ana görünüm** olarak seç; uygulama bu fotoğrafı ilk sıraya koyar. `alphaface_256` alternatifi kaynak yüz kimlik gömmelerini ortalar. Bu yaklaşımların hiçbiri kişiye özel model eğitimi veya fine-tuning değildir.
+Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. Yüzü bulunan 10–25 referansın tamamı ortak göz koordinatına hizalanır; netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
 
 ## Sistem
 
@@ -8,121 +8,109 @@ Bu sürüm, FLUX.1-Kontext-dev yerine FaceFusion 3.9.2 kullanır. Retake, 25 ref
 - NVIDIA RTX A4000 16 GB VRAM
 - Anaconda veya Miniconda
 - Git for Windows
-- FFmpeg (kurulum betiği winget varsa otomatik kurmayı dener)
-- İnternet bağlantısı: ilk kurulum ve FaceFusion model ağırlıklarını indirmek için
+- FFmpeg
+- İlk kurulum ve model ağırlıkları için internet bağlantısı
 
-FaceFusion'ın Windows kurulum yönergeleri Git, Conda ve FFmpeg gerektirir. Kurulum betiği FFmpeg'i winget ile kurmayı dener. Resmî Windows yönergeleri için https://docs.facefusion.io/installation/platform/windows adresine bak. FaceFusion'ın yayımladığı donanım rehberinde 12 GB VRAM ve üzeri önerilir. RTX A4000 16 GB bu öneriyi karşılar; gerçek performans kullanılan yüz algılayıcı, model ve fotoğraf boyutuna bağlıdır.
+FaceFusion'ın Windows kurulum yönergeleri Git, Conda ve FFmpeg gerektirir. Resmî yönergeler: https://docs.facefusion.io/installation/platform/windows
 
 ## 1. Kurulumu yap
 
-Retake deposunu Codespaces'ten veya bilgisayarındaki Git çalışma klasöründen aç. FaceFusion deposu `C:\AI\FaceFusion` dizinine kurulacaktır.
+PowerShell'de Retake deposuna geç:
 
-PowerShell'i (Anaconda Prompt değil, Conda komutunun erişilebilir olduğu PowerShell de olur) aç ve Retake deposunda şu dosyayı çalıştır:
-
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\\tools\\install_facefusion_windows.ps1
-```
+    Set-ExecutionPolicy -Scope Process Bypass
+    .\tools\install_facefusion_windows.ps1
 
 Betik:
-1. Ayrı bir `facefusion` Conda ortamı oluşturur (Python 3.12).
-2. FaceFusion'ın sabitlenmiş `3.9.2` sürümünü indirir.
+1. Ayrı bir facefusion Conda ortamı oluşturur (Python 3.12).
+2. FaceFusion 3.9.2 sürümünü indirir.
 3. CUDA 12.9 runtime ve cuDNN 9.10 kurar.
-4. FaceFusion'ın CUDA bağımlılıklarını yükler.
-5. ONNX Runtime `CUDAExecutionProvider` sağlayıcısını doğrular.
+4. FaceFusion CUDA bağımlılıklarını yükler.
+5. ONNX Runtime CUDAExecutionProvider sağlayıcısını doğrular.
 
-Kurulum başarısız olursa hata veren son komutu ve terminaldeki son 30 satırı sakla. ComfyUI'nin gömülü Python ortamına FaceFusion kurma; iki ortam birbirinden ayrı kalmalı.
+ComfyUI'nin gömülü Python ortamına FaceFusion kurma; iki ortam birbirinden ayrı kalmalı.
 
-## 2. Model ve lisans
+## 2. İki model ve lisans
 
-İlk yüz değiştirme işlemi sırasında FaceFusion gerekli model ağırlıklarını indirebilir. Retake varsayılan olarak şu görünüm odaklı ayarı kullanır:
+Hibrit profil iki ayrı geçiş kullanır:
 
-- Face swapper: `uniface_256` (ana görünüm fotoğrafını görsel kaynak olarak kullanır)
-- Pixel boost: `768x768`
-- Swap weight: `1.0`
-- Execution provider: `cuda`
-- Device: `0`
-- Face selector: `one`
-- Face mask: `box`
+- Kimlik geçişi: alphaface_256. 25 kaynak yüzün embedding ortalamasını kullanır. Referanslar kalite/açı ağırlıklarıyla kaynak listesinde tekrarlanır; her kabul edilen fotoğraf en az bir oy alır.
+- Görünüm geçişi: uniface_256. 25 fotoğrafın hizalanmış ve ağırlıklı piksel ortalamasını kaynak yüz olarak kullanır. Bu geçiş alt yüz, bıyık ve sakal görünümünü desteklemek için kullanılır.
+- Pixel boost varsayılanı 768x768'dir. CUDA bellek hatasında her geçiş 512x512 ile yeniden denenir.
+- Face swapper weight: 1.0.
+- Execution provider: cuda, device 0.
+- Face selector: one.
+- Face mask: box.
 
-**Lisans:** FaceFusion kaynak kodu ve model ağırlıkları ayrı lisanslara sahiptir. `uniface_256` FaceFusion model kataloğunda `Unknown` lisansıyla listelenir; bu nedenle kullanım hakkı net kabul edilmemelidir. `alphaface_256` ve `blendswap_256` Non-Commercial olarak listelenir. Kişisel/ticari olmayan kullanım dışına çıkmadan önce her modelin lisansını ve kaynak koşullarını tek tek doğrula.
+Lisanslar model bazında değerlendirilmelidir. FaceFusion kataloğunda alphaface_256 Non-Commercial, uniface_256 ise Unknown lisans durumuyla listelenir. Ticari kullanım hakkı olduğunu varsayma; model ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 
-## 3. Ana görünüm fotoğrafını seç ve yerel servisi çalıştır
+## 3. Yerel servisi çalıştır
 
-Web arayüzündeki referans kartlarında sakal/bıyığın en net göründüğü, yüzü kapalı olmayan ve mümkünse önden/üç çeyrek açıyla çekilmiş fotoğrafın altındaki **Ana görünüm seç** düğmesine bas. UniFace bu ilk kaynak görselinden sakal, bıyık ve yüz dokusu gibi görünüş ipuçlarını alır; diğer fotoğrafların tamamı aynı işleme gönderilse de UniFace bunları birleştirip yeni bir kişisel model eğitmez.
+Retake deposunda PowerShell'den:
 
-FaceFusion kurulumu bittikten sonra Retake deposundaki PowerShell'den:
+    .\tools\start_facefusion_retake.ps1
 
-```powershell
-.\\tools\\start_facefusion_retake.ps1
-```
+Varsayılan çözünürlük 768x768'dir. Daha düşük bellek kullanımı için:
 
-Bu komut `uniface_256` ve `768x768` ile başlar. Kimlik öncelikli eski AlphaFace davranışına dönmek için:
+    .\tools\start_facefusion_retake.ps1 -FaceSwapperPixelBoost 512x512
 
-```powershell
-.\\tools\\start_facefusion_retake.ps1 -FaceSwapperModel alphaface_256 -FaceSwapperPixelBoost 512x512
-```
+Servis http://127.0.0.1:8765 üzerinde çalışır ve yalnızca bilgisayarın loopback arayüzünü dinler. Bu PowerShell penceresini işlem sırasında açık bırak. Modemden port yönlendirme yapma ve Windows güvenlik duvarında bu portu genel ağa açma.
 
-UniFace modelinin ağırlıkları ilk çalıştırmada indirilebilir. Pixel boost seçenekleri `512x512`, `768x768` ve `1024x1024` değerleridir; daha yüksek değer daha fazla süre/VRAM gerektirir.
+Sağlık kontrolü:
 
-Servis `http://127.0.0.1:8765` adresinde çalışır ve **yalnızca bilgisayarın loopback arayüzünü** dinler. Modemden port yönlendirme yapma, Windows güvenlik duvarında bu portu genel ağa açma. PowerShell penceresini işlem boyunca açık bırak.
+    http://127.0.0.1:8765/health
 
-Tarayıcıdan şu adresi açarak sağlık kontrolü yapılabilir:
-
-```text
-http://127.0.0.1:8765/health
-```
-
-`ok: true`, `cuda: true` ve `CUDAExecutionProvider` görülmelidir. `cuda: false` ise Retake yüz değiştirme düğmesini etkinleştirmez.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v2, identity_model=alphaface_256, appearance_model=uniface_256.
 
 ## 4. Retake'i çalıştır
 
-1. Firebase'de `https://retake06.web.app` adresini aç.
-2. Tarayıcı `retake06.web.app` için yerel ağ erişimi isterse izin ver.
-3. 25 referans fotoğrafının aynı kişiye ait olduğundan emin ol.
-4. Yüzü bulunan en az 10 referans bulunmalı; 10–25 arası fotoğrafın tamamı FaceFusion'a ayrı ayrı gönderilir.
-5. Hedef fotoğrafı ekle ve değiştirilecek yüzü seç.
-6. Açık işlem onayını kabul et. Hedefin yalnızca yüz crop'u ve kaynak referans crop'ları bu bilgisayardaki `127.0.0.1:8765` servisine gönderilir.
+1. Firebase'de https://retake06.web.app adresini aç.
+2. Tarayıcı retake06.web.app için yerel ağ erişimi isterse izin ver.
+3. Referans havuzundaki 25 fotoğrafın aynı kişiye ait olduğundan emin ol.
+4. Hedef fotoğrafı yükle ve değiştirilecek yüzü seç.
+5. Yerel işlem onayını kabul et.
 
-İlk model indirme işlemi, sonraki yüz değiştirme çalıştırmasından daha uzun sürebilir.
+Uygulama profil oluşturmayı ilk kullanımda yapar. Bu işlem tamamlandıktan sonra aynı sekmede farklı hedef fotoğraflara geçildiğinde profil tekrar hesaplanmaz; profil bellekte yeniden kullanılır. Sayfa yenilenirse 25 referanstan yeniden oluşturulur. Kalıcı IndexedDB/disk profili henüz bu sürümün parçası değildir.
 
-## 5. Motorun yaptığı işlem
+## 5. Profilin nasıl oluştuğu
 
 - MediaPipe tarayıcıda hedef yüzü ve referans yüzleri algılar.
-- Her referans fotoğrafında en büyük yüz bölgesi kırpılır.
-- 10–25 referans fotoğrafı yerel FaceFusion servisine ayrı dosyalar olarak aktarılır.
-- Retake seçili ana görünüm fotoğrafını kaynak listesinin ilk sırasına yerleştirir.
-- Varsayılan `uniface_256`, ilk kaynak fotoğrafın yüz görünümünü doğrudan girdi olarak kullanır; bu, sakal/bıyık gibi görsel özelliklerin aktarılmasını deneyen görünüm odaklı yoldur.
-- `alphaface_256` seçildiğinde kaynak yüz kimlik gömmeleri ortalanır; sakal/bıyık dokusu doğrudan taşınmayabilir.
-- FaceFusion, hedef yüz crop'una seçili swapper modelini ve `768x768` pixel boost ayarını uygular.
-- Retake tek portre sonucu alır ve mevcut yüz maskesiyle orijinal fotoğrafa geri birleştirir.
-- Maske dışındaki piksellerin orijinalle aynı olması kontrol edilir.
+- Her referans yüzü göz işaretlerine göre ortak 512×682 tuvale hizalanır.
+- Netlik Laplacian varyansı ile ölçülür; yüz alanı, frontalness ve pozlama da puanlanır.
+- Tüm yüzler profile katılır; kaliteye göre 1, 2 veya 3 oy alırlar.
+- Ağırlıklı ortalama RGBA görünüm profili oluşturulur. Aşırı farklı pozlar ve ifadeler bu ortalamayı yumuşatabilir.
+- Aynı ağırlıklar FaceFusion kaynak listesinde tekrarlanarak AlphaFace'in 512 boyutlu kimlik embedding ortalamasına uygulanır.
+- AlphaFace kimlik geçişi üretir.
+- UniFace, tüm referansların hizalanmış piksel harmanını kaynak görüntü olarak kullanarak görünüm geçişi üretir.
+- UniFace çıktısının alt yüz alanı AlphaFace çıktısına yumuşak eliptik maske ile karıştırılır. Kimlik geçişi ana yüzü, görünüm geçişi bıyık/sakal/çene dokusunu destekler.
+- Tek hibrit PNG hedef crop'a uygulanır; orijinal fotoğrafın geri kalanı korunur ve maske dışı piksel bütünlüğü kontrol edilir.
 
-UniFace'de ana görünüm fotoğrafı görsel kaynak olarak kullanılır; AlphaFace'de kaynak yüz gömmeleri ortalanır. **Bu işlem Apple Retake'teki gibi kişiye özel üretken model eğitimi değildir.** Apple'ın iç mimarisi açıklanmadığı için birebir aynılık iddiasında bulunmuyoruz. Kimlik benzerliği ve yüz kıllarının aktarımı hedeflenir ama garanti edilmez.
+Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. Her fotoğraf aynı hizalama düzlemine taşınır ve ağırlıklı bir profil bileşeni olur. Sonuç kalitesi referans fotoğrafların netliğine, poz çeşitliliğine, ışığına ve sakal/bıyığın kaç fotoğrafta belirgin olduğuna bağlıdır; kimlik benzerliği garanti edilmez.
 
 ## 6. Sorun giderme
 
 ### CUDAExecutionProvider bulunamadı
-FaceFusion ortamında:
-```powershell
-conda run -n facefusion python -c "import onnxruntime as ort; print(ort.get_available_providers())"
-```
-Çıktıda `CUDAExecutionProvider` bulunmalı. Kurulum betiğini tekrar çalıştır; `pip` ile rastgele ONNX Runtime paketleri yükleyip ortamı karıştırma.
+
+    conda run -n facefusion python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+
+Çıktıda CUDAExecutionProvider bulunmalı. Kurulum betiğini tekrar çalıştır; ortamı rastgele ONNX Runtime paketleriyle karıştırma.
 
 ### Tarayıcı yerel servise bağlanamıyor
-- PowerShell'de FaceFusion servisi çalışıyor olmalı.
-- `http://127.0.0.1:8765/health` yerel tarayıcıda açılmalı.
-- Edge/Chrome site izinlerinde `retake06.web.app` için yerel ağ erişimi verilmeli.
-- Servis loopback'te kalmalı; `0.0.0.0` kullanma.
+
+- FaceFusion PowerShell penceresi açık olmalı.
+- http://127.0.0.1:8765/health yerel tarayıcıda açılmalı.
+- Edge/Chrome site izinlerinde retake06.web.app için yerel ağ erişimi verilmelidir.
+- Servis loopback'te kalmalı; 0.0.0.0 kullanma.
 
 ### Referans yüz sayısı 10'dan az
-En az 10 fotoğrafta yüzün yeterince büyük, görünür ve net olması gerekir. Gözlük, maske, aşırı yan profil, çok küçük yüz veya bulanıklık tespit başarısını düşürebilir.
+
+En az 10 fotoğrafta yüzün yeterince büyük ve görünür olması gerekir. Gözlük, maske, aşırı yan profil, çok küçük yüz veya bulanıklık tespit başarısını düşürebilir.
 
 ### Bellek / işlem hatası
-İlk olarak FaceFusion modelinin tam indirildiğini ve `cuda` sağlayıcısının seçildiğini doğrula. İşlem sırasında GPU kullanan başka ağır modelleri (ComfyUI/FLUX gibi) kapat. FaceFusion hata kaydının son satırları Retake sonuç alanına aktarılır.
+
+Önce ComfyUI/FLUX gibi ağır GPU süreçlerini kapat. Sunucu CUDA bellek hatasında 768x768 ayarı için 512x512 yeniden denemesi yapar. Her iki geçişte de hata varsa FaceFusion PowerShell kayıtlarının son satırlarını sakla.
 
 ## 7. Gizlilik ve fotoğraf depolama
 
-FaceFusion çıkarımı yerelde yapılır; bu, kaynak fotoğrafların her durumda özel olduğu anlamına gelmez. Bu deponun önceki sürümlerinde `reference-faces/` altındaki 25 JPEG dosyası public GitHub deposuna eklenmiştir ve geçmiş commit'lerde de bulunabilir. Firebase Hosting'e dağıtılan kopyalar da herkese açık olabilir. Bu görselleri özel kabul etme. Sonraki güvenli profil aşamasında referanslar tarayıcı/yerel disk üzerinde seçilerek public depodan çıkarılmalıdır; Git geçmişini silmek ayrı ve dikkatli bir işlemdir.
+Profil oluşturma ve çıkarım yerel bilgisayarda yapılır. Ancak bu deponun önceki sürümlerinde reference-faces altındaki 25 JPEG dosyası public GitHub deposuna eklenmiştir. Güncel repo ve Firebase Hosting bu fotoğrafları herkese açık sunabilir; geçmiş Git commit'lerinde de bulunabilir. Yerel çıkarım bu dosyaları public olmaktan çıkarmaz. Bu nedenle referans fotoğraflarını gizli kabul etme. Fotoğrafların özel yerel depoya taşınması ve Git geçmişinin dikkatli temizlenmesi ayrı bir güvenlik çalışmasıdır.
 
-Hedef fotoğrafın tamamı yerel servisle paylaşılmaz; seçilen yüz crop'u gönderilir. Kaynak referans crop'ları da yerel FaceFusion sunucusuna gönderilir. Retake'in FaceFusion servisi `127.0.0.1` dışında dinlemez ve dış ağa açılmamalıdır.
+Hedef fotoğrafın tamamı gönderilmez; seçilen yüz crop'u gönderilir. Referans crop'ları ve hizalanmış profil aynı bilgisayardaki 127.0.0.1:8765 servisine gönderilir. Servis dış ağa açılmamalıdır.

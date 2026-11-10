@@ -76,7 +76,7 @@
 
           <section class="panel references-panel" aria-labelledby="referencesTitle">
             <div class="panel-heading">
-              <div class="step-heading"><span class="step-number">02</span><div><h2 id="referencesTitle">Yerel yüz havuzu</h2><p>Aynı kişiye ait fotoğrafları incele; sakal ve bıyığın en net göründüğü fotoğrafı ana görünüm referansı seç.</p></div></div>
+              <div class="step-heading"><span class="step-number">02</span><div><h2 id="referencesTitle">Yerel yüz havuzu</h2><p>Aynı kişiye ait 25 fotoğrafın tamamı otomatik hizalanır; netlik, açı ve ışığa göre ağırlıklandırılarak tek kişisel yüz profiline dönüştürülür.</p></div></div>
               <span id="referenceCount" class="count-pill">0 / 25</span>
             </div>
             <div id="referencesEmpty" class="references-empty" aria-live="polite">
@@ -86,7 +86,7 @@
             <div id="referencesGrid" class="references-grid" aria-live="polite"></div>
             <div class="references-footer">
               <button id="reloadReferencesButton" class="secondary-button" type="button">Klasörden yenile</button>
-              <span class="helper-text">10–25 referans · Ana görünüm fotoğrafını seç</span>
+              <span class="helper-text">10–25 referans · Otomatik ağırlıklı profil</span>
             </div>
           </section>
         </div>
@@ -107,13 +107,13 @@
               <div><strong id="engineTitle">AI bağlantısı kontrol ediliyor</strong><p id="engineDescription">Yüz algılama tarayıcıda çalışır. Kimlik aktarımı FaceFusion ve CUDA ile bilgisayarında yapılır.</p></div>
             <button id="swapButton" class="primary-button" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg>Yüzü düzenle<span>Hazırlanıyor</span></button>
             <button id="downloadButton" class="secondary-button full-width" type="button" disabled><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>Sonucu indir</button>
-            <p id="disabledNote" class="disabled-note">Deneysel çıktı; kimlik benzerliği garanti edilmez. Yalnızca seçili yüz maskesi düzenlenir.</p>
+            <p id="disabledNote" class="disabled-note">25 referanslı deneysel profil. Kimlik ve görünüş aktarımı garanti edilmez; fotoğrafın geri kalanı maske dışında korunur.</p>
           </section>
 
           <section class="panel privacy-panel" aria-labelledby="privacyTitle">
             <div class="privacy-heading"><span class="privacy-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><h2 id="privacyTitle">Veri ve işlem</h2></div>
             <ul class="privacy-list"><li><span></span>Hedef fotoğrafın tamamı gönderilmez.</li><li><span></span>Onay verirsen hedef yüz crop'u ve yüzü bulunan 10–25 referans bilgisayarındaki yerel FaceFusion servisine gönderilir.</li><li><span></span>Orijinal fotoğrafın maske dışındaki pikselleri korunur.</li></ul>
-            <p class="privacy-footnote">Kamera kullanılmaz. Açık onayından sonra hedef yüz crop'u ve yüzü bulunan referanslar yalnızca bu bilgisayardaki 127.0.0.1:8765 FaceFusion servisine gönderilir. UniFace seçili ana görünüm fotoğrafını görünüş kaynağı olarak kullanır; bu nedenle sakal/bıyık ayrıntılarının belirgin olduğu fotoğrafı seç. RTX A4000 üzerinde 768 piksel boost kullanılır. Model ağırlıklarının lisansı ticari kullanıma izin vermeyebilir; kalite ve kimlik benzerliği garanti edilmez. Mevcut referans fotoğrafları public GitHub/Firebase dosya alanında bulunabilir.</p>
+            <p class="privacy-footnote">Kamera kullanılmaz. Açık onayından sonra hedef yüz crop'u, yüzü bulunan 10–25 referans ve bunlardan oluşturulan hizalı profil yalnızca bu bilgisayardaki 127.0.0.1:8765 servisine gönderilir. Profil; AlphaFace'in tüm referanslardan ağırlıklı kimlik ortalamasını ve UniFace'ın bütün fotoğraflardan oluşturulan görünüm ortalamasını iki geçişte kullanır. İki sonuç alt yüz bölgesinde birleştirilir. Kimlik benzerliği ve sakal aktarımı garanti edilmez. Not: Referans JPEG'leri public GitHub/Firebase dosya alanında bulunduğundan çevrimiçi erişilebilir olabilir; yerel çıkarım bu dosyaları public olmaktan çıkarmaz.</p>
           </section>
         </aside>
       </div>

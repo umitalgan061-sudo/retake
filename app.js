@@ -21,7 +21,10 @@ import { createReferenceSetKey, getCachedProfile, saveCachedProfile } from "./sr
 
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
-const FACE_DETECTOR_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+const FACE_DETECTOR_MODEL_URLS = {
+  short: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+  full: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
+};
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -64,6 +67,8 @@ const state = {
   vision: null,
   referenceDetector: null,
   referenceDetectorPromise: null,
+  referenceDetectorFull: null,
+  referenceDetectorFullPromise: null,
   target: null,
   references: [],
   identityProfile: null,
@@ -368,7 +373,7 @@ function renderReferences() {
     label.textContent = reference.status !== "ready"
       ? (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR")
       : reference.profileStatus === "included"
-        ? (reference.profileMethod === "FaceDetector" ? "PROFİLDE · YEDEK" : "PROFİLDE")
+        ? (reference.profileMethod?.startsWith("FaceDetector") ? "PROFİLDE · YEDEK" : "PROFİLDE")
         : reference.profileStatus === "excluded"
           ? "PROFİLE ALINAMADI"
           : "YERELDE";
@@ -574,33 +579,36 @@ function createAlignedReferenceCanvas(image, landmarks) {
   return canvas;
 }
 
-async function getReferenceFaceDetector() {
-  if (state.referenceDetector) return state.referenceDetector;
-  if (!state.referenceDetectorPromise) {
-    state.referenceDetectorPromise = (async () => {
+async function getReferenceFaceDetector(range = "short") {
+  const normalizedRange = range === "full" ? "full" : "short";
+  const detectorKey = normalizedRange === "full" ? "referenceDetectorFull" : "referenceDetector";
+  const promiseKey = normalizedRange === "full" ? "referenceDetectorFullPromise" : "referenceDetectorPromise";
+  if (state[detectorKey]) return state[detectorKey];
+  if (!state[promiseKey]) {
+    state[promiseKey] = (async () => {
       const vision = state.vision || await FilesetResolver.forVisionTasks(
         "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm"
       );
       const options = {
-        baseOptions: { modelAssetPath: FACE_DETECTOR_MODEL_URL, delegate: "GPU" },
+        baseOptions: { modelAssetPath: FACE_DETECTOR_MODEL_URLS[normalizedRange], delegate: "GPU" },
         runningMode: "IMAGE",
-        minDetectionConfidence: 0.20,
+        minDetectionConfidence: normalizedRange === "full" ? 0.15 : 0.20,
         minSuppressionThreshold: 0.30
       };
       try {
         return await FaceDetector.createFromOptions(vision, options);
       } catch (gpuError) {
-        console.info("Referans yedek yüz algılama GPU'da başlatılamadı; CPU deneniyor.", gpuError);
+        console.info(`Referans ${normalizedRange}-range yüz algılama GPU'da başlatılamadı; CPU deneniyor.`, gpuError);
         options.baseOptions.delegate = "CPU";
         return FaceDetector.createFromOptions(vision, options);
       }
     })();
   }
   try {
-    state.referenceDetector = await state.referenceDetectorPromise;
-    return state.referenceDetector;
+    state[detectorKey] = await state[promiseKey];
+    return state[detectorKey];
   } catch (error) {
-    state.referenceDetectorPromise = null;
+    state[promiseKey] = null;
     throw error;
   }
 }
@@ -675,7 +683,7 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
   );
   // BlazeFace's six keypoints are a reliable fallback, but less detailed than
   // the 478-point mesh. Keep its contribution conservative in both profiles.
-  const weight = detectionMethod === "FaceDetector"
+  const weight = detectionMethod.startsWith("FaceDetector")
     ? Math.min(2, quality.weight)
     : quality.weight;
 
@@ -720,31 +728,37 @@ async function createReferenceFaceInput(reference) {
     primaryError = error?.message || "FaceLandmarker çalıştırılamadı.";
   }
 
-  let fallbackError = "BlazeFace yedek algılayıcısı yüz bulamadı.";
-  try {
-    const fallbackDetector = await getReferenceFaceDetector();
-    const detection = fallbackDetector.detect(image);
-    const faces = (detection.detections || [])
-      .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
-      .filter(Boolean)
-      .sort((a, b) =>
-        (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height)
-      );
-
-    for (const detected of faces) {
-      try {
-        return buildReferenceFaceCandidate(
-          reference, detected, sourceWidth, sourceHeight, "FaceDetector"
+  const fallbackErrors = [];
+  for (const range of ["short", "full"]) {
+    const detectorName = range === "short" ? "BlazeFace-short" : "BlazeFace-full";
+    try {
+      const fallbackDetector = await getReferenceFaceDetector(range);
+      const detection = fallbackDetector.detect(image);
+      const faces = (detection.detections || [])
+        .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
+        .filter(Boolean)
+        .sort((a, b) =>
+          (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height)
         );
-      } catch (error) {
-        fallbackError = error?.message || "BlazeFace hizalaması başarısız.";
+
+      for (const detected of faces) {
+        try {
+          return buildReferenceFaceCandidate(
+            reference, detected, sourceWidth, sourceHeight, `FaceDetector-${range}`
+          );
+        } catch (error) {
+          fallbackErrors.push(`${detectorName}: ${error?.message || "hizalama başarısız"}`);
+        }
       }
+      if (faces.length === 0) fallbackErrors.push(`${detectorName}: yüz bulunamadı`);
+    } catch (error) {
+      fallbackErrors.push(`${detectorName}: ${error?.message || "algılayıcı başlatılamadı"}`);
     }
-  } catch (error) {
-    fallbackError = error?.message || "BlazeFace yedek algılayıcısı başlatılamadı.";
   }
 
-  throw new Error(`FaceLandmarker: ${primaryError}; BlazeFace: ${fallbackError}`);
+  throw new Error(
+    `FaceLandmarker: ${primaryError}; ${fallbackErrors.join("; ")}`
+  );
 }
 
 function createAppearanceProfile(candidates) {
@@ -1264,6 +1278,7 @@ function initializeInteractions() {
     });
     state.detector?.close();
     state.referenceDetector?.close();
+    state.referenceDetectorFull?.close();
   });
 }
 

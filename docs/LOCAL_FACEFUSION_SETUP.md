@@ -69,7 +69,7 @@ Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v2, ide
 4. Hedef fotoğrafı yükle ve değiştirilecek yüzü seç.
 5. Yerel işlem onayını kabul et.
 
-Uygulama profil oluşturmayı ilk kullanımda yapar. Bu işlem tamamlandıktan sonra aynı sekmede farklı hedef fotoğraflara geçildiğinde profil tekrar hesaplanmaz; profil bellekte yeniden kullanılır. Sayfa yenilenirse 25 referanstan yeniden oluşturulur. Kalıcı IndexedDB/disk profili henüz bu sürümün parçası değildir.
+Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz görselleri, ağırlıklar ve hizalanmış görünüm profili tarayıcının IndexedDB alanında cihazda saklanır. Aynı 25 referans kümesiyle sayfa yenilendiğinde profil yeniden hizalanmaz; kayıtlı yerel profil tekrar kullanılır. Referans fotoğraflarından herhangi biri değişirse profil anahtarı değişir ve profil yeniden oluşturulur. Tarayıcı site verileri temizlenirse yerel profil de silinir; profil başka tarayıcı veya cihaza otomatik taşınmaz.
 
 ## 5. Profilin nasıl oluştuğu
 

@@ -1,6 +1,6 @@
 # Retake — Yerel FaceFusion kurulumu (Windows)
 
-Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. Yüzü bulunan 10–25 referansın tamamı ortak göz koordinatına hizalanır; netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
+Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. 25 referansın tamamı FaceLandmarker ile algılanır; gerekirse BlazeFace yedek algılayıcısı kullanılarak ortak göz koordinatına hizalanır; netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
 
 ## Sistem
 
@@ -76,10 +76,10 @@ Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz
 
 ## 5. Profilin nasıl oluştuğu
 
-- MediaPipe tarayıcıda hedef yüzü ve referans yüzleri algılar.
+- MediaPipe FaceLandmarker 478 noktalı yüz ağı ile önce referansları algılar. Başarısız kalanlarda BlazeFace FaceDetector düşük eşikle çalışır ve altı anahtar nokta (iki göz, burun, ağız ve iki kulak) üzerinden yedek hizalama kurar. Yedek hizalanan görsellerin kalite ağırlığı en fazla 2 ile sınırlandırılır.
 - Her referans yüzü göz işaretlerine göre ortak 512×682 tuvale hizalanır.
 - Netlik Laplacian varyansı ile ölçülür; yüz alanı, frontalness ve pozlama da puanlanır.
-- Tüm yüzler profile katılır; kaliteye göre 1, 2 veya 3 oy alırlar.
+- 25/25 yüz profile katılır; FaceLandmarker hizalamaları kaliteye göre 1–3 oy, BlazeFace yedek hizalamaları en fazla 2 oy alır. Bir referans hâlâ hizalanamazsa uygulama dosya adını ve iki algılayıcının hata nedenlerini gösterir, eksik profille FaceFusion çalıştırmaz.
 - Ağırlıklı ortalama RGBA görünüm profili oluşturulur. Aşırı farklı pozlar ve ifadeler bu ortalamayı yumuşatabilir.
 - Aynı ağırlıklar FaceFusion kaynak listesinde tekrarlanarak AlphaFace'in 512 boyutlu kimlik embedding ortalamasına uygulanır.
 - AlphaFace kimlik geçişi üretir.
@@ -104,9 +104,9 @@ Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. H
 - Edge/Chrome site izinlerinde retake06.web.app için yerel ağ erişimi verilmelidir.
 - Servis loopback'te kalmalı; 0.0.0.0 kullanma.
 
-### Referans yüz sayısı 10'dan az
+### 25 referansın tamamı hizalanamadı
 
-En az 10 fotoğrafta yüzün yeterince büyük ve görünür olması gerekir. Gözlük, maske, aşırı yan profil, çok küçük yüz veya bulanıklık tespit başarısını düşürebilir.
+Profil 25/25 zorunludur. Hata mesajında dosya adı ve FaceLandmarker/BlazeFace sonuçları görünür. İlgili fotoğrafı daha yüksek çözünürlüklü, yüzün daha büyük ve net göründüğü bir sürümle değiştir; aşırı yan profil, yüzün kapanması veya çok küçük yüz her iki algılayıcıyı da başarısız bırakabilir. Yeni algılama zinciri nedeniyle IndexedDB'deki eski 19/25 profil önbelleği kullanılmaz; ilk yeni işlem profili baştan oluşturur.
 
 ### Bellek / işlem hatası
 

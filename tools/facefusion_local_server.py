@@ -13,6 +13,8 @@ from pathlib import Path
 
 MIN_REFERENCES = 10
 MAX_REFERENCES = 25
+FACE_SWAPPER_MODELS = ("alphaface_256", "uniface_256", "blendswap_256")
+FACE_SWAPPER_PIXEL_BOOSTS = ("512x512", "768x768", "1024x1024")
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_REQUEST_BYTES = 180 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
@@ -145,7 +147,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "ok": script.is_file(),
             "engine": "facefusion",
             "version": "3.9.2",
-            "model": "alphaface_256",
+            "model": self.server.face_swapper_model,  # type: ignore[attr-defined]
+            "pixel_boost": self.server.face_swapper_pixel_boost,  # type: ignore[attr-defined]
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
             "provider_error": provider_error,
@@ -202,8 +205,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     "--target-path", str(target_path),
                     "--output-path", str(output_path),
                     "--processors", "face_swapper",
-                    "--face-swapper-model", "alphaface_256",
-                    "--face-swapper-pixel-boost", "512x512",
+                    "--face-swapper-model", self.server.face_swapper_model,  # type: ignore[attr-defined]
+                    "--face-swapper-pixel-boost", self.server.face_swapper_pixel_boost,  # type: ignore[attr-defined]
                     "--face-swapper-weight", "1.0",
                     "--face-selector-mode", "one",
                     "--face-mask-types", "box",
@@ -214,7 +217,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     "--log-level", "info"
                 ]
 
-                print(f"İş başlatıldı: {len(source_paths)} kimlik referansı, hedef 1 fotoğraf.", flush=True)
+                print(
+                    f"İş başlatıldı: {len(source_paths)} referans; model={self.server.face_swapper_model}; "
+                    f"pixel_boost={self.server.face_swapper_pixel_boost}; hedef=1 fotoğraf.",
+                    flush=True
+                )
                 try:
                     completed = subprocess.run(
                         command,
@@ -259,6 +266,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--facefusion-dir", required=True, type=Path, help="FaceFusion kaynak klasörü")
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     parser.add_argument("--port", default=8765, type=int)
+    parser.add_argument(
+        "--face-swapper-model",
+        choices=FACE_SWAPPER_MODELS,
+        default="uniface_256",
+        help="UniFace görünüm aktarımı; AlphaFace kimlik gömmesi alternatifi."
+    )
+    parser.add_argument(
+        "--face-swapper-pixel-boost",
+        choices=FACE_SWAPPER_PIXEL_BOOSTS,
+        default="768x768",
+        help="Yüksek piksel boost daha ayrıntılı çıktı verebilir; bellek ve süre kullanımını artırır."
+    )
     parser.add_argument("--origin", action="append", default=[], help="İzin verilen web origin'i; birden çok kez verilebilir.")
     return parser.parse_args()
 
@@ -281,7 +300,13 @@ def main() -> int:
     server = ThreadingHTTPServer((args.host, args.port), RetakeFaceFusionHandler)
     server.allowed_origins = origins  # type: ignore[attr-defined]
     server.facefusion_dir = facefusion_dir  # type: ignore[attr-defined]
-    print(f"Retake FaceFusion servisi: http://{args.host}:{args.port}", flush=True)
+    server.face_swapper_model = args.face_swapper_model  # type: ignore[attr-defined]
+    server.face_swapper_pixel_boost = args.face_swapper_pixel_boost  # type: ignore[attr-defined]
+    print(
+        f"Retake FaceFusion servisi: http://{args.host}:{args.port} "
+        f"(model={args.face_swapper_model}, pixel boost={args.face_swapper_pixel_boost})",
+        flush=True
+    )
     print("Yalnızca loopback; dış ağ erişimi kapalı.", flush=True)
     print("İzinli web origin'leri: " + ", ".join(sorted(origins)), flush=True)
     try:

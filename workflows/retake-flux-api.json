@@ -35,7 +35,7 @@
         0
       ],
       "positive": [
-        "35",
+        "203",
         0
       ],
       "negative": [
@@ -53,7 +53,7 @@
     "inputs": {
       "guidance": 2.5,
       "conditioning": [
-        "200",
+        "203",
         0
       ]
     },
@@ -160,21 +160,14 @@
   },
   "195": {
     "inputs": {
-      "pixels": [
-        "192",
-        0
-      ],
-      "vae": [
-        "39",
-        0
-      ]
+      "image": "identity-reference-4.png"
     },
-    "class_type": "VAEEncode"
+    "class_type": "LoadImage"
   },
   "196": {
     "inputs": {
       "pixels": [
-        "193",
+        "192",
         0
       ],
       "vae": [
@@ -187,7 +180,7 @@
   "197": {
     "inputs": {
       "pixels": [
-        "194",
+        "193",
         0
       ],
       "vae": [
@@ -199,21 +192,34 @@
   },
   "198": {
     "inputs": {
-      "conditioning": [
-        "177",
+      "pixels": [
+        "194",
         0
       ],
-      "latent": [
-        "195",
+      "vae": [
+        "39",
         0
       ]
     },
-    "class_type": "ReferenceLatent"
+    "class_type": "VAEEncode"
   },
   "199": {
     "inputs": {
+      "pixels": [
+        "195",
+        0
+      ],
+      "vae": [
+        "39",
+        0
+      ]
+    },
+    "class_type": "VAEEncode"
+  },
+  "200": {
+    "inputs": {
       "conditioning": [
-        "198",
+        "177",
         0
       ],
       "latent": [
@@ -223,14 +229,40 @@
     },
     "class_type": "ReferenceLatent"
   },
-  "200": {
+  "201": {
     "inputs": {
       "conditioning": [
-        "199",
+        "200",
         0
       ],
       "latent": [
         "197",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
+  },
+  "202": {
+    "inputs": {
+      "conditioning": [
+        "201",
+        0
+      ],
+      "latent": [
+        "198",
+        0
+      ]
+    },
+    "class_type": "ReferenceLatent"
+  },
+  "203": {
+    "inputs": {
+      "conditioning": [
+        "202",
+        0
+      ],
+      "latent": [
+        "199",
         0
       ]
     },

@@ -1,13 +1,7 @@
-# NVIDIA Hosted API kurulumu artık kullanılmıyor
+# NVIDIA / ComfyUI / FLUX — eski kurulum, artık kullanılmıyor
 
-Retake'in web sürümü, FLUX.1-Kontext-dev işleme için NVIDIA hosted API / Cloudflare Worker yolunu yerel ComfyUI + GGUF akışıyla değiştirdi.
+Retake'in güncel web yüz değiştirme motoru NVIDIA hosted API, Cloudflare Worker, ComfyUI veya FLUX değildir. Web arayüzü yerel FaceFusion 3.9.2 servisine bağlanır.
 
-Bu belge eski NVIDIA API anahtarı ve Cloudflare Worker kurulumunu anlatır; yeni kurulumda bu adımları uygulamayın. API anahtarını Retake sayfasına veya HTML/JavaScript kaynaklarına eklemeyin.
+Yeni kurulum: [LOCAL_FACEFUSION_SETUP.md](LOCAL_FACEFUSION_SETUP.md).
 
-Güncel kurulum için: [LOCAL_COMFYUI_SETUP.md](LOCAL_COMFYUI_SETUP.md).
-
-Yeni akışta:
-- FLUX.1-Kontext-dev GGUF modeli kullanıcının bilgisayarındaki RTX GPU üzerinde çalışır.
-- Retake tarayıcıdan `http://127.0.0.1:8188` adresindeki ComfyUI API'sine bağlanır.
-- NVIDIA hosted API anahtarı ve Firebase Functions gerekmez.
-- Firebase Hosting Spark planı korunabilir.
+Eski ComfyUI/FLUX model dosyalarını bilgisayarından silmek zorunda değilsin; yeni Retake akışı onları çağırmaz. Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde çalıştırılmalıdır. Firebase Functions veya ücretli NVIDIA API anahtarı gerekmez.

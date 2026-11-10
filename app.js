@@ -145,11 +145,13 @@ async function checkFaceFusionStatus() {
   }
 
   if (state.faceFusionStatus.configured) {
-    elements.engineTitle.textContent = "Kişisel yüz motoru hazır";
     const model = state.faceFusionStatus.model;
-    elements.engineDescription.textContent = model === "uniface_256"
-      ? "UniFace 256, seçtiğin ana görünüm fotoğrafını doğrudan kaynak görsel olarak kullanır. Sakal ve bıyığın belirgin olduğu referansı ana görünüm olarak seç; RTX A4000 üzerinde 768 piksel boost ile işlenir."
-      : "AlphaFace 256, referanslardan ortalama kimlik gömmesi oluşturur. Sakal ve bıyık gibi görünüş ayrıntıları için sonuçlar değişken olabilir.";
+    elements.engineTitle.textContent = model === "uniface_256"
+      ? "UniFace görünüm motoru hazır"
+      : (model === "blendswap_256" ? "BlendSwap görünüm motoru hazır" : "AlphaFace kimlik motoru hazır");
+    elements.engineDescription.textContent = ["uniface_256", "blendswap_256"].includes(model)
+      ? model + ", seçtiğin ana görünüm fotoğrafını doğrudan kaynak görsel olarak kullanır. Sakal ve bıyığın belirgin olduğu referansı ana görünüm olarak seç; RTX A4000 üzerinde " + (state.faceFusionStatus.pixelBoost || "768x768") + " pixel boost ile işlenir."
+      : "AlphaFace 256, referanslardan ortalama kimlik gömmesi oluşturur. Sakal ve bıyık gibi görünüş ayrıntıları doğrudan kaynak fotoğraf gibi kopyalanmayabilir.";
   } else {
     elements.engineTitle.textContent = "Yerel FaceFusion servisi bekleniyor";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
@@ -561,6 +563,10 @@ function buildLocalFaceFusionInputs() {
   const profileReferences = primaryReference
     ? [primaryReference, ...candidates.filter((reference) => reference !== primaryReference)]
     : candidates;
+  if (!primaryReference && profileReferences[0]) {
+    state.primaryReferenceFile = profileReferences[0].file;
+    renderReferences();
+  }
   if (profileReferences.length < MIN_FACEFUSION_REFERENCE_COUNT) {
     throw new Error(
       `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${profileReferences.length} yüz bulundu.`
@@ -570,7 +576,7 @@ function buildLocalFaceFusionInputs() {
   state.referenceFaceCropCount = profileReferences.length;
   state.selectedReferenceCount = profileReferences.length;
   showToast(
-    `${profileReferences.length}/${MAX_REFERENCE_FACES} referansta yüz bulundu · tamamı kimlik ortalamasına katılacak.`
+    `${profileReferences.length}/${MAX_REFERENCE_FACES} referansta yüz bulundu · ana görünüm: ${profileReferences[0]?.name || "ilk referans"}.`
   );
   if (failedReferenceCrops > 0) {
     console.warn(`${failedReferenceCrops} referans fotoğrafında yüz kırpımı yapılamadı.`);
@@ -663,8 +669,8 @@ async function runFaceFusionEdit() {
 
   const primaryReference = state.references.find((reference) => reference.file === state.primaryReferenceFile);
   const activeModel = state.faceFusionStatus.model || "uniface_256";
-  const modelExplanation = activeModel === "uniface_256"
-    ? "UniFace seçilen ana görünüm fotoğrafını doğrudan görsel kaynak olarak kullanır. Sakal/bıyık aktarımı için ana görünüm olarak bu ayrıntıların net göründüğü fotoğrafı seç. "
+  const modelExplanation = ["uniface_256", "blendswap_256"].includes(activeModel)
+    ? activeModel + " seçilen ana görünüm fotoğrafını doğrudan görsel kaynak olarak kullanır. Sakal/bıyık aktarımı için bu ayrıntıların net göründüğü fotoğrafı ana görünüm seç. "
     : "AlphaFace çoklu referanslardan kimlik gömmelerini ortalar; sakal/bıyık görünümü doğrudan kopyalanmayabilir. ";
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +

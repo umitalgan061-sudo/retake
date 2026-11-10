@@ -73,6 +73,7 @@ const state = {
   references: [],
   identityProfile: null,
   referenceSetKey: null,
+  profileIsBuilding: false,
   referencesLoading: false,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
@@ -97,6 +98,23 @@ function setRuntimeStatus(message) {
   elements.runtimeStatus.textContent = message;
 }
 
+function updateProfileIndicator({ title, detail, progress, status = "loading" } = {}) {
+  const titleElement = $("#profileStatusText");
+  const detailElement = $("#profileStatusDetail");
+  const progressElement = $("#profileProgressBar");
+  const dotElement = $("#profileStateDot");
+  if (titleElement && title) titleElement.textContent = title;
+  if (detailElement && detail) detailElement.textContent = detail;
+  if (progressElement && Number.isFinite(progress)) {
+    const roundedProgress = Math.round(Math.max(0, Math.min(100, progress)) / 10) * 10;
+    for (let value = 0; value <= 100; value += 10) progressElement.classList.toggle("progress-" + value, value === roundedProgress);
+  }
+  if (dotElement) {
+    dotElement.classList.toggle("is-ready", status === "ready");
+    dotElement.classList.toggle("is-error", status === "error");
+  }
+}
+
 function localFaceFusionBase() {
   const configured = document.querySelector('meta[name="retake-facefusion-base"]')?.content?.trim();
   const value = configured || "http://127.0.0.1:8765";
@@ -118,9 +136,9 @@ function updateSwapAvailability() {
     referenceCount === MAX_REFERENCE_FACES && hasTarget && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
-  const tag = elements.swapButton.querySelector("span");
+  const tag = elements.swapButton.querySelector(".button-state");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "Kişisel yüz profili hazır" : (state.faceFusionStatus.configured ? "Fotoğraf seç" : "Bilgisayara bağlan"));
+    (enabled ? "HAZIR" : (state.faceFusionStatus.configured ? "FOTOĞRAF SEÇ" : "MOTORU BAĞLA"));
 }
 
 async function checkFaceFusionStatus() {
@@ -156,8 +174,10 @@ async function checkFaceFusionStatus() {
     }
   }
 
+  const connectionLabel = $("#topConnectionText");
+  if (connectionLabel) connectionLabel.textContent = state.faceFusionStatus.configured ? "LOCAL ENGINE READY" : "LOCAL ENGINE OFFLINE";
   if (state.faceFusionStatus.configured) {
-    elements.engineTitle.textContent = "25 fotoğraflı kişisel profil motoru hazır";
+    elements.engineTitle.textContent = "Yerel yüz profili motoru hazır";
     elements.engineDescription.textContent =
       "Tüm referanslar kalite ve açılarına göre hizalanıp ağırlıklı bir görünüm profiline dönüştürülür. AlphaFace kimlik profilini, UniFace ise harmanlanmış görünüm ve sakal ayrıntılarını işler.";
   } else {
@@ -333,6 +353,39 @@ function renderReferences() {
   const readyCount = state.references.filter((item) => item.status === "ready").length;
   elements.referenceCount.textContent = readyCount + " / " + MAX_REFERENCE_FACES;
   elements.referencesEmpty.hidden = readyCount > 0;
+  if (state.profileIsBuilding) {
+    updateProfileIndicator({
+      title: "Yüz profili oluşturuluyor",
+      detail: "Referanslar hizalanıyor, kalite ağırlıkları ve kimlik profili hesaplanıyor.",
+      progress: 72
+    });
+  } else if (state.identityProfile?.validCount === MAX_REFERENCE_FACES) {
+    updateProfileIndicator({
+      title: "Kişisel yüz profili hazır",
+      detail: "Kimlik ve görünüm profili bu tarayıcıda önbelleğe alındı.",
+      progress: 100,
+      status: "ready"
+    });
+  } else if (state.referencesLoading) {
+    updateProfileIndicator({
+      title: "Profil kaynakları hazırlanıyor",
+      detail: readyCount > 0 ? "Kaynak görseller kontrol ediliyor." : "Yerel profil kaynakları okunuyor.",
+      progress: 8 + readyCount / MAX_REFERENCE_FACES * 34
+    });
+  } else if (readyCount === MAX_REFERENCE_FACES) {
+    updateProfileIndicator({
+      title: "Kaynak seti hazır",
+      detail: "İlk düzenlemede yüz hizalama ve ArcFace kontrolü otomatik tamamlanacak.",
+      progress: 46
+    });
+  } else {
+    updateProfileIndicator({
+      title: "Profil kaynakları eksik",
+      detail: state.referenceLoadError || "Yerel referans dosyaları kontrol edilmeli.",
+      progress: readyCount / MAX_REFERENCE_FACES * 36,
+      status: "error"
+    });
+  }
 
   if (readyCount === 0) {
     const title = elements.referencesEmpty.querySelector("strong");
@@ -783,6 +836,12 @@ function createAppearanceProfile(candidates) {
 }
 
 async function buildLocalFaceFusionInputs() {
+  state.profileIsBuilding = true;
+  updateProfileIndicator({
+    title: "Yüz profili oluşturuluyor",
+    detail: "Referanslar hizalanıyor, kalite ağırlıkları hesaplanıyor ve önbellek hazırlanıyor.",
+    progress: 58
+  });
   const readyReferences = state.references.filter(
     (reference) => reference.status === "ready" && reference.image && reference.blob
   );
@@ -840,7 +899,14 @@ async function buildLocalFaceFusionInputs() {
         validCount: cached.validCount,
         totalWeight: cached.totalWeight
       };
-      showToast(`Kayıtlı kişisel yüz profili yüklendi · ${cached.validCount}/${MAX_REFERENCE_FACES} referans.`);
+      state.profileIsBuilding = false;
+      updateProfileIndicator({
+        title: "Kişisel yüz profili hazır",
+        detail: "Daha önce oluşturulan profil bu cihazın yerel önbelleğinden açıldı.",
+        progress: 100,
+        status: "ready"
+      });
+      showToast("Kayıtlı kişisel yüz profili yüklendi.");
     } else {
       const candidates = [];
       const referenceDiagnostics = [];
@@ -903,6 +969,15 @@ async function buildLocalFaceFusionInputs() {
         ...profile
       };
       const persisted = await saveCachedProfile(profileKey, profile);
+      state.profileIsBuilding = false;
+      updateProfileIndicator({
+        title: "Kişisel yüz profili hazır",
+        detail: persisted
+          ? "Profil bu cihazda güvenli tarayıcı alanına kaydedildi."
+          : "Profil bu oturum için hazır; kalıcı önbellek kullanılamadı.",
+        progress: 100,
+        status: "ready"
+      });
       state.referenceFaceCropCount = appearance.validCount;
       state.selectedReferenceCount = appearance.validCount;
       renderReferences();
@@ -1115,6 +1190,15 @@ async function runFaceFusionEdit() {
     );
     setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
   } catch (error) {
+    state.profileIsBuilding = false;
+    if (!state.identityProfile?.validCount) {
+      updateProfileIndicator({
+        title: "Profil hazırlanamadı",
+        detail: error?.message || "Yerel profil oluşturma adımı başarısız.",
+        progress: 0,
+        status: "error"
+      });
+    }
     console.error("Yerel FaceFusion işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";
     elements.outputStatus.textContent = "Hata";

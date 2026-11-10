@@ -155,7 +155,7 @@ async function checkNvidiaStatus() {
   if (state.nvidiaStatus.configured) {
     elements.engineTitle.textContent = "Yerel FLUX hazır";
     elements.engineDescription.textContent =
-      `ComfyUI bilgisayarında çalışıyor. Hedef yüz crop'u ve ${MAX_REFERENCE_FACES} referans fotoğrafı internet üzerinden bir AI servisine gönderilmeden RTX A4000'de işlenecek.`;
+      `ComfyUI bilgisayarında çalışıyor. 25 referans arasından seçilen en net ${KONTEXT_REFERENCE_COUNT} yüz ayrı kimlik girdisi olarak RTX A4000'de işlenecek.`;
   } else {
     elements.engineTitle.textContent = "Yerel FLUX servisi bekleniyor";
     elements.engineDescription.textContent = state.nvidiaStatus.message;
@@ -564,7 +564,7 @@ function buildLocalComfyInputs() {
   };
 }
 
-function applyGeneratedFacePatch(generatedBoardImage, crop) {
+function applyGeneratedFacePatch(generatedTargetImage, crop) {
   if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
   const sourceImage = state.target.image;
   const imageWidth = sourceImage.naturalWidth;
@@ -580,10 +580,10 @@ function applyGeneratedFacePatch(generatedBoardImage, crop) {
   generatedCanvas.width = crop.width;
   generatedCanvas.height = crop.height;
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
-  const outputWidth = generatedBoardImage.naturalWidth || generatedBoardImage.width;
-  const outputHeight = generatedBoardImage.naturalHeight || generatedBoardImage.height;
+  const outputWidth = generatedTargetImage.naturalWidth || generatedTargetImage.width;
+  const outputHeight = generatedTargetImage.naturalHeight || generatedTargetImage.height;
   generatedContext.drawImage(
-    generatedBoardImage,
+    generatedTargetImage,
     0, 0, outputWidth, outputHeight,
     0, 0, crop.width, crop.height
   );
@@ -705,7 +705,7 @@ async function runNvidiaFaceEdit() {
   elements.outputPlaceholder.hidden = false;
   elements.outputPlaceholder.querySelector("strong").textContent = "Fotoğraflar yerel modele gönderiliyor…";
   elements.outputMessage.textContent =
-    "Hedef fotoğraf ve seçilen dört kimlik referansı ayrı görseller olarak ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.";
+    `Hedef fotoğraf ve seçilen ${KONTEXT_REFERENCE_COUNT} kimlik referansı ayrı görseller olarak ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.`;
 
   let generatedUrl = null;
   try {

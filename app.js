@@ -251,7 +251,8 @@ function clearResult() {
   elements.outputStage.classList.remove("has-result");
   elements.outputSymbol.hidden = false;
   elements.outputTitle.textContent = "Önizleme";
-  elements.outputStatus.textContent = "Beklemede";  elements.outputMessage.textContent = "FaceFusion motoru hazır olduğunda sonuç burada görünecek.";
+  elements.outputStatus.textContent = "Beklemede";
+  elements.outputMessage.textContent = "FaceFusion motoru hazır olduğunda sonuç burada görünecek.";
   updateSwapAvailability();
 }
 
@@ -470,7 +471,6 @@ async function canvasToBlob(canvas) {
   });
 }
 
-const MIN_FACEFUSION_REFERENCE_COUNT = MAX_REFERENCE_FACES;
 const PROFILE_PIPELINE_VERSION = "retake-25-reference-fallback-v3";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
@@ -506,7 +506,8 @@ function measureAlignedReference(canvas, landmarks, face, sourceWidth, sourceHei
   const xMin = Math.floor(width * 0.16);
   const xMax = Math.floor(width * 0.84);
   const yMin = Math.floor(height * 0.16);
-  const yMax = Math.floor(height * 0.88);  const lumaAt = (x, y) => {
+  const yMax = Math.floor(height * 0.88);
+  const lumaAt = (x, y) => {
     const offset = (y * width + x) * 4;
     return data[offset] * 0.2126 + data[offset + 1] * 0.7152 + data[offset + 2] * 0.0722;
   };
@@ -900,7 +901,8 @@ async function buildLocalFaceFusionInputs() {
 
   const profile = state.identityProfile;
   state.referenceFaceCropCount = profile.validCount;
-  state.selectedReferenceCount = profile.validCount;  const faceBounds = {
+  state.selectedReferenceCount = profile.validCount;
+  const faceBounds = {
     x: crop.face.x * FACEFUSION_TARGET_WIDTH / crop.width,
     y: crop.face.y * FACEFUSION_TARGET_HEIGHT / crop.height,
     width: crop.face.width * FACEFUSION_TARGET_WIDTH / crop.width,
@@ -1150,7 +1152,8 @@ async function initializeDetector() {
     elements.engineTitle.textContent = "Yüz algılama motoru yüklenemedi";
     elements.engineDescription.textContent =
       "Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol edip sayfayı yenile.";
-    setRuntimeStatus("Yüz algılama başlatılamadı");    updateSwapAvailability();
+    setRuntimeStatus("Yüz algılama başlatılamadı");
+    updateSwapAvailability();
     showToast("Yüz algılama modeli yüklenemedi. İnternet bağlantısını kontrol et.");
   }
 }

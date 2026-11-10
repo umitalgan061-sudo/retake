@@ -28,7 +28,10 @@ APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v4"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
+# FaceFusion renders a full-strength enhancer output; Retake applies the
+# conservative 25% blend once after inference, preserving the existing alpha.
 FACE_ENHANCER_BLEND = 25
+FACE_ENHANCER_INTERNAL_BLEND = 100
 FACE_ENHANCER_WEIGHT = 0.25
 DETAIL_TRANSFER_STRENGTH = 0.20
 
@@ -308,7 +311,7 @@ def run_face_enhancer(
         "--output-path", str(output_path),
         "--processors", "face_enhancer",
         "--face-enhancer-model", FACE_ENHANCER_MODEL,
-        "--face-enhancer-blend", str(FACE_ENHANCER_BLEND),
+        "--face-enhancer-blend", str(FACE_ENHANCER_INTERNAL_BLEND),
         "--face-enhancer-weight", str(FACE_ENHANCER_WEIGHT),
         "--face-selector-mode", "one",
         *face_mask_cli_arguments(),
@@ -468,7 +471,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
-            "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer"
+            "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -520,6 +523,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "pixel_boost": self.server.face_swapper_pixel_boost,  # type: ignore[attr-defined]
             "face_enhancer_enabled": self.server.face_enhancer_enabled,  # type: ignore[attr-defined]
             "face_enhancer_model": FACE_ENHANCER_MODEL if self.server.face_enhancer_enabled else None,  # type: ignore[attr-defined]
+            "face_enhancer_blend": FACE_ENHANCER_BLEND if self.server.face_enhancer_enabled else 0,
             "face_mask_types": list(FACE_MASK_TYPES),
             "face_parser_model": FACE_PARSER_MODEL,
             "face_occluder_model": FACE_OCCLUDER_MODEL,
@@ -675,6 +679,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 )
                 self.send_header("X-Retake-Pixel-Boost", f"{identity_boost},{appearance_boost}")
                 self.send_header("X-Retake-Face-Enhancer", FACE_ENHANCER_MODEL if used_enhancer else "off")
+                self.send_header("X-Retake-Identity-Weighted-Votes", str(len(weighted_identity_paths)))
                 self._cors_headers()
                 self.end_headers()
                 self.wfile.write(result)

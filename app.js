@@ -1077,6 +1077,7 @@ async function runFaceFusionEdit() {
       .split(",").filter(Boolean).map((value) => Number(value)).filter(Number.isInteger);
     const actualPixelBoost = response.headers.get("X-Retake-Pixel-Boost") || "bilinmiyor";
     const faceEnhancer = response.headers.get("X-Retake-Face-Enhancer") || "off";
+    const identityWeightedVotes = response.headers.get("X-Retake-Identity-Weighted-Votes") || "bilinmiyor";
     const generatedBlob = await response.blob();
     if (!generatedBlob.size || !generatedBlob.type.startsWith("image/")) {
       throw new Error("FaceFusion geçerli bir sonuç görseli döndürmedi.");
@@ -1098,11 +1099,15 @@ async function runFaceFusionEdit() {
     const identityStatus = identityMedian
       ? `ArcFace medyan cosine benzerliği: ${Number(identityMedian).toFixed(3)}.`
       : "ArcFace tutarlılık raporu alınamadı.";
+    const outlierLabels = identityOutliers.map((index) => {
+      const reference = state.references[index - 1];
+      return reference ? `${index}. ${reference.name}` : `#${index}`;
+    });
     const outlierStatus = identityOutliers.length
-      ? `Kontrol önerilen referans sıraları: ${identityOutliers.join(", ")}; kimlik oyları 1'e indirildi.`
+      ? `Kontrol önerilen referanslar: ${outlierLabels.join("; ")}; kimlik oyları 1'e indirildi.`
       : "ArcFace belirgin aykırı referans bulmadı.";
     elements.disabledNote.textContent =
-      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla profile katıldı (toplam kalite oyu: ${totalProfileWeight}). ${identityStatus} ${outlierStatus} FaceFusion pixel boost: ${actualPixelBoost}. GFPGAN: ${faceEnhancer}. XSeg/BiSeNet maskesi ve değişiklik matı uygulandı; maske dışındaki kaynak pikseller korunur.`;
+      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla profile katıldı (toplam kalite oyu: ${totalProfileWeight}). ${identityStatus} ${outlierStatus} Kimlik toplam oyu: ${identityWeightedVotes}. FaceFusion pixel boost: ${actualPixelBoost}. GFPGAN: ${faceEnhancer}. XSeg/BiSeNet maskesi ve değişiklik matı uygulandı; maske dışındaki kaynak pikseller korunur.`;
     showToast(
       identityOutliers.length
         ? `Profil hazır · ${profileCount} referans · ${identityOutliers.length} referansı kontrol et.`

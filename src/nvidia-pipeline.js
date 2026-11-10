@@ -74,9 +74,12 @@ export function createFaceAlphaMask(width, height, faceBounds, feather = 0.18) {
   }
 
   const centerX = faceBounds.x + faceBounds.width / 2;
-  const centerY = faceBounds.y + faceBounds.height / 2;
-  const radiusX = faceBounds.width * 0.74;
-  const radiusY = faceBounds.height * 0.72;
+  // Shift the blend region slightly downward and extend it below the detected
+  // chin. This lets the generated lower-face area (including a beard) survive
+  // compositing instead of being clipped by a tight oval around facial skin.
+  const centerY = faceBounds.y + faceBounds.height * 0.62;
+  const radiusX = faceBounds.width * 0.76;
+  const radiusY = faceBounds.height * 0.82;
   const mask = new Float32Array(width * height);
 
   for (let y = 0; y < height; y += 1) {

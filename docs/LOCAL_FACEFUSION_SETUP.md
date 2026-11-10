@@ -76,7 +76,7 @@ Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz
 
 ## 5. Profilin nasıl oluştuğu
 
-- MediaPipe FaceLandmarker 478 noktalı yüz ağı ile önce referansları algılar. Başarısız kalanlarda BlazeFace FaceDetector düşük eşikle çalışır ve altı anahtar nokta (iki göz, burun, ağız ve iki kulak) üzerinden yedek hizalama kurar. Yedek hizalanan görsellerin kalite ağırlığı en fazla 2 ile sınırlandırılır.
+- MediaPipe FaceLandmarker 478 noktalı yüz ağı ile önce referansları algılar. Başarısız kalanlarda BlazeFace FaceDetector önce kısa menzil, sonra tam menzil modeliyle düşük eşikte çalışır ve altı anahtar nokta (iki göz, burun, ağız ve iki kulak) üzerinden yedek hizalama kurar. Yedek hizalanan görsellerin kalite ağırlığı en fazla 2 ile sınırlandırılır.
 - Her referans yüzü göz işaretlerine göre ortak 512×682 tuvale hizalanır.
 - Netlik Laplacian varyansı ile ölçülür; yüz alanı, frontalness ve pozlama da puanlanır.
 - 25/25 yüz profile katılır; FaceLandmarker hizalamaları kaliteye göre 1–3 oy, BlazeFace yedek hizalamaları en fazla 2 oy alır. Bir referans hâlâ hizalanamazsa uygulama dosya adını ve iki algılayıcının hata nedenlerini gösterir, eksik profille FaceFusion çalıştırmaz.
@@ -106,7 +106,7 @@ Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. H
 
 ### 25 referansın tamamı hizalanamadı
 
-Profil 25/25 zorunludur. Hata mesajında dosya adı ve FaceLandmarker/BlazeFace sonuçları görünür. İlgili fotoğrafı daha yüksek çözünürlüklü, yüzün daha büyük ve net göründüğü bir sürümle değiştir; aşırı yan profil, yüzün kapanması veya çok küçük yüz her iki algılayıcıyı da başarısız bırakabilir. Yeni algılama zinciri nedeniyle IndexedDB'deki eski 19/25 profil önbelleği kullanılmaz; ilk yeni işlem profili baştan oluşturur.
+Profil 25/25 zorunludur. Hata mesajında dosya adı ve FaceLandmarker/BlazeFace kısa ve tam menzil sonuçları görünür. İlgili fotoğrafı daha yüksek çözünürlüklü, yüzün daha büyük ve net göründüğü bir sürümle değiştir; aşırı yan profil, yüzün kapanması veya çok küçük yüz her iki algılayıcıyı da başarısız bırakabilir. Yeni algılama zinciri nedeniyle IndexedDB'deki eski 19/25 profil önbelleği kullanılmaz; ilk yeni işlem profili baştan oluşturur.
 
 ### Bellek / işlem hatası
 

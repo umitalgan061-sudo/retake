@@ -36,7 +36,7 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Kimlik geçişi: alphaface_256. 25 kaynak yüzün embedding ortalamasını kullanır. Referanslar kalite/açı ağırlıklarıyla kaynak listesinde tekrarlanır; her kabul edilen fotoğraf en az bir oy alır.
 - Görünüm geçişi: uniface_256. 25 fotoğrafın hizalanmış ve ağırlıklı piksel ortalamasını kaynak yüz olarak kullanır. Bu geçiş alt yüz, bıyık ve sakal görünümünü desteklemek için kullanılır.
 - Pixel boost ilk denemesi 1024x1024'tür. CUDA bellek hatasında sırasıyla 768x768, ardından 512x512 denenir. Bu yüz crop inference ölçeğidir; fotoğrafın çıktı çözünürlüğünü büyütmez.
-- Face swapper weight: 1.0.
+- Face swapper weight: selected from four bounded values between 0.92 and 1.0.
 - Execution provider: cuda, device 0.
 - Face selector: one.
 - Face mask types: `box`, `occlusion`, `region`.
@@ -45,6 +45,7 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Final PNG includes an alpha matte derived from pixels actually changed by the two FaceFusion passes. The browser uses this matte instead of the old broad ellipse when available.
 - A local ArcFace ONNX medoid/median screen compares all 25 face crops. Strong outliers keep at least one identity vote but are reduced to weight 1 and reported; the method is not biometric proof and does not use a universal 0.75 cutoff.
 - UniFace contributes a low-strength high-frequency lower-face detail layer instead of the former strong pixel blend, so AlphaFace geometry remains dominant.
+- Each output applies a mild affine width/height adjustment around the detected face center (first try: 0.98× width, 1.05× height; maximum height scale: 1.08×). The alpha matte is transformed with the face crop, so the browser still composites only the generated matte over the source.
 - Practically unchanged output is rejected rather than reported as a successful face swap.
 - Optional GFPGAN 1.4 can be enabled as a separate last stage at 25% blend; it is disabled by default because it can change facial-hair and identity detail.
 
@@ -95,7 +96,7 @@ Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz
 - Aynı ağırlıklar FaceFusion kaynak listesinde tekrarlanarak AlphaFace'in 512 boyutlu kimlik embedding ortalamasına uygulanır.
 - AlphaFace kimlik geçişi üretir.
 - UniFace, tüm referansların hizalanmış piksel harmanını kaynak görüntü olarak kullanarak görünüm geçişi üretir.
-- AlphaFace yüz geometrisi ana katman olarak kalır. UniFace yüksek frekanslı alt yüz ayrıntısını düşük güçte ekler; eski %82 piksel karışımı kaldırılmıştır.
+- AlphaFace yüz geometrisi ana katman olarak kalır. UniFace yüksek frekanslı alt yüz ayrıntısını düşük güçte ekler; eski %82 piksel karışımı kaldırılmıştır. Sonuçta hafif yüz oranı düzeltmesi uygulanır; yeniden oluşturma isteği dört sınırlı oran/harman varyasyonunu sırayla dener.
 - GFPGAN seçilirse FaceFusion'ın ayrı face_enhancer işlemcisi %25 blend ile çalışır; alfa matı korunur.
 - Tek hibrit PNG hedef crop'a uygulanır; orijinal fotoğrafın geri kalanı korunur ve maske dışı piksel bütünlüğü kontrol edilir.
 

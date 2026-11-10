@@ -18,7 +18,9 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde dinler.
 - FaceFusion XSeg occlusion + BiSeNet region parser maskeleri iki üretim geçişinde de aktiftir; gözlük sınıfı değiştirme maskesinin dışında tutulur.
 - FaceFusion 3.9.2'nin desteklediği yüz parser bölgeleri arasında saç sınıfı bulunmadığından saç stili kaynak fotoğraftan korunur; saç transferi bu motorda yapılmaz.
-- "Yeniden oluştur" düğmesi dört sınırlı yüz/sakal harman dengesini sırayla dener; bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir.
+- İlk sonuç ve sonraki alternatifler, alfa matını taşıyan yüz crop'una sınırlı affine oran düzeltmesi uygular: ilk denemede genişlik %2 daraltılır ve yükseklik %5 uzatılır; diğer üç alternatif doğal ya da daha uzun oranları dener. Efekt yüz merkezi çevresinde uygulanır, final fotoğrafın maske dışı pikselleri korunur.
+- "Yeniden oluştur" düğmesi dört sınırlı yüz/sakal/geometri dengesini sırayla dener; bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir. Fazla geometrik değişikliklerin gerçekçiliği bozabileceği için oran düzeltmesi en fazla %8 ile sınırlandırılmıştır.
+- Arayüz buzlu cam yüzeyleri ve temaya uyumlu uyarı/onay pencereleriyle hem açık hem koyu modda çalışır.
 - Son hibrit PNG, gerçek değişen piksellerden türetilmiş alfa matı taşır. Tarayıcı bu maskeyi kullanarak yalnızca değişen pikselleri orijinal fotoğrafa uygular.
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
@@ -50,7 +52,7 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 
 - `index.html` statik web arayüzüdür.
 - Ana akışta yalnızca fotoğraf yükleme, sonuç ve "Yeniden oluştur" bulunur. Kişisel referans yönetimi kapalı bir "Yüz profili ayarları" alanındadır; varsayılan 25 referans otomatik yüklenir.
-- İlk düzenlemede tema uyumlu onay penceresi gösterilir. Onay, sayfa açık kaldığı sürece geçerlidir; sonraki alternatifler farklı sınırlı kimlik/görünüm harman ayarlarıyla aynı yerel işlem hattını tekrar çalıştırır.
+- Her düzenleme veya yeniden oluşturma öncesinde tema uyumlu onay penceresi gösterilir; hedef ve referans yüz kırpımları gönderilmeden önce işlem bazında açık onay alınır.
 - **Kendi 25 fotoğrafını seç** ile varsayılan havuz yerine kişisel referans fotoğraflarını kullanabilirsin. 25 JPG, PNG veya WebP dosyası gerekir; her dosya en fazla 25 MB ve görsel en fazla 20 MP olabilir. Referans görselleri işlem belleğini sınırlamak için 2048 px kenara küçültülür; kaynaklar profil anahtarı için değişmeden kullanılır. Yeni sayfa oturumunda fotoğrafları gizlilik nedeniyle yeniden seçmen gerekir.
 - MediaPipe, tarayıcıda hedef ve referans fotoğraflarındaki yüzleri algılar; profil aynı sekmede bir kez oluşturulup sonraki hedeflerde bellekte yeniden kullanılır.
 - Her referans önce FaceLandmarker, gerekirse BlazeFace kısa menzil ve tam menzil modelleriyle yeniden algılanır. Bir fotoğraf yine de hizalanamazsa işlem durur ve dosya adı gösterilir; 19/25 gibi eksik bir profille devam edilmez.

@@ -464,6 +464,29 @@ function drawContainedImage(context, image, x, y, width, height) {
   context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
 }
 
+function drawReferenceFaceCrop(context, image, x, y, width, height) {
+  try {
+    const sourceWidth = image.naturalWidth || image.width;
+    const sourceHeight = image.naturalHeight || image.height;
+    const faces = detectFaces(image)
+      .sort((a, b) => (b.width * b.height) - (a.width * a.height));
+    const face = faces[0];
+    if (!face) throw new Error("Referans fotoğrafında yüz algılanamadı.");
+
+    const crop = getFaceCropRect(sourceWidth, sourceHeight, face, width / height);
+    context.drawImage(
+      image,
+      crop.x, crop.y, crop.width, crop.height,
+      x, y, width, height
+    );
+    return true;
+  } catch (error) {
+    console.warn("Referans yüzü kırpılamadı; tam görsel kullanılacak.", error);
+    drawContainedImage(context, image, x, y, width, height);
+    return false;
+  }
+}
+
 function buildLocalComfyInputs() {
   const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
   if (readyReferences.length !== MAX_REFERENCE_FACES) {
@@ -506,7 +529,7 @@ function buildLocalComfyInputs() {
   context.fillRect(0, 0, referencesCanvas.width, referencesCanvas.height);
   context.fillStyle = "#f0f5f7";
   context.font = "700 17px system-ui";
-  context.fillText(`${MAX_REFERENCE_FACES} IDENTITY REFERENCES`, 22, 29);
+  context.fillText(`${MAX_REFERENCE_FACES} FACE-CROPPED REFERENCES`, 22, 29);
   context.fillStyle = "#9caaba";
   context.font = "12px system-ui";
   context.fillText("All photos show the same person", 22, 50);
@@ -523,6 +546,7 @@ function buildLocalComfyInputs() {
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
 
+  let faceCroppedReferences = 0;
   readyReferences.forEach((reference, index) => {
     const column = index % columns;
     const row = Math.floor(index / columns);
@@ -530,9 +554,12 @@ function buildLocalComfyInputs() {
     const y = startY + row * (cellHeight + gapY);
     context.fillStyle = "#f7f9fa";
     context.fillRect(x, y, cellWidth, cellHeight);
-    drawContainedImage(context, reference.image, x + 5, y + 4, cellWidth - 10, cellHeight - 8);
+    if (drawReferenceFaceCrop(context, reference.image, x + 5, y + 4, cellWidth - 10, cellHeight - 8)) {
+      faceCroppedReferences += 1;
+    }
   });
 
+  showToast(`${faceCroppedReferences}/${MAX_REFERENCE_FACES} referans yüzü yakınlaştırıldı.`);
   return { targetCanvas, referencesCanvas, crop };
 }
 
@@ -704,11 +731,13 @@ async function runNvidiaFaceEdit() {
     workflow["191"].inputs.image = targetName;
     workflow["192"].inputs.image = referencesName;
     workflow["6"].inputs.text = [
-      "The input is a single composite image containing two panels side by side.",
-      "LEFT PANEL: Change only the facial identity of the person in this target portrait to resemble the same person shown across the RIGHT PANEL reference photos.",
-      "RIGHT PANEL: These are identity references of one person. Use all references to infer stable facial identity. Do not edit this panel.",
-      "Preserve the target's head pose, expression, gaze, hairstyle, hairline, ears, neck, clothing, body, lighting and background.",
-      "Keep realistic skin texture, facial anatomy and photographic lighting. Do not copy the reference clothing or background.",
+      "The input is one composite image with two panels arranged side by side.",
+      "LEFT PANEL: This is the target portrait. Replace the person's facial identity with the identity shown in the RIGHT PANEL.",
+      "RIGHT PANEL: These are enlarged face crops of the same reference person from different photos and angles. Treat them as the authoritative source for facial identity.",
+      "Identity transfer is the primary task. Do not keep or reproduce the target person's original facial identity. Match the reference person's stable facial traits, including face shape, eyes, eyebrows, nose, lips, cheeks, jawline and age appearance.",
+      "Apply the new identity naturally to the target face while preserving the target's head pose, expression, gaze direction and camera angle.",
+      "Keep the target hairstyle, hairline, ears, neck, clothing, body, lighting, shadows and background unchanged. Do not copy hairstyles, clothing or backgrounds from the reference photos.",
+      "Use realistic anatomy, natural skin texture and photographic lighting. Do not edit the right panel, add people, add text or create a collage.",
       "Return the complete two-panel composition in the original arrangement."
     ].join(" ");
 

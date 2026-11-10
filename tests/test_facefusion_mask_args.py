@@ -3,11 +3,19 @@ import unittest
 from tools.facefusion_local_server import (
     FACE_MASK_REGIONS,
     FACE_MASK_TYPES,
+    MAX_REFERENCES,
     face_mask_cli_arguments,
+    validate_reference_count,
 )
 
 
 class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
+    def test_exactly_25_reference_images_are_required(self):
+        self.assertEqual(MAX_REFERENCES, 25)
+        self.assertIsNone(validate_reference_count(25))
+        with self.assertRaisesRegex(ValueError, "tam olarak 25"):
+            validate_reference_count(24)
+
     def test_cli_uses_facefusion_392_mask_type_tokens(self):
         args = face_mask_cli_arguments()
         index = args.index("--face-mask-types")

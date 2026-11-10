@@ -13,6 +13,8 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - RTX GPU üzerinde CUDA ile çıkarım; NVIDIA hosted API, Firebase Functions veya ücretli inference API kullanılmaz.
 - Retake, tek yüz sonucu orijinal fotoğrafa maskeli olarak birleştirir ve maske dışındaki pikseller için bütünlük kontrolü yapar.
 - Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde dinler.
+- FaceFusion XSeg occlusion + BiSeNet region parser maskeleri iki üretim geçişinde de aktiftir; gözlük sınıfı değiştirme maskesinin dışında tutulur.
+- Son hibrit PNG, gerçek değişen piksellerden türetilmiş alfa matı taşır. Tarayıcı bu maskeyi kullanarak yalnızca değişen pikselleri orijinal fotoğrafa uygular.
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise görünüm/sakal katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği ve sakal aktarımı garanti edilmez.
 

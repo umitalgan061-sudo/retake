@@ -12,15 +12,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
-MIN_REFERENCES = 10
 MAX_REFERENCES = 25
+MIN_REFERENCES = MAX_REFERENCES
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_REQUEST_BYTES = 180 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v2"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v3"
 FACE_OCCLUDER_MODEL = "xseg_1"
 FACE_PARSER_MODEL = "bisenet_resnet_34"
 FACE_MASK_TYPES = ("box", "occlusion", "region")
@@ -86,6 +86,11 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     return {"referenceWeights": normalized_weights, "faceBounds": bounds}
 
 
+def validate_reference_count(reference_count: int) -> None:
+    if reference_count != MAX_REFERENCES:
+        raise ValueError(f"Retake hibrit profil işlemi için tam olarak {MAX_REFERENCES} referans fotoğrafı gerekli.")
+
+
 def parse_multipart(
     content_type: str,
     body: bytes
@@ -132,8 +137,7 @@ def parse_multipart(
         raise ValueError("Tam olarak bir hedef fotoğraf gönderilmelidir.")
     if len(appearance_files) != 1:
         raise ValueError("25 referanstan üretilen tek bir görünüm profili gönderilmelidir.")
-    if not MIN_REFERENCES <= len(reference_files) <= MAX_REFERENCES:
-        raise ValueError(f"Kimlik profili için {MIN_REFERENCES}–{MAX_REFERENCES} referans fotoğrafı gerekli.")
+    validate_reference_count(len(reference_files))
 
     metadata = _validate_metadata(metadata_value, len(reference_files))
     return (

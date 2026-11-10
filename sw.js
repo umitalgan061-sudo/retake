@@ -1,5 +1,5 @@
-const SHELL_CACHE = "retake-shell-v14";
-const AI_CACHE = "retake-ai-assets-v1";
+const SHELL_CACHE = "retake-shell-v15";
+const AI_CACHE = "retake-ai-assets-v2";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./src/identity-profile.js", "./src/profile-storage.js", "./manifest.webmanifest", "./icons/retake.svg"];
 
 self.addEventListener("install", (event) => {
@@ -16,8 +16,11 @@ self.addEventListener("activate", (event) => {
 
 function isApprovedAIAsset(url) {
   if (url.origin === "https://cdn.jsdelivr.net") return url.pathname.startsWith("/npm/@mediapipe/tasks-vision@1.2.2/");
-  return url.origin === "https://storage.googleapis.com" &&
-    url.pathname === "/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+  return url.origin === "https://storage.googleapis.com" && [
+    "/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
+    "/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+    "/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
+  ].includes(url.pathname);
 }
 
 async function cacheFirst(request, cacheName) {

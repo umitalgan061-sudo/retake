@@ -1,4 +1,4 @@
-import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
+import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
 import {
   formatBytes,
   getLandmarkBounds,
@@ -21,6 +21,10 @@ import { createReferenceSetKey, getCachedProfile, saveCachedProfile } from "./sr
 
 const MAX_PREVIEW_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const FACE_DETECTOR_MODEL_URLS = {
+  short: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
+  full: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
+};
 
 const $ = (selector) => document.querySelector(selector);
 const elements = {
@@ -60,6 +64,11 @@ const elements = {
 
 const state = {
   detector: null,
+  vision: null,
+  referenceDetector: null,
+  referenceDetectorPromise: null,
+  referenceDetectorFull: null,
+  referenceDetectorFullPromise: null,
   target: null,
   references: [],
   identityProfile: null,
@@ -361,9 +370,14 @@ function renderReferences() {
 
     const label = document.createElement("span");
     label.className = "reference-state";
-    label.textContent = reference.status === "ready"
-      ? "YERELDE"
-      : (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR");
+    label.textContent = reference.status !== "ready"
+      ? (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR")
+      : reference.profileStatus === "included"
+        ? (reference.profileMethod?.startsWith("FaceDetector") ? "PROFİLDE · YEDEK" : "PROFİLDE")
+        : reference.profileStatus === "excluded"
+          ? "PROFİLE ALINAMADI"
+          : "YERELDE";
+    if (reference.profileError) label.title = reference.profileError;
 
     card.append(name, label);
     elements.referencesGrid.append(card);
@@ -462,7 +476,7 @@ async function canvasToBlob(canvas) {
   });
 }
 
-const MIN_FACEFUSION_REFERENCE_COUNT = 10;
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-fallback-v3";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
 const FACEFUSION_TARGET_WIDTH = 784;
@@ -565,21 +579,81 @@ function createAlignedReferenceCanvas(image, landmarks) {
   return canvas;
 }
 
-function createReferenceFaceInput(reference) {
+async function getReferenceFaceDetector(range = "short") {
+  const normalizedRange = range === "full" ? "full" : "short";
+  const detectorKey = normalizedRange === "full" ? "referenceDetectorFull" : "referenceDetector";
+  const promiseKey = normalizedRange === "full" ? "referenceDetectorFullPromise" : "referenceDetectorPromise";
+  if (state[detectorKey]) return state[detectorKey];
+  if (!state[promiseKey]) {
+    state[promiseKey] = (async () => {
+      const vision = state.vision || await FilesetResolver.forVisionTasks(
+        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm"
+      );
+      const options = {
+        baseOptions: { modelAssetPath: FACE_DETECTOR_MODEL_URLS[normalizedRange], delegate: "GPU" },
+        runningMode: "IMAGE",
+        minDetectionConfidence: normalizedRange === "full" ? 0.15 : 0.20,
+        minSuppressionThreshold: 0.30
+      };
+      try {
+        return await FaceDetector.createFromOptions(vision, options);
+      } catch (gpuError) {
+        console.info(`Referans ${normalizedRange}-range yüz algılama GPU'da başlatılamadı; CPU deneniyor.`, gpuError);
+        options.baseOptions.delegate = "CPU";
+        return FaceDetector.createFromOptions(vision, options);
+      }
+    })();
+  }
+  try {
+    state[detectorKey] = await state[promiseKey];
+    return state[detectorKey];
+  } catch (error) {
+    state[promiseKey] = null;
+    throw error;
+  }
+}
+
+function normalizeFallbackFace(detection, sourceWidth, sourceHeight) {
+  const box = detection?.boundingBox;
+  const keypoints = detection?.keypoints || [];
+  if (!box || keypoints.length < 3 || !Number.isFinite(box.originX) ||
+      !Number.isFinite(box.originY) || !Number.isFinite(box.width) ||
+      !Number.isFinite(box.height) || box.width <= 0 || box.height <= 0) return null;
+
+  const bounds = {
+    x: clamp(box.originX / sourceWidth, 0, 1),
+    y: clamp(box.originY / sourceHeight, 0, 1),
+    width: clamp(box.width / sourceWidth, 0, 1),
+    height: clamp(box.height / sourceHeight, 0, 1)
+  };
+  bounds.width = Math.min(bounds.width, 1 - bounds.x);
+  bounds.height = Math.min(bounds.height, 1 - bounds.y);
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+
+  // BlazeFace returns six normalized points: right eye, left eye, nose,
+  // mouth center and two ear tragions. The eye/nose indices mirror the
+  // FaceLandmarker indices used by Retake's canonical alignment code.
+  const landmarks = new Array(478).fill(null);
+  const centerX = bounds.x + bounds.width / 2;
+  const centerY = bounds.y + bounds.height / 2;
+  landmarks[33] = keypoints[0];
+  landmarks[263] = keypoints[1];
+  landmarks[1] = keypoints[2];
+  landmarks[10] = { x: centerX, y: bounds.y };
+  landmarks[152] = { x: centerX, y: bounds.y + bounds.height };
+  landmarks[234] = { x: bounds.x, y: centerY };
+  landmarks[454] = { x: bounds.x + bounds.width, y: centerY };
+
+  const confidence = Number(detection.categories?.[0]?.score);
+  return {
+    landmarks,
+    bounds,
+    confidence: Number.isFinite(confidence) ? confidence : 0
+  };
+}
+
+function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHeight, detectionMethod) {
   const image = reference.image;
-  const sourceWidth = image.naturalWidth || image.width;
-  const sourceHeight = image.naturalHeight || image.height;
-  const detection = state.detector.detect(image);
-  const faces = (detection.faceLandmarks || [])
-    .map((landmarks) => ({ landmarks, bounds: getLandmarkBounds(landmarks) }))
-    .filter((item) => item.bounds)
-    .sort((a, b) => {
-      const areaA = a.bounds.width * sourceWidth * a.bounds.height * sourceHeight;
-      const areaB = b.bounds.width * sourceWidth * b.bounds.height * sourceHeight;
-      return areaB - areaA;
-    });
-  const detected = faces[0];
-  if (!detected) return null;
   const face = detected.bounds;
   const crop = getFaceCropRect(
     sourceWidth,
@@ -599,7 +673,7 @@ function createReferenceFaceInput(reference) {
   );
 
   const alignedCanvas = createAlignedReferenceCanvas(image, detected.landmarks);
-  if (!alignedCanvas) return null;
+  if (!alignedCanvas) throw new Error("Göz noktaları hizalama için kullanılamadı.");
   const quality = measureAlignedReference(
     alignedCanvas,
     detected.landmarks,
@@ -607,16 +681,84 @@ function createReferenceFaceInput(reference) {
     sourceWidth,
     sourceHeight
   );
+  // BlazeFace's six keypoints are a reliable fallback, but less detailed than
+  // the 478-point mesh. Keep its contribution conservative in both profiles.
+  const weight = detectionMethod.startsWith("FaceDetector")
+    ? Math.min(2, quality.weight)
+    : quality.weight;
 
   return {
     canvas,
     alignedCanvas,
     profilePixels: quality.imageData.data,
-    weight: quality.weight,
+    weight,
     quality,
+    detectionMethod,
+    detectionConfidence: detected.confidence ?? 1,
     name: reference.name,
     file: reference.file
   };
+}
+
+async function createReferenceFaceInput(reference) {
+  const image = reference.image;
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  let primaryError = "FaceLandmarker yüz bulamadı.";
+
+  try {
+    const detection = state.detector.detect(image);
+    const faces = (detection.faceLandmarks || [])
+      .map((landmarks) => ({ landmarks, bounds: getLandmarkBounds(landmarks), confidence: 1 }))
+      .filter((item) => item.bounds)
+      .sort((a, b) =>
+        (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height)
+      );
+
+    for (const detected of faces) {
+      try {
+        return buildReferenceFaceCandidate(
+          reference, detected, sourceWidth, sourceHeight, "FaceLandmarker"
+        );
+      } catch (error) {
+        primaryError = error?.message || "FaceLandmarker hizalaması başarısız.";
+      }
+    }
+  } catch (error) {
+    primaryError = error?.message || "FaceLandmarker çalıştırılamadı.";
+  }
+
+  const fallbackErrors = [];
+  for (const range of ["short", "full"]) {
+    const detectorName = range === "short" ? "BlazeFace-short" : "BlazeFace-full";
+    try {
+      const fallbackDetector = await getReferenceFaceDetector(range);
+      const detection = fallbackDetector.detect(image);
+      const faces = (detection.detections || [])
+        .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
+        .filter(Boolean)
+        .sort((a, b) =>
+          (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height)
+        );
+
+      for (const detected of faces) {
+        try {
+          return buildReferenceFaceCandidate(
+            reference, detected, sourceWidth, sourceHeight, `FaceDetector-${range}`
+          );
+        } catch (error) {
+          fallbackErrors.push(`${detectorName}: ${error?.message || "hizalama başarısız"}`);
+        }
+      }
+      if (faces.length === 0) fallbackErrors.push(`${detectorName}: yüz bulunamadı`);
+    } catch (error) {
+      fallbackErrors.push(`${detectorName}: ${error?.message || "algılayıcı başlatılamadı"}`);
+    }
+  }
+
+  throw new Error(
+    `FaceLandmarker: ${primaryError}; ${fallbackErrors.join("; ")}`
+  );
 }
 
 function createAppearanceProfile(candidates) {
@@ -669,13 +811,13 @@ async function buildLocalFaceFusionInputs() {
     0, 0, targetCanvas.width, targetCanvas.height
   );
 
-  const profileKey = state.referenceSetKey || await createReferenceSetKey(readyReferences);
+  const profileKey = `${PROFILE_PIPELINE_VERSION}:${state.referenceSetKey || await createReferenceSetKey(readyReferences)}`;
   if (!state.identityProfile || state.identityProfile.key !== profileKey) {
     const cached = await getCachedProfile(profileKey);
     const cachedIsValid = cached &&
       Array.isArray(cached.referenceBlobs) &&
-      cached.referenceBlobs.length >= MIN_FACEFUSION_REFERENCE_COUNT &&
-      cached.referenceBlobs.length <= MAX_REFERENCE_FACES &&
+      cached.referenceBlobs.length === MAX_REFERENCE_FACES &&
+      cached.validCount === MAX_REFERENCE_FACES &&
       cached.referenceBlobs.every((blob) => blob instanceof Blob && blob.size > 0) &&
       cached.appearanceProfileBlob instanceof Blob &&
       cached.appearanceProfileBlob.size > 0 &&
@@ -683,6 +825,12 @@ async function buildLocalFaceFusionInputs() {
       cached.weights.length === cached.referenceBlobs.length;
 
     if (cachedIsValid) {
+      readyReferences.forEach((reference) => {
+        reference.profileStatus = "included";
+        reference.profileMethod = "cache";
+        reference.profileError = null;
+      });
+      renderReferences();
       state.identityProfile = {
         key: profileKey,
         token: state.referenceLoadToken,
@@ -695,21 +843,44 @@ async function buildLocalFaceFusionInputs() {
       showToast(`Kayıtlı kişisel yüz profili yüklendi · ${cached.validCount}/${MAX_REFERENCE_FACES} referans.`);
     } else {
       const candidates = [];
-      let failedReferenceCrops = 0;
-      readyReferences.forEach((reference) => {
+      const referenceDiagnostics = [];
+      for (const reference of readyReferences) {
         try {
-          const candidate = createReferenceFaceInput(reference);
-          if (candidate) candidates.push(candidate);
-          else failedReferenceCrops += 1;
+          const candidate = await createReferenceFaceInput(reference);
+          candidates.push(candidate);
+          reference.profileStatus = "included";
+          reference.profileMethod = candidate.detectionMethod;
+          reference.profileError = null;
+          referenceDiagnostics.push({
+            file: reference.file,
+            status: "included",
+            method: candidate.detectionMethod,
+            weight: candidate.weight,
+            confidence: candidate.detectionConfidence
+          });
         } catch (error) {
-          failedReferenceCrops += 1;
-          console.warn("Referans yüz profili hazırlanamadı:", reference.name, error);
+          const reason = error?.message || "Yüz tespiti veya hizalama başarısız.";
+          reference.profileStatus = "excluded";
+          reference.profileMethod = null;
+          reference.profileError = reason;
+          referenceDiagnostics.push({
+            file: reference.file,
+            status: "excluded",
+            reason
+          });
+          console.warn("Referans yüz profili hazırlanamadı:", reference.name, reason);
         }
-      });
+        renderReferences();
+      }
 
-      if (candidates.length < MIN_FACEFUSION_REFERENCE_COUNT) {
+      if (candidates.length !== MAX_REFERENCE_FACES) {
+        const missing = referenceDiagnostics
+          .filter((item) => item.status !== "included")
+          .map((item) => `${item.file}: ${item.reason}`)
+          .join(" | ");
         throw new Error(
-          `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${candidates.length} yüz bulundu.`
+          `25 fotoğrafın tamamı profile alınamadı (${candidates.length}/${MAX_REFERENCE_FACES}). ` +
+          "Eksik referanslar: " + missing + ". İşlem 25 fotoğrafın tamamı olmadan durduruldu."
         );
       }
 
@@ -723,7 +894,8 @@ async function buildLocalFaceFusionInputs() {
         weights: appearance.weights,
         appearanceProfileBlob,
         validCount: appearance.validCount,
-        totalWeight: appearance.totalWeight
+        totalWeight: appearance.totalWeight,
+        referenceDiagnostics
       };
       state.identityProfile = {
         key: profileKey,
@@ -733,9 +905,6 @@ async function buildLocalFaceFusionInputs() {
       const persisted = await saveCachedProfile(profileKey, profile);
       state.referenceFaceCropCount = appearance.validCount;
       state.selectedReferenceCount = appearance.validCount;
-      if (failedReferenceCrops > 0) {
-        console.warn(`${failedReferenceCrops} referans fotoğrafında yüz profili oluşturulamadı.`);
-      }
       renderReferences();
       showToast(
         persisted
@@ -851,7 +1020,7 @@ async function runFaceFusionEdit() {
 
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +
-    "Hedef yüz crop'u, yüzü bulunan 10–25 referans ve hizalanmış ağırlıklı görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
+    "Hedef yüz crop'u, 25 referansın tamamı ve hizalanmış ağırlıklı görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
     "Kimlik profili tüm referansların ağırlıklı yüz gömmelerini kullanır; görünüm profili tüm hizalanmış referansları birleştirir. İki yerel model çıktısı tek fotoğrafta harmanlanır. " +
     "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
@@ -959,6 +1128,7 @@ async function initializeDetector() {
     const vision = await FilesetResolver.forVisionTasks(
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/wasm"
     );
+    state.vision = vision;
     const options = {
       baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
       runningMode: "IMAGE",
@@ -1108,6 +1278,8 @@ function initializeInteractions() {
       if (item.url) URL.revokeObjectURL(item.url);
     });
     state.detector?.close();
+    state.referenceDetector?.close();
+    state.referenceDetectorFull?.close();
   });
 }
 

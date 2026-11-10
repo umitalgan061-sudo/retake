@@ -127,26 +127,51 @@ def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path])
         "--facefusion-dir", str(facefusion_dir),
         "--reference-paths", *[str(path) for path in reference_paths]
     ]
+    print(
+        f"ArcFace ön kontrolü başlıyor: {len(reference_paths)} referans; "
+        "yüz algılama ve ArcFace ONNX ağırlıkları kontrol edilecek.",
+        flush=True
+    )
     try:
         completed = subprocess.run(
             command, cwd=str(facefusion_dir), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=600, check=False
+            encoding="utf-8", errors="replace", timeout=1800, check=False
         )
     except subprocess.TimeoutExpired as error:
-        raise IdentityVerificationError("ArcFace 25 referans ön kontrolü 10 dakika içinde tamamlanamadı.") from error
+        def decode_output(value: object) -> str:
+            if isinstance(value, bytes):
+                return value.decode("utf-8", errors="replace")
+            return str(value or "")
+
+        detail = tail(
+            decode_output(error.stdout) + "\n" + decode_output(error.stderr)
+        )
+        raise IdentityVerificationError(
+            "ArcFace 25 referans ön kontrolü 30 dakika içinde tamamlanamadı. " + detail
+        ) from error
 
     marker = "RETAKE_IDENTITY_REPORT="
-    report_lines = [line[len(marker):] for line in completed.stdout.splitlines() if line.startswith(marker)]
+    report_lines = [
+        line[len(marker):]
+        for line in completed.stdout.splitlines()
+        if line.startswith(marker)
+    ]
     if not report_lines:
         detail = tail(completed.stderr + "\n" + completed.stdout)
-        raise IdentityVerificationError("ArcFace doğrulama raporu alınamadı. " + detail)
+        raise IdentityVerificationError(
+            f"ArcFace worker rapor üretemedi (çıkış kodu {completed.returncode}). {detail}"
+        )
     try:
         report = json.loads(report_lines[-1])
     except json.JSONDecodeError as error:
         raise IdentityVerificationError("ArcFace doğrulama raporu geçerli JSON değil.") from error
 
     if completed.returncode != 0 or not report.get("ok"):
-        raise IdentityVerificationError(str(report.get("error") or tail(completed.stderr + "\n" + completed.stdout)))
+        detail = str(report.get("error") or "ArcFace worker başarısız sonuç döndürdü.")
+        logs = tail(completed.stderr + "\n" + completed.stdout)
+        raise IdentityVerificationError(
+            f"{detail} (worker çıkış kodu {completed.returncode}). {logs}"
+        )
     if report.get("hard_conflict"):
         raise IdentityConflictError(
             "ArcFace, 25 referans arasında ortak bir kimlik profili bulamadı "
@@ -695,8 +720,10 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     flush=True
                 )
         except IdentityConflictError as error:
+            print(f"[Retake ArcFace] Referans kimlik tutarsızlığı: {error}", flush=True)
             self._send_json(422, {"ok": False, "error": str(error)})
         except IdentityVerificationError as error:
+            print(f"[Retake ArcFace] Ön kontrol başarısız: {error}", flush=True)
             self._send_json(503, {"ok": False, "error": f"ArcFace kimlik kontrolü yapılamadı: {error}"})
         except NoOpSwapError as error:
             self._send_json(422, {"ok": False, "error": str(error)})

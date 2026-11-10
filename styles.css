@@ -43,6 +43,10 @@ h1{margin:0;font-size:clamp(32px,4vw,48px);line-height:1.08;letter-spacing:-.055
 .reference-image{display:block;width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;background:var(--surface-soft)}
 .reference-error{width:100%;aspect-ratio:1;display:grid;place-items:center;padding:10px;border-radius:8px;background:var(--surface-soft);color:var(--subtle);font-size:9px;text-align:center}
 .reference-name{display:block;overflow:hidden;margin-top:7px;color:var(--muted);font-size:9px;text-overflow:ellipsis;white-space:nowrap}.reference-state{display:block;margin-top:3px;color:var(--accent);font-size:8px;font-weight:800}
+.reference-primary-button{width:100%;min-height:28px;margin-top:8px;padding:5px 6px;border:1px solid var(--border-strong);border-radius:8px;background:var(--surface-soft);color:var(--muted);font-size:8px;font-weight:800;cursor:pointer}
+.reference-primary-button:hover:not(:disabled){border-color:var(--accent);color:var(--accent)}
+.reference-primary-button.is-selected{border-color:rgba(114,228,193,.55);background:rgba(114,228,193,.12);color:var(--accent)}
+.reference-primary-button:disabled{opacity:.35;cursor:not-allowed}
 .references-footer{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:16px}.secondary-button,.primary-button{min-height:42px;display:inline-flex;align-items:center;justify-content:center;gap:9px;padding:0 14px;border-radius:11px;font-size:11px;font-weight:780;cursor:pointer;transition:.2s ease}
 .secondary-button{color:var(--text);border:1px solid var(--border-strong);background:var(--surface-raised)}.secondary-button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}.secondary-button:disabled{opacity:.55;cursor:wait}.helper-text{color:var(--subtle);font-size:9px}
 .output-panel{position:sticky;top:96px}.output-panel .panel-heading{align-items:center}.output-panel .eyebrow{margin-bottom:6px;font-size:8px}.preview-badge{gap:7px;padding:6px 9px;color:var(--subtle);font-size:9px}.badge-dot{width:6px;height:6px;background:var(--warning);box-shadow:none}

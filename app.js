@@ -12,8 +12,6 @@ import {
   REFERENCE_MANIFEST_URL
 } from "./src/reference-catalog.js";
 import {
-  NVIDIA_BOARD_HEIGHT,
-  NVIDIA_TARGET_PANEL_WIDTH,
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
@@ -751,7 +749,7 @@ async function initializeDetector() {
     }
 
     elements.engineDescription.textContent =
-      "MediaPipe yüzleri cihazda GPU ile algılamayı dener, desteklenmezse CPU'ya geçer. Yerel Face Swap modeli yoktur.";
+      "MediaPipe yüzleri tarayıcıda algılar. Kimlik aktarımı, bilgisayarındaki CUDA destekli FaceFusion modeliyle yapılır.";
     if (state.target) {
       state.target.faces = detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;

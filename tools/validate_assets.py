@@ -110,8 +110,7 @@ def main() -> int:
         )
     except (OSError, TypeError, json.JSONDecodeError):
         manifest_ok = False
-    forbidden_upload_markers = ("referenceInput", "addReferencesButton", "clearReferencesButton",
-                                 "importReferencePhotos", "openDatabase", "indexedDB")
+    forbidden_upload_markers = ("referenceInput", "addReferencesButton", "importReferencePhotos")
     upload_hits = [marker for marker in forbidden_upload_markers
                    if marker in reference_ui or marker in reference_app]
     has_local_loader = (
@@ -122,14 +121,27 @@ def main() -> int:
         and "/api/images/" not in catalog_source
         and manifest_ok
     )
+    personal_loader = ""
+    if "async function loadUserReferences" in reference_app:
+        personal_loader = reference_app.split("async function loadUserReferences", 1)[1].split(
+            "async function canvasToBlob", 1
+        )[0]
+    has_personal_reference_flow = (
+        'id="referencesInput"' in reference_ui
+        and "validateReferenceFiles" in personal_loader
+        and "loadReferenceImage" in personal_loader
+        and "fetch(" not in personal_loader
+        and 'id="clearReferencesButton"' in reference_ui
+        and "deleteCachedProfile" in reference_app
+    )
     checks.append({
         "check": "local-reference-flow",
         "file": "index.html/app.js/src/reference-catalog.js/reference-faces/manifest.json",
-        "ok": not upload_hits and has_local_loader,
-        "detail": "25 referans manifestten yükleniyor; fotoğraflar Firebase Hosting'de yayımlanır"
-                  if not upload_hits and has_local_loader
+        "ok": not upload_hits and has_local_loader and has_personal_reference_flow,
+        "detail": "Varsayılan 25 referans manifestten yükleniyor; kişisel referanslar yalnızca tarayıcıda işleniyor"
+                  if not upload_hits and has_local_loader and has_personal_reference_flow
               else "yerel manifest akışı veya Hosting fotoğraf yayını tutarsız: "
-                       + ", ".join(upload_hits or ["25-image manifest/local loader"]),
+                       + ", ".join(upload_hits or ["25-image manifest/local loader/personal reference flow"]),
     })
 
     app_source = app_path.read_text(encoding="utf-8", errors="replace") if app_path.is_file() else ""

@@ -1,5 +1,7 @@
 export const MAX_REFERENCE_FACES = 25;
 export const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+export const MAX_IMAGE_PIXELS = 20_000_000;
+export const MAX_IMAGE_EDGE = 12_000;
 export const ACCEPTED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 
 export function validateImageFile(file, maxBytes = MAX_IMAGE_BYTES) {
@@ -7,6 +9,38 @@ export function validateImageFile(file, maxBytes = MAX_IMAGE_BYTES) {
   if (!ACCEPTED_IMAGE_TYPES.has(file.type)) return { valid: false, reason: "Yalnızca JPG, PNG veya WebP görselleri destekleniyor." };
   if (!Number.isFinite(file.size) || file.size <= 0) return { valid: false, reason: "Dosya boş veya okunamıyor." };
   if (file.size > maxBytes) return { valid: false, reason: "Dosya 25 MB sınırını aşıyor." };
+  return { valid: true, reason: "" };
+}
+
+export function validateReferenceFiles(files) {
+  if (!Array.isArray(files) || files.length !== MAX_REFERENCE_FACES) {
+    return {
+      valid: false,
+      reason: `Kişisel profil için tam ${MAX_REFERENCE_FACES} fotoğraf seçmelisin (${files?.length || 0} seçildi).`
+    };
+  }
+
+  const invalidFiles = files.flatMap((file) => {
+    const validation = validateImageFile(file);
+    return validation.valid ? [] : [`${file?.name || "Adsız dosya"}: ${validation.reason}`];
+  });
+  return {
+    valid: invalidFiles.length === 0,
+    reason: invalidFiles.join(" "),
+    invalidFiles
+  };
+}
+
+export function validateImageDimensions(width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    return { valid: false, reason: "Görsel boyutları okunamadı." };
+  }
+  if (width > MAX_IMAGE_EDGE || height > MAX_IMAGE_EDGE || width * height > MAX_IMAGE_PIXELS) {
+    return {
+      valid: false,
+      reason: `Görsel boyutu çok büyük (${width} × ${height} px). En fazla ${MAX_IMAGE_EDGE} px kenar ve ${MAX_IMAGE_PIXELS / 1_000_000} MP destekleniyor.`
+    };
+  }
   return { valid: true, reason: "" };
 }
 

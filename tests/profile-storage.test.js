@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createReferenceSetKey } from "../src/profile-storage.js";
+import { createReferenceSetKey, deleteCachedProfile } from "../src/profile-storage.js";
 
 test("creates the same reference-set key for identical files", async () => {
   const references = [
@@ -36,4 +36,38 @@ test("invalidates the profile key when reference membership changes", async () =
 
 test("rejects an empty reference set", async () => {
   await assert.rejects(createReferenceSetKey([]), /boş olamaz/);
+});
+
+test("deletes the locally cached face profile", async () => {
+  const previousIndexedDB = globalThis.indexedDB;
+  let deleted = false;
+  globalThis.indexedDB = {
+    open() {
+      const request = {};
+      queueMicrotask(() => {
+        request.result = {
+          objectStoreNames: { contains: () => true },
+          transaction() {
+            const transaction = {
+              objectStore() {
+                return { delete: () => { deleted = true; } };
+              }
+            };
+            queueMicrotask(() => transaction.oncomplete());
+            return transaction;
+          },
+          close() {}
+        };
+        request.onsuccess();
+      });
+      return request;
+    }
+  };
+  try {
+    assert.equal(await deleteCachedProfile(), true);
+    assert.equal(deleted, true);
+  } finally {
+    if (previousIndexedDB === undefined) delete globalThis.indexedDB;
+    else globalThis.indexedDB = previousIndexedDB;
+  }
 });

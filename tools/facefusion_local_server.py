@@ -35,10 +35,10 @@ FACE_ENHANCER_INTERNAL_BLEND = 100
 FACE_ENHANCER_WEIGHT = 0.25
 DETAIL_TRANSFER_STRENGTH = 0.20
 FACE_SWAP_VARIATIONS = (
-    (1.00, 0.20),
-    (0.94, 0.24),
-    (0.98, 0.12),
-    (0.92, 0.30)
+    (1.00, 0.20, 0.98, 1.05),
+    (0.94, 0.24, 1.00, 1.00),
+    (0.98, 0.12, 0.97, 1.07),
+    (0.92, 0.30, 0.99, 1.03)
 )
 
 
@@ -120,6 +120,19 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
         raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
     return {"referenceWeights": normalized_weights, "faceBounds": bounds, "variation": variation}
+
+
+def face_geometry_affine_matrix(
+    face_bounds: dict[str, float],
+    scale_x: float,
+    scale_y: float
+) -> list[list[float]]:
+    center_x = face_bounds["x"] + face_bounds["width"] / 2
+    center_y = face_bounds["y"] + face_bounds["height"] / 2
+    return [
+        [scale_x, 0.0, center_x * (1.0 - scale_x)],
+        [0.0, scale_y, center_y * (1.0 - scale_y)]
+    ]
 
 
 def validate_reference_count(reference_count: int) -> None:
@@ -391,6 +404,41 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
         raise RuntimeError("GFPGAN sonrası alfa maskeli hibrit sonuç yazılamadı.")
 
 
+def adjust_face_geometry(
+    input_path: Path,
+    output_path: Path,
+    face_bounds: dict[str, float],
+    scale_x: float,
+    scale_y: float
+) -> None:
+    try:
+        import cv2
+        import numpy as np
+    except Exception as error:
+        raise RuntimeError(f"Yüz oranı düzeltmesi için OpenCV/NumPy yüklenemedi: {error}") from error
+    if not 0.94 <= scale_x <= 1.02 or not 1.0 <= scale_y <= 1.08:
+        raise ValueError("Yüz oranı düzeltmesi izin verilen aralığın dışında.")
+
+    image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
+    if image is None or image.ndim != 3 or image.shape[2] != 4:
+        raise RuntimeError("Yüz oranı düzeltmesi için alfa maskeli hibrit PNG okunamadı.")
+
+    height, width = image.shape[:2]
+    matrix = np.asarray(face_geometry_affine_matrix(face_bounds, scale_x, scale_y), dtype=np.float32)
+    size = (width, height)
+    color = cv2.warpAffine(
+        image[:, :, :3], matrix, size, flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REFLECT_101
+    )
+    alpha = cv2.warpAffine(
+        image[:, :, 3], matrix, size, flags=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_CONSTANT, borderValue=0
+    )
+    adjusted = cv2.merge((*cv2.split(color), alpha))
+    if not cv2.imwrite(str(output_path), adjusted):
+        raise RuntimeError("Yüz oranı düzeltmesi uygulanmış PNG yazılamadı.")
+
+
 def blend_lower_face(
     target_path: Path,
     identity_path: Path,
@@ -660,7 +708,12 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 final_output = temp_dir / "retake-final.png"
                 preferred_boost = self.server.face_swapper_pixel_boost  # type: ignore[attr-defined]
                 variation = metadata["variation"]
-                face_swapper_weight, detail_transfer_strength = FACE_SWAP_VARIATIONS[variation]
+                (
+                    face_swapper_weight,
+                    detail_transfer_strength,
+                    face_width_scale,
+                    face_height_scale
+                ) = FACE_SWAP_VARIATIONS[variation]
 
                 print(
                     f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
@@ -714,6 +767,13 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 else:
                     final_output = hybrid_output
 
+                adjust_face_geometry(
+                    final_output,
+                    final_output,
+                    metadata["faceBounds"],
+                    face_width_scale,
+                    face_height_scale
+                )
                 result = final_output.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
@@ -735,7 +795,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self.wfile.write(result)
                 print(
                     "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
-                    f"katmanı; pixel boost={identity_boost}/{appearance_boost}; "
+                    f"katmanı; yüz oranı x{face_width_scale:.2f}/y{face_height_scale:.2f}; "
+                    f"pixel boost={identity_boost}/{appearance_boost}; "
                     f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
                     flush=True
                 )

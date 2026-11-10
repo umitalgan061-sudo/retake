@@ -28,6 +28,12 @@ import {
 
 const MAX_PREVIEW_EDGE = 2048;
 const MAX_REFERENCE_EDGE = 2048;
+const FACE_VARIATION_LABELS = [
+  "Biraz daha uzun",
+  "Doğal oran",
+  "Uzun ve dar",
+  "Hafif uzun"
+];
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const FACE_DETECTOR_MODEL_URLS = {
   short: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
@@ -103,7 +109,6 @@ const state = {
   selectedFaceIndex: null,
   faceFusionStatus: { checked: false, configured: false },
   isSwapping: false,
-  consentGranted: false,
   nextVariation: 0,
   result: null,
   toastTimer: null,
@@ -579,7 +584,6 @@ async function loadLocalReferences({ force = false } = {}) {
     if (reference.url) URL.revokeObjectURL(reference.url);
   });
   state.references = [];
-  state.consentGranted = false;
   state.nextVariation = 0;
   renderReferences();
 
@@ -665,7 +669,6 @@ async function loadUserReferences(files) {
   }
 
   const token = ++state.referenceLoadToken;
-  state.consentGranted = false;
   state.nextVariation = 0;
   clearResult();
   state.identityProfile = null;
@@ -1363,15 +1366,12 @@ async function runFaceFusionEdit() {
     return;
   }
 
-  if (!state.consentGranted) {
-    const consent = await showAppDialog({
-      title: "Yerel düzenlemeyi başlat?",
-      message: "Hedef yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez. Onay, bu sayfa açık kaldığı sürece geçerlidir.",
-      confirmLabel: "Yerel olarak devam et"
-    });
-    if (!consent) return;
-    state.consentGranted = true;
-  }
+  const consent = await showAppDialog({
+    title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
+    message: "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+    confirmLabel: "Yerel olarak devam et"
+  });
+  if (!consent) return;
 
   state.isSwapping = true;
   updateSwapAvailability();
@@ -1417,6 +1417,10 @@ async function runFaceFusionEdit() {
       throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
     }
     const appliedVariation = Number(response.headers.get("X-Retake-Variation"));
+    const variationIndex = Number.isInteger(appliedVariation) &&
+      appliedVariation >= 0 && appliedVariation < FACE_VARIATION_LABELS.length
+      ? appliedVariation
+      : variation;
     const generatedBlob = await response.blob();
     if (!generatedBlob.size || !generatedBlob.type.startsWith("image/")) {
       throw new Error("FaceFusion geçerli bir sonuç görseli döndürmedi.");
@@ -1434,10 +1438,10 @@ async function runFaceFusionEdit() {
     elements.outputStage.classList.add("has-result");
     elements.outputSymbol.hidden = true;
     elements.outputTitle.textContent = "Son görünüm";
-    elements.outputStatus.textContent = `Alternatif ${Number.isInteger(appliedVariation) ? appliedVariation + 1 : variation + 1}`;
+    elements.outputStatus.textContent = FACE_VARIATION_LABELS[variationIndex];
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
-    showToast(`Sonuç hazır · alternatif ${Number.isInteger(appliedVariation) ? appliedVariation + 1 : variation + 1}.`);
+    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]} yüz oranı.`);
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;
@@ -1549,6 +1553,8 @@ function updateThemeButton() {
   const light = document.documentElement.dataset.theme === "light";
   elements.themeButton.setAttribute("aria-label", light ? "Koyu temaya geç" : "Açık temaya geç");
   elements.themeButton.title = light ? "Koyu tema" : "Açık tema";
+  const themeColor = document.querySelector('meta[name="theme-color"]');
+  if (themeColor) themeColor.content = light ? "#f1f2e9" : "#10120f";
 }
 
 function toggleTheme() {

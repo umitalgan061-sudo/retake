@@ -1,6 +1,6 @@
 # Retake — Yerel FaceFusion kurulumu (Windows)
 
-Bu sürüm, FaceFusion 3.9.2 üzerinde 25 referanslı iki geçişli bir yüz profili oluşturur. 25 referansın tamamı FaceLandmarker ile algılanır; gerekirse BlazeFace yedek algılayıcısı kullanılarak ortak göz koordinatına hizalanır. Netlik, açı, yüz alanı ve pozlama puanlarına göre 1–3 arası ağırlık alır. Ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması ayrı ayrı hazırlanır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
+Bu sürüm, FaceFusion 3.9.2 üzerinde 25/25 referans zorunlu iki geçişli bir yüz profili oluşturur. Tarayıcıda FaceLandmarker ve BlazeFace fallback ile hizalanan 25 fotoğrafın tamamı profile girer. Yerel sunucu aynı 25 crop'u FaceFusion ArcFace ONNX ile ayrıca karşılaştırır. Bu işlem kişiye özel model eğitimi veya LoRA fine-tuning değildir.
 
 ## Sistem
 
@@ -35,7 +35,7 @@ Hibrit profil iki ayrı geçiş kullanır:
 
 - Kimlik geçişi: alphaface_256. 25 kaynak yüzün embedding ortalamasını kullanır. Referanslar kalite/açı ağırlıklarıyla kaynak listesinde tekrarlanır; her kabul edilen fotoğraf en az bir oy alır.
 - Görünüm geçişi: uniface_256. 25 fotoğrafın hizalanmış ve ağırlıklı piksel ortalamasını kaynak yüz olarak kullanır. Bu geçiş alt yüz, bıyık ve sakal görünümünü desteklemek için kullanılır.
-- Pixel boost varsayılanı 768x768'dir. CUDA bellek hatasında her geçiş 512x512 ile yeniden denenir.
+- Pixel boost ilk denemesi 1024x1024'tür. CUDA bellek hatasında sırasıyla 768x768, ardından 512x512 denenir. Bu yüz crop inference ölçeğidir; fotoğrafın çıktı çözünürlüğünü büyütmez.
 - Face swapper weight: 1.0.
 - Execution provider: cuda, device 0.
 - Face selector: one.
@@ -43,6 +43,10 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Face occluder: `xseg_1`; face parser: `bisenet_resnet_34`.
 - Parser regions: skin, eyebrows, eyes, nose, mouth and lips; `glasses` is intentionally excluded to preserve target eyewear.
 - Final PNG includes an alpha matte derived from pixels actually changed by the two FaceFusion passes. The browser uses this matte instead of the old broad ellipse when available.
+- A local ArcFace ONNX medoid/median screen compares all 25 face crops. Strong outliers keep at least one identity vote but are reduced to weight 1 and reported; the method is not biometric proof and does not use a universal 0.75 cutoff.
+- UniFace contributes a low-strength high-frequency lower-face detail layer instead of the former strong pixel blend, so AlphaFace geometry remains dominant.
+- Practically unchanged output is rejected rather than reported as a successful face swap.
+- Optional GFPGAN 1.4 can be enabled as a separate last stage at 25% blend; it is disabled by default because it can change facial-hair and identity detail.
 
 Lisanslar model bazında değerlendirilmelidir. FaceFusion kataloğunda alphaface_256 Non-Commercial, uniface_256 ise Unknown lisans durumuyla listelenir. Ticari kullanım hakkı olduğunu varsayma; model ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 
@@ -52,9 +56,15 @@ Retake deposunda PowerShell'den:
 
     .\tools\start_facefusion_retake.ps1
 
-Varsayılan çözünürlük 768x768'dir. Daha düşük bellek kullanımı için:
+İlk deneme 1024x1024'tür; bellek yetmezse otomatik 768x768 ve ardından 512x512 denenir. Daha düşük bellek kullanımı için:
 
-    .\tools\start_facefusion_retake.ps1 -FaceSwapperPixelBoost 512x512
+    .\tools\start_facefusion_retake.ps1 -FaceSwapperPixelBoost 768x768
+
+GFPGAN 1.4 son aşamasını karşılaştırmalı test için açmak istersen:
+
+    .\tools\start_facefusion_retake.ps1 -EnableFaceEnhancer
+
+GFPGAN varsayılan olarak kapalıdır; yüz kimliği ve sakal ayrıntısını değiştirebilir.
 
 Servis http://127.0.0.1:8765 üzerinde çalışır ve yalnızca bilgisayarın loopback arayüzünü dinler. Bu PowerShell penceresini işlem sırasında açık bırak. Modemden port yönlendirme yapma ve Windows güvenlik duvarında bu portu genel ağa açma.
 
@@ -62,7 +72,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v3, identity_model=alphaface_256, appearance_model=uniface_256.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v4, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 
@@ -79,12 +89,14 @@ Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz
 - MediaPipe FaceLandmarker 478 noktalı yüz ağı ile önce referansları algılar. Başarısız kalanlarda BlazeFace FaceDetector önce kısa menzil, sonra tam menzil modeliyle düşük eşikte çalışır ve altı anahtar nokta (iki göz, burun, ağız ve iki kulak) üzerinden yedek hizalama kurar. Yedek hizalanan görsellerin kalite ağırlığı en fazla 2 ile sınırlandırılır.
 - Her referans yüzü göz işaretlerine göre ortak 512×682 tuvale hizalanır.
 - Netlik Laplacian varyansı ile ölçülür; yüz alanı, frontalness ve pozlama da puanlanır.
-- 25/25 yüz profile katılır; FaceLandmarker hizalamaları kaliteye göre 1–3 oy, BlazeFace yedek hizalamaları en fazla 2 oy alır. Bir referans hâlâ hizalanamazsa uygulama dosya adını ve iki algılayıcının hata nedenlerini gösterir, eksik profille FaceFusion çalıştırmaz.
+- 25/25 yüz profile katılır; FaceLandmarker hizalamaları kaliteye göre 1–3 oy, BlazeFace fallback hizalamaları en fazla 2 oy alır. Bir fotoğraf yine hizalanamazsa işlem durur.
+- Yerel ArcFace denetimi belirgin aykırı referansları bildirir ve kimlik oylarını 1'e indirir; fotoğraflar görünüm profilinden çıkarılmaz. Bu bir tutarlılık taramasıdır, kesin kimlik doğrulaması değildir.
 - Ağırlıklı ortalama RGBA görünüm profili oluşturulur. Aşırı farklı pozlar ve ifadeler bu ortalamayı yumuşatabilir.
 - Aynı ağırlıklar FaceFusion kaynak listesinde tekrarlanarak AlphaFace'in 512 boyutlu kimlik embedding ortalamasına uygulanır.
 - AlphaFace kimlik geçişi üretir.
 - UniFace, tüm referansların hizalanmış piksel harmanını kaynak görüntü olarak kullanarak görünüm geçişi üretir.
-- UniFace çıktısının alt yüz alanı AlphaFace çıktısına yumuşak eliptik maske ile karıştırılır. Kimlik geçişi ana yüzü, görünüm geçişi bıyık/sakal/çene dokusunu destekler.
+- AlphaFace yüz geometrisi ana katman olarak kalır. UniFace yüksek frekanslı alt yüz ayrıntısını düşük güçte ekler; eski %82 piksel karışımı kaldırılmıştır.
+- GFPGAN seçilirse FaceFusion'ın ayrı face_enhancer işlemcisi %25 blend ile çalışır; alfa matı korunur.
 - Tek hibrit PNG hedef crop'a uygulanır; orijinal fotoğrafın geri kalanı korunur ve maske dışı piksel bütünlüğü kontrol edilir.
 
 Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. Her fotoğraf aynı hizalama düzlemine taşınır ve ağırlıklı bir profil bileşeni olur. Sonuç kalitesi referans fotoğrafların netliğine, poz çeşitliliğine, ışığına ve sakal/bıyığın kaç fotoğrafta belirgin olduğuna bağlıdır; kimlik benzerliği garanti edilmez.
@@ -110,7 +122,7 @@ Profil 25/25 zorunludur. Hata mesajında dosya adı ve FaceLandmarker/BlazeFace 
 
 ### Bellek / işlem hatası
 
-Önce ComfyUI/FLUX gibi ağır GPU süreçlerini kapat. Sunucu CUDA bellek hatasında 768x768 ayarı için 512x512 yeniden denemesi yapar. Her iki geçişte de hata varsa FaceFusion PowerShell kayıtlarının son satırlarını sakla.
+Önce ComfyUI/FLUX gibi ağır GPU süreçlerini kapat. Sunucu CUDA bellek hatasında 1024x1024 ayarından 768x768'e, gerekirse 512x512'ye düşer. Her iki geçişte de hata varsa FaceFusion PowerShell kayıtlarının son satırlarını sakla.
 
 ## 7. Gizlilik ve fotoğraf depolama
 

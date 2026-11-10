@@ -60,8 +60,8 @@ jobs:
         run: npm test
       - name: Validate repository assets
         run: python3 tools/validate_assets.py
-      - name: Check local FaceFusion server Python syntax
-        run: python3 -m py_compile tools/facefusion_local_server.py
+      - name: Check local FaceFusion server and ArcFace worker Python syntax
+        run: python3 -m py_compile tools/facefusion_local_server.py tools/facefusion_identity_worker.py tools/identity_consistency.py tools/facefusion_quality.py
       - name: Run local FaceFusion configuration tests
         run: python3 -m unittest discover -s tests -p "test_*.py"
       - name: Check JavaScript syntax

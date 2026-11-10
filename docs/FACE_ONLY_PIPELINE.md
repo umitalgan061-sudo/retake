@@ -2,21 +2,21 @@
 
 Tarih: 10 Kasım 2026  
 Hedef: iPhone 17 Pro Max + modern web tarayıcıları  
-Durum: Web akışı FaceFusion 3.9.2 + AlphaFace 256 yerel yüz değiştirme motoruna taşındı. 25 kaynak fotoğraftan yüzü bulunan 10–25 görüntü kaynak yüz kimlik ortalamasına katılır. Bu işlem model eğitimi/fine-tuning değildir; kalite ve kimlik benzerliği gerçek fotoğraflarla test edilmelidir.
+Durum: Web akışı FaceFusion 3.9.2 + AlphaFace 256 yerel yüz değiştirme motoruna taşındı. Tam 25 referans olmadan işlem başlamaz; FaceLandmarker/BlazeFace fallback ve yerel ArcFace tutarlılık taraması uygulanır. Bu işlem model eğitimi/fine-tuning değildir; eşikler gerçek fotoğraflarla kalibre edilmelidir.
 
 ## 1. Kesin ürün kuralları
 
 1. Kamera yoktur. Canlı kamera, video, kamera izni veya kamera akışı API'si eklenmez. Girdi yalnızca galeriden/dosyadan seçilmiş sabit fotoğraftır.
 2. Kullanıcı hedef fotoğrafı seçer. Birden çok yüz varsa değiştirilecek yüzü kendisi seçer.
 3. Yalnızca seçilen yüzün pikselleri değiştirilir. Tüm fotoğrafı yeniden üretmek kabul edilmez.
-4. Kimlik havuzundaki 20 fotoğraf aynı kişiye ait olmalıdır. Farklı kişilere ait referanslar tek kimlik profiline karıştırılmaz.
-5. Hedefin pozu ve baş açısı hedef fotoğraftan; kimlik özellikleri 20 referanstan alınır.
+4. Kimlik havuzundaki 25 fotoğraf aynı kişiye ait olmalıdır. Farklı kişilere ait referanslar tek kimlik profiline karıştırılmaz.
+5. Hedefin pozu ve baş açısı hedef fotoğraftan; kimlik özellikleri 25 referanstan alınır.
 6. Göz kapalıysa uygun açık göz referansından doğal göz açıklığı üretilebilir. Yüz ifadesi yalnızca kimlik aktarımını/doğallığı iyileştirmek için gerektiğinde ve yalnızca yüz crop'unda düzeltilir.
 7. Saç, saç çizgisi, arka plan, boyun/gövde, kıyafet, aksesuarlar, eller, diğer kişiler ve diğer yüzler korunur.
 8. Sonuç orijinal fotoğrafın tam çözünürlüğüne geri yerleştirilir. Düzenleme maskesi dışındaki her piksel kaynak fotoğrafla aynı kalmalıdır.
 9. Model/maske/kimlik kontrolü başarısız olursa işlem sonucu üretilmiş gibi gösterilmez.
 
-## 2. 10–25 referanstan tek kimlik profili
+## 2. 25 referanstan tek kimlik profili
 
 Referans fotoğrafları yalnızca tek yüz içerme kontrolünden geçmekle kalmamalı; gerçek kimlik encoder'ı eklendiğinde aynı kişiye ait olup olmadıkları da karşılaştırılmalıdır.
 
@@ -35,14 +35,14 @@ Referans fotoğrafları yalnızca tek yüz içerme kontrolünden geçmekle kalma
 - Hedef yüz pozuna en yakın referans(lar)ı seç; fakat hedef pozunu referans pozuna zorla dönüştürme.
 - Embedding'ler biyometrik veri kabul edilir: public GitHub'a yazılmaz, yerel özel depoda tutulur.
 
-**Mevcut sınırlama:** Bugünkü uygulama tek fotoğrafta tek yüz bulmayı doğrular. 20 fotoğrafın aynı kişiye ait olduğunu henüz doğrulayamaz; bunu ancak lisansı onaylanmış identity encoder entegre edildiğinde iddia edebilir.
+**Mevcut sınır:** 25 crop, FaceFusion'ın kendi ArcFace ONNX kodlayıcısıyla karşılaştırılır. Medoid/medyan ekranı belirgin aykırı kareleri bildirip kimlik ağırlığını 1'e indirir; 0.75 gibi sabit, kalibre edilmemiş bir eşik kullanılmaz. Bu işlem aynı kişiye ait olmayı kesin kanıtlamaz.
 
 ## 3. Hedef yüz crop ve koşullandırma
 
 - Kullanıcının seçtiği yüzü yüksek çözünürlüklü orijinal fotoğrafta yeniden tespit et.
 - Crop'u yüz sınırından biraz daha geniş al: alın, iki kaş/göz, yanaklar, burun, ağız ve çene dahil olmalı. Crop gereksiz saç/arka plan alanı içermemeli.
 - Pose/landmark, gaze/eye-open, ağız açıklığı ve ifade ölçümlerini hedef yüz üzerinden çıkar.
-- Yüz kimliği 20 referanstan; poz/ışık/renk/kompozisyon hedef fotoğraftan condition edilir.
+- Yüz kimliği 25 referanstan; poz/ışık/renk/kompozisyon hedef fotoğraftan condition edilir.
 - Model sadece crop üzerinde çalışır. Tam fotoğrafı üretim girdisi olarak yeniden sentezleyip eski sahnenin üzerine yazamaz.
 
 ## 4. Göz ve ifade retargeting
@@ -89,7 +89,7 @@ Maske kenarında feather işlemi yalnızca maskenin içinde uygulanır. Alpha 0 
 
 Çıktı kaydedilmeden önce:
 
-- Identity similarity: sonuç yüzü 20 referansın ortak profiline yeterince yakın mı?
+- Identity similarity: sonuç yüzü 25 referansın ortak profiline yeterince yakın mı?
 - Pose: hedefin baş pozu korunmuş mu?
 - Expression/gaze: göz ve ağız anatomik olarak tutarlı mı?
 - Mask integrity: saç, gözlük, el ve nesneler bozulmuş mu?
@@ -109,7 +109,7 @@ Kod: https://github.com/cvlab-kaist/APPLE
 
 ### LivePortrait
 
-LivePortrait kaynak projesi göz ve dudak açıklığı retarget edebilen portre canlandırma modelidir. Kapalı gözü açma/ifade düzeltme alt aşaması için değerlendirilebilir; ancak referans kimliğini 20 fotoğraftan aktaracak ana Face Swap motoru değildir. Resmî örnekler PyTorch ve indirilmiş pretrained weights kullanır; iOS Core ML dönüşümü ayrıca gerekir.
+LivePortrait kaynak projesi sabit görsel retargeting ile göz ve dudak açıklığı üzerinde çalışabilir. Ancak video akışındaki eye/lip flag'leri WIP olduğundan doğrudan açılmaz; ayrı ve isteğe bağlı bir post-stage olarak, kimlik kayması ölçülerek değerlendirilmelidir. Referans kimliğini 25 fotoğraftan aktaracak ana Face Swap motoru değildir. Resmî örnekler PyTorch ve indirilmiş pretrained weights kullanır; iOS Core ML dönüşümü ayrıca gerekir.
 
 Kod ve retarget örnekleri: https://github.com/KlingAIResearch/LivePortrait  
 Proje sayfası: https://liveportrait.github.io/
@@ -125,7 +125,7 @@ Lisans listesi: https://docs.facefusion.io/introduction/licenses
 
 Web sürümünde:
 - Fotoğraf seçimi ve MediaPipe yüz tespiti vardır; kullanıcı hedef fotoğrafta değiştirilecek yüzü seçer.
-- `reference-faces/manifest.json` içindeki 25 fotoğraf yüklenir; yüzü tespit edilen 10–25 fotoğrafın tamamı kaynak olarak kullanılır.
+- `reference-faces/manifest.json` içindeki 25 fotoğrafın tamamı yüklenir; 25/25 yüz crop'u hizalanmadan ve ArcFace tutarlılık ön kontrolü tamamlanmadan işlem başlatılmaz.
 - Referans fotoğrafları ayrı ayrı `127.0.0.1:8765` üzerindeki yerel FaceFusion servisine gönderilir.
 - FaceFusion 3.9.2, `alphaface_256` yüz değiştiriciyi CUDA ile çalıştırır. FaceFusion kaynak kodunda çoklu kaynak karelerinden yüz kimlik temsillerinin ortalaması alınır.
 - FaceFusion hedef yüz crop'u üzerinde çalışır; tam fotoğrafı kompozisyon olarak yeniden oluşturmaz.

@@ -1072,6 +1072,12 @@ async function runFaceFusionEdit() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
     }
+    const identityMedian = response.headers.get("X-Retake-Identity-Median-Similarity");
+    const identityOutliers = (response.headers.get("X-Retake-Identity-Outliers") || "")
+      .split(",").filter(Boolean).map((value) => Number(value)).filter(Number.isInteger);
+    const actualPixelBoost = response.headers.get("X-Retake-Pixel-Boost") || "bilinmiyor";
+    const faceEnhancer = response.headers.get("X-Retake-Face-Enhancer") || "off";
+    const identityWeightedVotes = response.headers.get("X-Retake-Identity-Weighted-Votes") || "bilinmiyor";
     const generatedBlob = await response.blob();
     if (!generatedBlob.size || !generatedBlob.type.startsWith("image/")) {
       throw new Error("FaceFusion geçerli bir sonuç görseli döndürmedi.");
@@ -1090,9 +1096,23 @@ async function runFaceFusionEdit() {
     elements.outputTitle.textContent = "25 fotoğraflı profil sonucu";
     elements.outputStatus.textContent = "Yerel hibrit çıktı";
     elements.downloadButton.disabled = false;
+    const identityStatus = identityMedian
+      ? `ArcFace medyan cosine benzerliği: ${Number(identityMedian).toFixed(3)}; bu değer tek başına kimlik kanıtı değildir.`
+      : "ArcFace tutarlılık raporu alınamadı.";
+    const outlierLabels = identityOutliers.map((index) => {
+      const reference = state.references[index - 1];
+      return reference ? `${index}. ${reference.name}` : `#${index}`;
+    });
+    const outlierStatus = identityOutliers.length
+      ? `Kontrol önerilen referanslar: ${outlierLabels.join("; ")}; kimlik oyları 1'e indirildi.`
+      : "ArcFace belirgin aykırı referans bulmadı.";
     elements.disabledNote.textContent =
-      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla tek kişisel profile katıldı (toplam ağırlık: ${totalProfileWeight}). AlphaFace kimlik ve UniFace görünüm geçişleri FaceFusion parser/occlusion maskeleriyle işlendi; PNG alfa maskesi gerçek değişen piksellerden türetildi. Maske dışındaki kaynak pikseller korunur.`;
-    showToast(`Hibrit kişisel profil hazır · ${profileCount} referans harmanlandı.`);
+      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla profile katıldı (toplam kalite oyu: ${totalProfileWeight}). ${identityStatus} ${outlierStatus} Kimlik toplam oyu: ${identityWeightedVotes}. FaceFusion pixel boost: ${actualPixelBoost}. GFPGAN: ${faceEnhancer}. XSeg/BiSeNet maskesi ve değişiklik matı uygulandı; maske dışındaki kaynak pikseller korunur.`;
+    showToast(
+      identityOutliers.length
+        ? `Profil hazır · ${profileCount} referans · ${identityOutliers.length} referansı kontrol et.`
+        : `Profil hazır · ${profileCount} referans · ArcFace kontrolü tamamlandı.`
+    );
     setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
   } catch (error) {
     console.error("Yerel FaceFusion işlemi başarısız:", error);

@@ -6,6 +6,10 @@ from tools.facefusion_local_server import (
     MAX_REFERENCES,
     face_mask_cli_arguments,
     validate_reference_count,
+    FACE_ENHANCER_BLEND,
+    FACE_ENHANCER_INTERNAL_BLEND,
+    FACE_ENHANCER_MODEL,
+    FACE_ENHANCER_WEIGHT,
 )
 
 
@@ -28,6 +32,12 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         self.assertIn("bisenet_resnet_34", args)
         self.assertIn("--face-occluder-model", args)
         self.assertIn("xseg_1", args)
+
+    def test_gfpgan_is_a_low_blend_optional_stage(self):
+        self.assertEqual(FACE_ENHANCER_MODEL, "gfpgan_1.4")
+        self.assertEqual(FACE_ENHANCER_BLEND, 25)
+        self.assertEqual(FACE_ENHANCER_INTERNAL_BLEND, 100)
+        self.assertEqual(FACE_ENHANCER_WEIGHT, 0.25)
 
     def test_parser_keeps_glasses_out_of_the_replacement_region(self):
         args = face_mask_cli_arguments()

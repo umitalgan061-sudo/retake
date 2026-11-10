@@ -1,6 +1,7 @@
 param(
     [ValidateSet("512x512", "768x768", "1024x1024")]
-    [string]$FaceSwapperPixelBoost = "768x768"
+    [string]$FaceSwapperPixelBoost = "1024x1024",
+    [switch]$EnableFaceEnhancer
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,4 +20,16 @@ Write-Host "Retake yerel FaceFusion servisi başlatılıyor..." -ForegroundColor
 Write-Host "Adres: http://127.0.0.1:8765" -ForegroundColor Green
 Write-Host "Bu PowerShell penceresini işlem sırasında açık bırak." -ForegroundColor Yellow
 
-conda run --no-capture-output -n facefusion python $ServerScript --facefusion-dir $FaceFusionDir --host 127.0.0.1 --port 8765 --face-swapper-pixel-boost $FaceSwapperPixelBoost --origin "https://retake06.web.app"
+$ServerArgs = @(
+    "--facefusion-dir", $FaceFusionDir,
+    "--host", "127.0.0.1",
+    "--port", "8765",
+    "--face-swapper-pixel-boost", $FaceSwapperPixelBoost,
+    "--origin", "https://retake06.web.app"
+)
+if ($EnableFaceEnhancer) {
+    $ServerArgs += "--enable-face-enhancer"
+    Write-Host "GFPGAN 1.4 son aşaması açık (%25 karışım)." -ForegroundColor Yellow
+}
+
+conda run --no-capture-output -n facefusion python $ServerScript @ServerArgs

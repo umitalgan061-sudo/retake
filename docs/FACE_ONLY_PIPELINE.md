@@ -125,7 +125,7 @@ Lisans listesi: https://docs.facefusion.io/introduction/licenses
 
 Web sürümünde:
 - Fotoğraf seçimi ve MediaPipe yüz tespiti vardır; kullanıcı hedef fotoğrafta değiştirilecek yüzü seçer.
-- `reference-faces/manifest.json` içindeki 25 fotoğraf yüklenir; yüzü tespit edilen 10–25 fotoğrafın tamamı kaynak olarak kullanılır.
+- `reference-faces/manifest.json` içindeki 25 fotoğrafın tamamı yüklenir; 25/25 yüz crop'u hizalanmadan ve ArcFace tutarlılık ön kontrolü tamamlanmadan işlem başlatılmaz.
 - Referans fotoğrafları ayrı ayrı `127.0.0.1:8765` üzerindeki yerel FaceFusion servisine gönderilir.
 - FaceFusion 3.9.2, `alphaface_256` yüz değiştiriciyi CUDA ile çalıştırır. FaceFusion kaynak kodunda çoklu kaynak karelerinden yüz kimlik temsillerinin ortalaması alınır.
 - FaceFusion hedef yüz crop'u üzerinde çalışır; tam fotoğrafı kompozisyon olarak yeniden oluşturmaz.

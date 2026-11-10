@@ -30,15 +30,15 @@ ComfyUI CORS ayarında tam olarak `https://retake06.web.app` origin'i bulunmalı
 
 - Retake, hedef fotoğrafın yalnızca seçilen yüz çevresindeki crop'unu hazırlar.
 - 25 referans fotoğrafının her birinde yüz algılar ve yüzü kaynak piksel alanı en yüksek olan üç fotoğrafı seçer.
-- Seçilen üç yüz crop'u birbirinden ayrı PNG dosyaları olarak ComfyUI'nin `/upload/image` uç noktasına yüklenir.
-- `workflows/retake-flux-api.json` hedef görseli tek düzenleme tuvali olarak kullanır. Hedef ve üç referans ayrı ayrı `VAEEncode` ile latent'e dönüştürülür; üç referans `ReferenceLatent` düğümleri zinciriyle conditioning'e eklenir. Görseller bir kolajda birleştirilmez.
+- Seçilen dört yüz crop'u birbirinden ayrı PNG dosyaları olarak ComfyUI'nin `/upload/image` uç noktasına yüklenir.
+- `workflows/retake-flux-api.json` hedef görseli tek düzenleme tuvali olarak kullanır. Hedef ve dört referans ayrı ayrı `VAEEncode` ile latent'e dönüştürülür; dört referans `ReferenceLatent` düğümleri zinciriyle conditioning'e eklenir. Görseller bir kolajda birleştirilmez.
 - Retake `/history/{prompt_id}` ile sonucu izler, `/view` üzerinden tek portre çıktısını alır ve seçili yüz maskesiyle orijinal hedef fotoğrafa birleştirir.
 
 ComfyUI'nin HTTP API uç noktaları arasında `/upload/image`, `/prompt`, `/history/{prompt_id}` ve `/view` bulunur. Resmî rota belgeleri: https://github.com/Comfy-Org/docs/blob/main/development/comfyui-server/comms_routes.mdx
 
 ## Gizlilik notları
 
-Model çıkarımı yereldir: hedef crop ve seçilen üç ayrı referans ComfyUI'nin bu bilgisayardaki loopback adresine gider; NVIDIA hosted API çağrısı yapılmaz. **Önemli mevcut durum:** Bu dalın taban aldığı herkese açık GitHub deposunda `reference-faces/` klasörü altında 25 adet `.jpeg` referans fotoğrafı zaten izlenen dosya olarak bulunuyor. Bu nedenle görsel çıkarımının yerel olması fotoğrafları gizli yapmaz; GitHub dosyaları herkese açık olabilir ve Firebase Hosting'e dağıtılırsa aynı fotoğraflar web'den de erişilebilir. Bu PR canlıya alınmadan önce depo görünürlüğü ve bu dosyaların geçmişi kullanıcı tarafından gözden geçirilmeli; özel referans kaynağına geçiş tamamlanmadan gizlilik garantisi verilmemelidir.
+Model çıkarımı yereldir: hedef crop ve seçilen dört ayrı referans ComfyUI'nin bu bilgisayardaki loopback adresine gider; NVIDIA hosted API çağrısı yapılmaz. **Önemli mevcut durum:** Bu dalın taban aldığı herkese açık GitHub deposunda `reference-faces/` klasörü altında 25 adet `.jpeg` referans fotoğrafı zaten izlenen dosya olarak bulunuyor. Bu nedenle görsel çıkarımının yerel olması fotoğrafları gizli yapmaz; GitHub dosyaları herkese açık olabilir ve Firebase Hosting'e dağıtılırsa aynı fotoğraflar web'den de erişilebilir. Bu PR canlıya alınmadan önce depo görünürlüğü ve bu dosyaların geçmişi kullanıcı tarafından gözden geçirilmeli; özel referans kaynağına geçiş tamamlanmadan gizlilik garantisi verilmemelidir.
 
 FLUX.1-Kontext-dev ağırlıkları ticari olmayan kullanım lisansına tabidir. Model çıktısı belirli bir kimliği doğru biçimde yeniden üretmeyi garanti etmez.
 

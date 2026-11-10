@@ -60,6 +60,7 @@ const state = {
   detector: null,
   target: null,
   references: [],
+  primaryReferenceFile: null,
   referencesLoading: false,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
@@ -127,6 +128,8 @@ async function checkFaceFusionStatus() {
       state.faceFusionStatus = {
         checked: true,
         configured: true,
+        model: health.model || "uniface_256",
+        pixelBoost: health.pixel_boost || "768x768",
         message: "FaceFusion 3.9.2 ve CUDA hazır."
       };
     } catch (error) {
@@ -143,8 +146,10 @@ async function checkFaceFusionStatus() {
 
   if (state.faceFusionStatus.configured) {
     elements.engineTitle.textContent = "Kişisel yüz motoru hazır";
-    elements.engineDescription.textContent =
-      "FaceFusion, yüzü bulunan referans fotoğraflarının tamamından ortalama kimlik temsili oluşturur ve RTX A4000 üzerinde hedef yüze uygular.";
+    const model = state.faceFusionStatus.model;
+    elements.engineDescription.textContent = model === "uniface_256"
+      ? "UniFace 256, seçtiğin ana görünüm fotoğrafını doğrudan kaynak görsel olarak kullanır. Sakal ve bıyığın belirgin olduğu referansı ana görünüm olarak seç; RTX A4000 üzerinde 768 piksel boost ile işlenir."
+      : "AlphaFace 256, referanslardan ortalama kimlik gömmesi oluşturur. Sakal ve bıyık gibi görünüş ayrıntıları için sonuçlar değişken olabilir.";
   } else {
     elements.engineTitle.textContent = "Yerel FaceFusion servisi bekleniyor";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
@@ -359,7 +364,25 @@ function renderReferences() {
       ? "YERELDE"
       : (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR");
 
-    card.append(name, label);
+    const primaryButton = document.createElement("button");
+    primaryButton.type = "button";
+    primaryButton.className = "reference-primary-button";
+    const isPrimary = reference.file === state.primaryReferenceFile;
+    primaryButton.classList.toggle("is-selected", isPrimary);
+    primaryButton.textContent = isPrimary ? "ANA GÖRÜNÜM" : "Ana görünüm seç";
+    primaryButton.disabled = reference.status !== "ready";
+    primaryButton.setAttribute(
+      "aria-pressed",
+      isPrimary ? "true" : "false"
+    );
+    primaryButton.addEventListener("click", () => {
+      state.primaryReferenceFile = reference.file;
+      clearResult();
+      renderReferences();
+      showToast("Ana görünüm referansı seçildi. UniFace bu fotoğrafın yüz ve sakal görünümünü temel alacak.");
+    });
+
+    card.append(name, label, primaryButton);
     elements.referencesGrid.append(card);
   });
 
@@ -419,7 +442,11 @@ async function loadLocalReferences({ force = false } = {}) {
     state.references = results.map((result, index) => result.status === "fulfilled"
       ? result.value
       : ({ ...references[index], status: "error", error: result.reason?.message || "Görsel açılamadı." }));
-    const loadedCount = state.references.filter((reference) => reference.status === "ready").length;
+    const readyReferences = state.references.filter((reference) => reference.status === "ready");
+    if (!readyReferences.some((reference) => reference.file === state.primaryReferenceFile)) {
+      state.primaryReferenceFile = readyReferences[0]?.file ?? null;
+    }
+    const loadedCount = readyReferences.length;
       const failedCount = MAX_REFERENCE_FACES - loadedCount;
     state.referencesLoading = false;
     state.referenceLoadError = failedCount
@@ -484,7 +511,8 @@ function createReferenceFaceInput(reference) {
   return {
     canvas,
     area: face.width * sourceWidth * face.height * sourceHeight,
-    name: reference.name
+    name: reference.name,
+    file: reference.file
   };
 }
 
@@ -529,7 +557,10 @@ function buildLocalFaceFusionInputs() {
     }
   });
 
-  const profileReferences = candidates;
+  const primaryReference = candidates.find((reference) => reference.file === state.primaryReferenceFile);
+  const profileReferences = primaryReference
+    ? [primaryReference, ...candidates.filter((reference) => reference !== primaryReference)]
+    : candidates;
   if (profileReferences.length < MIN_FACEFUSION_REFERENCE_COUNT) {
     throw new Error(
       `Kişisel yüz profili için en az ${MIN_FACEFUSION_REFERENCE_COUNT} referansta yüz bulunmalı; ${profileReferences.length} yüz bulundu.`
@@ -549,6 +580,7 @@ function buildLocalFaceFusionInputs() {
     targetCanvas,
     referenceCanvases: profileReferences.map((reference) => reference.canvas),
     selectedReferenceNames: profileReferences.map((reference) => reference.name),
+    primaryReferenceName: profileReferences[0]?.name || "İlk geçerli referans",
     crop
   };
 }
@@ -629,10 +661,16 @@ async function runFaceFusionEdit() {
     return;
   }
 
+  const primaryReference = state.references.find((reference) => reference.file === state.primaryReferenceFile);
+  const activeModel = state.faceFusionStatus.model || "uniface_256";
+  const modelExplanation = activeModel === "uniface_256"
+    ? "UniFace seçilen ana görünüm fotoğrafını doğrudan görsel kaynak olarak kullanır. Sakal/bıyık aktarımı için ana görünüm olarak bu ayrıntıların net göründüğü fotoğrafı seç. "
+    : "AlphaFace çoklu referanslardan kimlik gömmelerini ortalar; sakal/bıyık görünümü doğrudan kopyalanmayabilir. ";
   const consent = window.confirm(
     "YEREL İŞLEM ONAYI\\n\\n" +
-    "Hedef fotoğrafın yalnızca seçili yüz crop'u ve yüzü algılanan tüm referans fotoğrafları bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
-    "FaceFusion tüm referanslardan ortalama bir kimlik temsili çıkaracak ve RTX A4000 üzerinde yüz değiştirme yapacak. " +
+    "Hedef fotoğrafın yalnızca seçili yüz crop'u ve yüzü bulunan referans fotoğrafları bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
+    "Aktif model: " + activeModel + ". Ana görünüm: " + (primaryReference?.name || "ilk geçerli referans") + ". " +
+    modelExplanation +
     "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
   if (!consent) return;
@@ -649,7 +687,7 @@ async function runFaceFusionEdit() {
   let generatedUrl = null;
   try {
     const base = localFaceFusionBase();
-    const { targetCanvas, referenceCanvases, crop } = buildLocalFaceFusionInputs();
+    const { targetCanvas, referenceCanvases, primaryReferenceName, crop } = buildLocalFaceFusionInputs();
     const [targetBlob, ...referenceBlobs] = await Promise.all([
       canvasToBlob(targetCanvas),
       ...referenceCanvases.map((canvas) => canvasToBlob(canvas))
@@ -694,7 +732,7 @@ async function runFaceFusionEdit() {
     elements.outputStatus.textContent = "Yerel çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu; tamamı ortalama kimlik temsiline katıldı. Yüz dışındaki pikseller korunarak birleştirildi. Kimlik benzerliği garanti edilmez.`;
+      `${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referansta yüz bulundu. Ana görünüm: ${primaryReferenceName}. ${state.faceFusionStatus.model || "FaceFusion"} · ${state.faceFusionStatus.pixelBoost || "768x768"}. Yüz dışındaki pikseller korunarak birleştirildi; sakal/bıyık aktarımı referansın görünürlüğüne ve modelin çıktısına bağlıdır.`;
     showToast(`FaceFusion çıktısı hazır · ${state.selectedReferenceCount} referans kullanıldı.`);
     setRuntimeStatus(`FaceFusion · ${state.selectedReferenceCount} referans · sonuç hazır`);
   } catch (error) {

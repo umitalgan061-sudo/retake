@@ -1,4 +1,4 @@
-const SHELL_CACHE = "retake-shell-v15";
+const SHELL_CACHE = "retake-shell-v16";
 const AI_CACHE = "retake-ai-assets-v2";
 const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./src/identity-profile.js", "./src/profile-storage.js", "./manifest.webmanifest", "./icons/retake.svg"];
 

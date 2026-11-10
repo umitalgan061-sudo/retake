@@ -1,15 +1,21 @@
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from tools.facefusion_local_server import (
+    FACE_SWAP_VARIATIONS,
     FACE_MASK_REGIONS,
     FACE_MASK_TYPES,
     MAX_REFERENCES,
+    _validate_metadata,
     face_mask_cli_arguments,
     validate_reference_count,
     FACE_ENHANCER_BLEND,
     FACE_ENHANCER_INTERNAL_BLEND,
     FACE_ENHANCER_MODEL,
     FACE_ENHANCER_WEIGHT,
+    run_facefusion,
 )
 
 
@@ -49,6 +55,46 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         self.assertIn("mouth", regions)
         self.assertIn("upper-lip", regions)
         self.assertIn("lower-lip", regions)
+        self.assertNotIn("hair", regions)
+
+    def test_alternate_render_balances_are_bounded_and_distinct(self):
+        self.assertEqual(len(FACE_SWAP_VARIATIONS), 4)
+        self.assertEqual(FACE_SWAP_VARIATIONS[0], (1.0, 0.20))
+        self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 4)
+        for swapper_weight, detail_strength in FACE_SWAP_VARIATIONS:
+            self.assertGreaterEqual(swapper_weight, 0.92)
+            self.assertLessEqual(swapper_weight, 1.0)
+            self.assertGreater(detail_strength, 0)
+            self.assertLessEqual(detail_strength, 0.30)
+
+    def test_metadata_defaults_to_first_variant_and_rejects_invalid_variants(self):
+        metadata = {
+            "referenceWeights": [1] * MAX_REFERENCES,
+            "faceBounds": {"x": 0, "y": 0, "width": 100, "height": 100}
+        }
+        self.assertEqual(_validate_metadata(metadata, MAX_REFERENCES)["variation"], 0)
+        metadata["variation"] = len(FACE_SWAP_VARIATIONS)
+        with self.assertRaisesRegex(ValueError, "Görünüm alternatifi"):
+            _validate_metadata(metadata, MAX_REFERENCES)
+        metadata["variation"] = True
+        with self.assertRaisesRegex(ValueError, "Görünüm alternatifi"):
+            _validate_metadata(metadata, MAX_REFERENCES)
+
+    @patch("tools.facefusion_local_server.subprocess.run")
+    def test_facefusion_command_uses_the_selected_swap_strength(self, subprocess_run):
+        subprocess_run.return_value = SimpleNamespace(returncode=1, stderr="", stdout="")
+        run_facefusion(
+            Path("/facefusion"),
+            Path("/target.png"),
+            [Path("/reference.png")],
+            Path("/output.png"),
+            "alphaface_256",
+            "1024x1024",
+            0.94
+        )
+        command = subprocess_run.call_args.args[0]
+        weight_index = command.index("--face-swapper-weight")
+        self.assertEqual(command[weight_index + 1], "0.94")
 
 
 if __name__ == "__main__":

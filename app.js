@@ -71,7 +71,12 @@ const elements = {
   engineDescription: $("#engineDescription"),
   themeButton: $("#themeButton"),
   installButton: $("#installButton"),
-  toast: $("#toast")
+  toast: $("#toast"),
+  appDialog: $("#appDialog"),
+  dialogTitle: $("#dialogTitle"),
+  dialogMessage: $("#dialogMessage"),
+  dialogCancel: $("#dialogCancel"),
+  dialogConfirm: $("#dialogConfirm")
 };
 
 const state = {
@@ -98,8 +103,11 @@ const state = {
   selectedFaceIndex: null,
   faceFusionStatus: { checked: false, configured: false },
   isSwapping: false,
+  consentGranted: false,
+  nextVariation: 0,
   result: null,
   toastTimer: null,
+  dialogResolve: null,
   installPrompt: null
 };
 
@@ -108,6 +116,19 @@ function showToast(message) {
   elements.toast.classList.add("show");
   window.clearTimeout(state.toastTimer);
   state.toastTimer = window.setTimeout(() => elements.toast.classList.remove("show"), 3200);
+}
+
+function showAppDialog({ title, message, confirmLabel, cancelLabel = "Vazgeç", danger = false }) {
+  elements.dialogTitle.textContent = title;
+  elements.dialogMessage.textContent = message;
+  elements.dialogConfirm.textContent = confirmLabel;
+  elements.dialogCancel.textContent = cancelLabel;
+  elements.dialogConfirm.classList.toggle("danger-action", danger);
+  elements.appDialog.returnValue = "";
+  return new Promise((resolve) => {
+    state.dialogResolve = resolve;
+    elements.appDialog.showModal();
+  });
 }
 
 function setRuntimeStatus(message) {
@@ -153,9 +174,23 @@ function updateSwapAvailability() {
     !state.targetLoading && !state.referencesLoading && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
+  const copy = elements.swapButton.querySelector(".button-copy");
+  if (copy) copy.textContent = state.result ? "Yeniden oluştur" : "Yüzümü uygula";
   const tag = elements.swapButton.querySelector(".button-state");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "HAZIR" : (state.faceFusionStatus.configured ? "FOTOĞRAF SEÇ" : "MOTORU BAĞLA"));
+    (enabled ? "HAZIR" : !state.faceFusionStatus.configured ? "MOTOR BEKLENİYOR" :
+      referenceCount !== MAX_REFERENCE_FACES ? "PROFİL GEREKLİ" : "FOTOĞRAF EKLE");
+  if (!state.isSwapping) {
+    elements.disabledNote.textContent = state.referencesLoading
+      ? "Yüz referansları hazırlanıyor…"
+      : referenceCount !== MAX_REFERENCE_FACES
+        ? "Varsayılan profil yüklenemedi. Yüz profili ayarlarından 25 fotoğraf seçebilir veya havuzu yeniden yükleyebilirsin."
+        : !state.faceFusionStatus.configured
+          ? "Düzenleme için bu cihazda yerel FaceFusion servisini başlat."
+          : !hasTarget
+            ? "Başlamak için bir fotoğraf yükle ve değiştirilecek yüzü seç."
+            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
+  }
   elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.clearReferences.disabled = state.referencesLoading || state.isSwapping;
@@ -198,13 +233,12 @@ async function checkFaceFusionStatus() {
   }
 
   const connectionLabel = $("#topConnectionText");
-  if (connectionLabel) connectionLabel.textContent = state.faceFusionStatus.configured ? "LOCAL ENGINE READY" : "LOCAL ENGINE OFFLINE";
+  if (connectionLabel) connectionLabel.textContent = state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI";
   if (state.faceFusionStatus.configured) {
-    elements.engineTitle.textContent = "Yerel yüz profili motoru hazır";
-    elements.engineDescription.textContent =
-      "Tüm referanslar kalite ve açılarına göre hizalanıp ağırlıklı bir görünüm profiline dönüştürülür. AlphaFace kimlik profilini, UniFace ise harmanlanmış görünüm ve sakal ayrıntılarını işler.";
+    elements.engineTitle.textContent = "Yerel düzenleme hazır";
+    elements.engineDescription.textContent = "Yüz dönüşümü bu cihazdaki FaceFusion motorunda çalışır.";
   } else {
-    elements.engineTitle.textContent = "Yerel FaceFusion servisi bekleniyor";
+    elements.engineTitle.textContent = "Yerel düzenleme motoru çevrimdışı";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
   }
   updateSwapAvailability();
@@ -329,7 +363,7 @@ function clearResult() {
   elements.outputSymbol.hidden = false;
   elements.outputTitle.textContent = "Önizleme";
   elements.outputStatus.textContent = "Beklemede";
-  elements.outputMessage.textContent = "FaceFusion motoru hazır olduğunda sonuç burada görünecek.";
+  elements.outputMessage.textContent = "Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.";
   updateSwapAvailability();
 }
 
@@ -337,6 +371,7 @@ function selectTargetFace(index) {
   if (state.isSwapping || state.targetLoading) return;
   if (!state.target || !Number.isInteger(index) || !state.target.faces[index]) return;
   state.selectedFaceIndex = index;
+  state.nextVariation = 0;
   clearResult();
   drawTargetPreview();
   renderFaceChips();
@@ -391,6 +426,7 @@ async function setTargetPhoto(file) {
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
     clearResult();
     state.target = { file, image: loaded.image, url: loaded.url, faces };
+    state.nextVariation = 0;
     state.targetLoading = false;
     state.selectedFaceIndex = faces.length > 0 ? 0 : null;
     elements.targetEmpty.hidden = true;
@@ -418,6 +454,7 @@ function clearTargetPhoto() {
   if (state.target?.url) URL.revokeObjectURL(state.target.url);
   clearResult();
   state.target = null;
+  state.nextVariation = 0;
   state.selectedFaceIndex = null;
   elements.targetCanvas.width = 1;
   elements.targetCanvas.height = 1;
@@ -542,6 +579,8 @@ async function loadLocalReferences({ force = false } = {}) {
     if (reference.url) URL.revokeObjectURL(reference.url);
   });
   state.references = [];
+  state.consentGranted = false;
+  state.nextVariation = 0;
   renderReferences();
 
   try {
@@ -603,7 +642,6 @@ async function loadLocalReferences({ force = false } = {}) {
       : null;
 
     renderReferences();
-    showToast(`${loadedCount}/${MAX_REFERENCE_FACES} yerel referans yüklendi.`);
     return loadedCount;
   } catch (error) {
     if (token !== state.referenceLoadToken) return 0;
@@ -627,6 +665,8 @@ async function loadUserReferences(files) {
   }
 
   const token = ++state.referenceLoadToken;
+  state.consentGranted = false;
+  state.nextVariation = 0;
   clearResult();
   state.identityProfile = null;
   state.referenceSetKey = null;
@@ -728,9 +768,13 @@ async function canvasToBlob(canvas, type = "image/png") {
 
 async function clearReferenceData() {
   if (state.referencesLoading || state.isSwapping) return;
-  if (!window.confirm(
-    "Seçili referansları ve bu tarayıcıda saklanan kırpılmış kişisel profil önbelleğini silmek istiyor musun? Kaynak fotoğraflar dosyalarından silinmez."
-  )) return;
+  const confirmed = await showAppDialog({
+    title: "Profil verilerini temizle?",
+    message: "Seçili referanslar ve bu tarayıcıdaki kırpılmış profil önbelleği silinir. Kaynak fotoğraflar dosyalarından kaldırılmaz.",
+    confirmLabel: "Temizle",
+    danger: true
+  });
+  if (!confirmed) return;
 
   state.referenceLoadToken += 1;
   state.identityProfile = null;
@@ -1131,7 +1175,6 @@ async function buildLocalFaceFusionInputs() {
         progress: 100,
         status: "ready"
       });
-      showToast("Kayıtlı kişisel yüz profili yüklendi.");
     } else {
       const candidates = [];
       const referenceDiagnostics = [];
@@ -1213,11 +1256,6 @@ async function buildLocalFaceFusionInputs() {
       state.referenceFaceCropCount = appearance.validCount;
       state.selectedReferenceCount = appearance.validCount;
       renderReferences();
-      showToast(
-        persisted
-          ? `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf harmanlandı · profil bu tarayıcıya kaydedildi.`
-          : `${appearance.validCount}/${MAX_REFERENCE_FACES} fotoğraf harmanlandı · profil bu oturumda hazır.`
-      );
     }
   }
 
@@ -1325,22 +1363,26 @@ async function runFaceFusionEdit() {
     return;
   }
 
-  const consent = window.confirm(
-    "YEREL İŞLEM ONAYI\n\n" +
-    "Hedef yüz crop'u, 25 hizalanmış referans yüz crop'u ve görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
-    "Kimlik profili tüm referansların ağırlıklı yüz gömmelerini kullanır; görünüm profili tüm hizalanmış referansları birleştirir. İki yerel model çıktısı tek fotoğrafta harmanlanır. " +
-    "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
-  );
-  if (!consent) return;
+  if (!state.consentGranted) {
+    const consent = await showAppDialog({
+      title: "Yerel düzenlemeyi başlat?",
+      message: "Hedef yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez. Onay, bu sayfa açık kaldığı sürece geçerlidir.",
+      confirmLabel: "Yerel olarak devam et"
+    });
+    if (!consent) return;
+    state.consentGranted = true;
+  }
 
   state.isSwapping = true;
   updateSwapAvailability();
-  clearResult();
-  elements.outputTitle.textContent = "Kişisel yüz profili uygulanıyor";
+  const variation = state.nextVariation;
+  elements.outputTitle.textContent = state.result ? "Yeni görünüm hazırlanıyor" : "Yüz düzenleniyor";
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
-  elements.outputPlaceholder.hidden = false;
-  elements.outputPlaceholder.querySelector("strong").textContent = "Referans kimliği hazırlanıyor…";
-  elements.outputMessage.textContent = "Hedef yüz ve yüzü algılanan referans fotoğrafları yerel FaceFusion motoruna aktarılıyor.";
+  if (!state.result) {
+    elements.outputPlaceholder.hidden = false;
+    elements.outputPlaceholder.querySelector("strong").textContent = "Yüz profili hazırlanıyor…";
+    elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
+  }
 
   let generatedUrl = null;
   try {
@@ -1350,8 +1392,6 @@ async function runFaceFusionEdit() {
       referenceBlobs,
       referenceWeights,
       appearanceProfileBlob,
-      profileCount,
-      totalProfileWeight,
       faceBounds,
       crop
     } = await buildLocalFaceFusionInputs();
@@ -1363,12 +1403,9 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds }));
+    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, variation }));
 
-    setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · ağırlıklı kimlik ve görünüm profili`);
-    elements.outputPlaceholder.querySelector("strong").textContent = "25 fotoğraflı yüz profili uygulanıyor…";
-    elements.outputMessage.textContent =
-      `${profileCount} hizalanmış referans AlphaFace kimlik profiline ve görünüm harmanına aktarılıyor. İki yerel geçiş çalıştırılacak.`;
+    setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
     const response = await fetch(base + "/api/face-swap", {
       method: "POST",
@@ -1379,12 +1416,7 @@ async function runFaceFusionEdit() {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
     }
-    const identityMedian = response.headers.get("X-Retake-Identity-Median-Similarity");
-    const identityOutliers = (response.headers.get("X-Retake-Identity-Outliers") || "")
-      .split(",").filter(Boolean).map((value) => Number(value)).filter(Number.isInteger);
-    const actualPixelBoost = response.headers.get("X-Retake-Pixel-Boost") || "bilinmiyor";
-    const faceEnhancer = response.headers.get("X-Retake-Face-Enhancer") || "off";
-    const identityWeightedVotes = response.headers.get("X-Retake-Identity-Weighted-Votes") || "bilinmiyor";
+    const appliedVariation = Number(response.headers.get("X-Retake-Variation"));
     const generatedBlob = await response.blob();
     if (!generatedBlob.size || !generatedBlob.type.startsWith("image/")) {
       throw new Error("FaceFusion geçerli bir sonuç görseli döndürmedi.");
@@ -1395,32 +1427,18 @@ async function runFaceFusionEdit() {
     const resultUrl = createObjectURL(resultBlob);
     if (state.result?.url) URL.revokeObjectURL(state.result.url);
     state.result = { blob: resultBlob, url: resultUrl };
+    state.nextVariation = (variation + 1) % 4;
     elements.resultImage.src = resultUrl;
     elements.resultImage.hidden = false;
     elements.outputPlaceholder.hidden = true;
     elements.outputStage.classList.add("has-result");
     elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "25 fotoğraflı profil sonucu";
-    elements.outputStatus.textContent = "Yerel hibrit çıktı";
+    elements.outputTitle.textContent = "Son görünüm";
+    elements.outputStatus.textContent = `Alternatif ${Number.isInteger(appliedVariation) ? appliedVariation + 1 : variation + 1}`;
     elements.downloadButton.disabled = false;
-    const identityStatus = identityMedian
-      ? `ArcFace medyan cosine benzerliği: ${Number(identityMedian).toFixed(3)}; bu değer tek başına kimlik kanıtı değildir.`
-      : "ArcFace tutarlılık raporu alınamadı.";
-    const outlierLabels = identityOutliers.map((index) => {
-      const reference = state.references[index - 1];
-      return reference ? `${index}. ${reference.name}` : `#${index}`;
-    });
-    const outlierStatus = identityOutliers.length
-      ? `Kontrol önerilen referanslar: ${outlierLabels.join("; ")}; kimlik oyları 1'e indirildi.`
-      : "ArcFace belirgin aykırı referans bulmadı.";
-    elements.disabledNote.textContent =
-      `${profileCount}/${MAX_REFERENCE_FACES} referans yüzü hizalanıp kalite/açı ağırlıklarıyla profile katıldı (toplam kalite oyu: ${totalProfileWeight}). ${identityStatus} ${outlierStatus} Kimlik toplam oyu: ${identityWeightedVotes}. FaceFusion pixel boost: ${actualPixelBoost}. GFPGAN: ${faceEnhancer}. XSeg/BiSeNet maskesi ve değişiklik matı uygulandı; maske dışındaki kaynak pikseller korunur.`;
-    showToast(
-      identityOutliers.length
-        ? `Profil hazır · ${profileCount} referans · ${identityOutliers.length} referansı kontrol et.`
-        : `Profil hazır · ${profileCount} referans · ArcFace kontrolü tamamlandı.`
-    );
-    setRuntimeStatus(`Retake Hybrid Profile · ${profileCount} referans · sonuç hazır`);
+    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
+    showToast(`Sonuç hazır · alternatif ${Number.isInteger(appliedVariation) ? appliedVariation + 1 : variation + 1}.`);
+    setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;
     if (!state.identityProfile?.validCount) {
@@ -1432,13 +1450,18 @@ async function runFaceFusionEdit() {
       });
     }
     console.error("Yerel FaceFusion işlemi başarısız:", error);
-    elements.outputTitle.textContent = "İşlem tamamlanamadı";
-    elements.outputStatus.textContent = "Hata";
-    elements.outputPlaceholder.hidden = false;
-    elements.outputPlaceholder.querySelector("strong").textContent = "Yerel FaceFusion işlemi başarısız";
-    elements.outputMessage.textContent = error.message || "FaceFusion isteği başarısız oldu.";
-    elements.outputStage.classList.remove("has-result");
-    elements.outputSymbol.hidden = false;
+    if (state.result) {
+      elements.outputTitle.textContent = "Önceki sonuç korunuyor";
+      elements.outputStatus.textContent = "Yeniden denenebilir";
+    } else {
+      elements.outputTitle.textContent = "İşlem tamamlanamadı";
+      elements.outputStatus.textContent = "Hata";
+      elements.outputPlaceholder.hidden = false;
+      elements.outputPlaceholder.querySelector("strong").textContent = "Yüz düzenleme başarısız";
+      elements.outputMessage.textContent = error.message || "FaceFusion isteği başarısız oldu.";
+      elements.outputStage.classList.remove("has-result");
+      elements.outputSymbol.hidden = false;
+    }
     showToast(error.message || "FaceFusion yüz değiştirme başarısız.");
     setRuntimeStatus("FaceFusion · hata");
   } finally {
@@ -1602,6 +1625,11 @@ function initializeInteractions() {
   elements.swapButton.addEventListener("click", runFaceFusionEdit);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
+  elements.appDialog.addEventListener("close", () => {
+    const resolve = state.dialogResolve;
+    state.dialogResolve = null;
+    resolve?.(elements.appDialog.returnValue === "confirm");
+  });
 
   window.addEventListener("beforeinstallprompt", (event) => {
     event.preventDefault();

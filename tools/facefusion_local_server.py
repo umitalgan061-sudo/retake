@@ -34,6 +34,12 @@ FACE_ENHANCER_BLEND = 25
 FACE_ENHANCER_INTERNAL_BLEND = 100
 FACE_ENHANCER_WEIGHT = 0.25
 DETAIL_TRANSFER_STRENGTH = 0.20
+FACE_SWAP_VARIATIONS = (
+    (1.00, 0.20),
+    (0.94, 0.24),
+    (0.98, 0.12),
+    (0.92, 0.30)
+)
 
 
 class IdentityVerificationError(RuntimeError):
@@ -110,7 +116,10 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
         raise ValueError("Hedef yüz sınırları pozitif genişlik ve yüksekliğe sahip olmalı.")
     if bounds["x"] < 0 or bounds["y"] < 0 or bounds["x"] + bounds["width"] > 784 or bounds["y"] + bounds["height"] > 1024:
         raise ValueError("Hedef yüz sınırları, gönderilen portre kırpımının dışında.")
-    return {"referenceWeights": normalized_weights, "faceBounds": bounds}
+    variation = metadata.get("variation", 0)
+    if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
+        raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
+    return {"referenceWeights": normalized_weights, "faceBounds": bounds, "variation": variation}
 
 
 def validate_reference_count(reference_count: int) -> None:
@@ -252,7 +261,8 @@ def run_facefusion(
     source_paths: list[Path],
     output_path: Path,
     model: str,
-    pixel_boost: str
+    pixel_boost: str,
+    face_swapper_weight: float = 1.0
 ) -> tuple[bool, str]:
     command = [
         sys.executable,
@@ -264,7 +274,7 @@ def run_facefusion(
         "--processors", "face_swapper",
         "--face-swapper-model", model,
         "--face-swapper-pixel-boost", pixel_boost,
-        "--face-swapper-weight", "1.0",
+        "--face-swapper-weight", f"{face_swapper_weight:.2f}",
         "--face-selector-mode", "one",
         *face_mask_cli_arguments(),
         "--execution-providers", "cuda",
@@ -293,14 +303,16 @@ def run_with_memory_fallback(
     source_paths: list[Path],
     output_path: Path,
     model: str,
-    preferred_pixel_boost: str
+    preferred_pixel_boost: str,
+    face_swapper_weight: float = 1.0
 ) -> str:
     attempts = (preferred_pixel_boost, *PIXEL_BOOST_FALLBACKS.get(preferred_pixel_boost, ()))
     last_detail = ""
     for index, pixel_boost in enumerate(attempts):
         try:
             ok, detail = run_facefusion(
-                facefusion_dir, target_path, source_paths, output_path, model, pixel_boost
+                facefusion_dir, target_path, source_paths, output_path, model, pixel_boost,
+                face_swapper_weight
             )
         except subprocess.TimeoutExpired as error:
             detail = tail(str(error))
@@ -384,7 +396,8 @@ def blend_lower_face(
     identity_path: Path,
     appearance_path: Path,
     output_path: Path,
-    face_bounds: dict[str, float]
+    face_bounds: dict[str, float],
+    detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH
 ) -> None:
     try:
         import cv2
@@ -428,7 +441,7 @@ def blend_lower_face(
     # This carries its parser/occlusion protection into the detail layer too.
     identity_changed = np.max(cv2.absdiff(identity, target), axis=2)
     identity_gate = (identity_changed >= 2).astype(np.float32)[:, :, None]
-    detail_alpha = np.clip(mask * DETAIL_TRANSFER_STRENGTH, 0.0, DETAIL_TRANSFER_STRENGTH)[:, :, None]
+    detail_alpha = np.clip(mask * detail_transfer_strength, 0.0, detail_transfer_strength)[:, :, None]
     detail_alpha *= identity_gate
     blended = identity.astype(np.float32) + appearance_detail * detail_alpha
     result = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
@@ -501,7 +514,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
-            "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes"
+            "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
+            "X-Retake-Variation"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -645,6 +659,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 enhanced_output = temp_dir / "retake-gfpgan.png"
                 final_output = temp_dir / "retake-final.png"
                 preferred_boost = self.server.face_swapper_pixel_boost  # type: ignore[attr-defined]
+                variation = metadata["variation"]
+                face_swapper_weight, detail_transfer_strength = FACE_SWAP_VARIATIONS[variation]
 
                 print(
                     f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
@@ -663,7 +679,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     weighted_identity_paths,
                     identity_output,
                     IDENTITY_MODEL,
-                    preferred_boost
+                    preferred_boost,
+                    face_swapper_weight
                 )
                 print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
@@ -673,7 +690,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     [appearance_path],
                     appearance_output,
                     APPEARANCE_MODEL,
-                    preferred_boost
+                    preferred_boost,
+                    face_swapper_weight
                 )
                 print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
@@ -682,7 +700,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     identity_output,
                     appearance_output,
                     hybrid_output,
-                    metadata["faceBounds"]
+                    metadata["faceBounds"],
+                    detail_transfer_strength
                 )
                 used_enhancer = bool(self.server.face_enhancer_enabled)  # type: ignore[attr-defined]
                 if used_enhancer:
@@ -710,6 +729,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self.send_header("X-Retake-Pixel-Boost", f"{identity_boost},{appearance_boost}")
                 self.send_header("X-Retake-Face-Enhancer", FACE_ENHANCER_MODEL if used_enhancer else "off")
                 self.send_header("X-Retake-Identity-Weighted-Votes", str(len(weighted_identity_paths)))
+                self.send_header("X-Retake-Variation", str(variation))
                 self._cors_headers()
                 self.end_headers()
                 self.wfile.write(result)

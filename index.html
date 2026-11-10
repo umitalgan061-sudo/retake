@@ -4,11 +4,11 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#10120f">
-  <meta name="description" content="Retake kişisel fotoğraf stüdyosu. Yüzü dönüştür, fotoğrafın geri kalanını koru.">
+  <meta name="description" content="Retake ile fotoğrafındaki yüzü yerel olarak düzenle; fotoğrafın geri kalanını koru.">
   <meta name="color-scheme" content="dark light">
   <meta name="retake-facefusion-base" content="http://127.0.0.1:8765">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com http://127.0.0.1:8765 http://localhost:8765; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
-  <title>Retake — Your personal visual lab</title>
+  <title>Retake — Yüzünü yeniden gör</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/retake.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
@@ -22,10 +22,10 @@
         <span class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 38 38"><path d="M9 29V9h10.2c5 0 7.8 2.4 7.8 6.4 0 3.5-2.2 5.7-6.1 6.2L29 29h-6.8l-7.3-7.2h-.9V29H9Zm5-11.5h5c2.2 0 3.4-.8 3.4-2.2S21.2 13 19 13h-5v4.5Z" fill="currentColor"/></svg>
         </span>
-        <span class="brand-copy"><strong>RETAKE</strong><small>PERSONAL VISUAL LAB</small></span>
+        <span class="brand-copy"><strong>RETAKE</strong><small>FOTOĞRAF STÜDYOSU</small></span>
       </a>
       <div class="topbar-right">
-        <div class="connection-chip"><span class="connection-dot"></span><span id="topConnectionText">LOCAL ENGINE CHECKING</span></div>
+        <div class="connection-chip"><span class="connection-dot"></span><span id="topConnectionText">YEREL MOTOR KONTROL EDİLİYOR</span></div>
         <span class="topbar-divider"></span>
         <button class="icon-button" id="installButton" type="button" hidden aria-label="Uygulamayı yükle" title="Uygulamayı yükle">
           <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
@@ -39,33 +39,27 @@
     <main class="main-content">
       <section class="hero">
         <div class="hero-copy">
-          <div class="overline"><span class="overline-mark"></span> A MORE PERSONAL KIND OF EDITING <span class="overline-index">NO. 001</span></div>
-          <h1>Stay in the frame.<br><em>Change the perspective.</em></h1>
-          <p class="hero-description">Bir kare seç. Kendi yüz profilini uygula. Fotoğrafın geri kalanına dokunma.</p>
-        </div>
-        <div class="hero-aside">
-          <span class="aside-label">DESIGNED TO KEEP</span>
-          <div class="aside-line"><span class="aside-number">01</span><span>Yüz kimliği</span><b>01</b></div>
-          <div class="aside-line"><span class="aside-number">02</span><span>Orijinal sahne</span><b>02</b></div>
-          <div class="aside-line"><span class="aside-number">03</span><span>Senin kontrolün</span><b>03</b></div>
+          <div class="overline"><span class="overline-mark"></span> RETAKE STUDIO <span class="overline-index">YEREL YÜZ DÜZENLEME</span></div>
+          <h1>Kendini<br><em>yeniden gör.</em></h1>
+          <p class="hero-description">Bir fotoğraf yükle, yüzünü düzenle. Sonuç içine sinmezse farklı bir görünüm dengesiyle yeniden oluştur.</p>
         </div>
       </section>
 
       <div class="studio-grid">
         <section class="source-column" aria-labelledby="targetTitle">
-          <div class="section-kicker"><span>01</span><span class="kicker-rule"></span><span>THE CANVAS</span><span class="kicker-note">SOURCE IMAGE</span></div>
+          <div class="section-kicker"><span>01</span><span class="kicker-rule"></span><span>FOTOĞRAF</span><span class="kicker-note">KAYNAK</span></div>
           <div class="canvas-card">
             <div class="canvas-topline">
               <div class="canvas-title"><span class="live-indicator"></span><span id="targetTitle">Çalışma alanı</span></div>
-              <div class="canvas-tools"><span class="format-pill">JPG / PNG / WEBP</span><span class="format-pill">MAX 25 MB</span></div>
+              <div class="canvas-tools"><span class="format-pill">JPG · PNG · WEBP</span><span class="format-pill">25 MB</span></div>
             </div>
             <input id="targetInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp">
             <div id="targetDropzone" class="dropzone" tabindex="0" role="button" aria-label="Hedef fotoğraf seç veya bu alana sürükle">
               <div id="targetEmpty" class="empty-state">
                 <div class="empty-orbit" aria-hidden="true"><div class="upload-icon"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg></div></div>
-                <div class="empty-overline">START WITH A PHOTOGRAPH</div>
-                <strong>Drop your frame here.</strong>
-                <span>veya cihazından bir fotoğraf seç</span>
+                <div class="empty-overline">BAŞLAMAK İÇİN</div>
+                <strong>Fotoğrafını bırak.</strong>
+                <span>veya cihazından bir kare seç</span>
                 <button id="choosePhotoButton" class="choose-file-button" type="button"><span>Fotoğraf seç</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
                 <small>Görsel yalnızca bu cihazdaki yerel işlem hattında kullanılır.</small>
               </div>
@@ -73,10 +67,10 @@
                 <canvas id="targetCanvas" aria-label="Hedef fotoğraf ve algılanan yüzler"></canvas>
                 <div class="preview-hint"><span class="hint-dot"></span> Değiştirilecek yüzü seç</div>
               </div>
-              <div class="drop-overlay" aria-hidden="true"><span>RELEASE TO UPLOAD</span></div>
+              <div class="drop-overlay" aria-hidden="true"><span>YÜKLEMEK İÇİN BIRAK</span></div>
             </div>
             <div class="canvas-footer">
-              <div class="target-meta-wrap"><span class="footer-label">SOURCE STATUS</span><div id="targetMeta" class="target-meta" aria-live="polite">Henüz fotoğraf seçilmedi</div></div>
+              <div class="target-meta-wrap"><span class="footer-label">FOTOĞRAF</span><div id="targetMeta" class="target-meta" aria-live="polite">Henüz fotoğraf seçilmedi</div></div>
               <button id="clearTargetButton" class="text-button" type="button" hidden><svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 14h10l1-14M9 7V4h6v3"/></svg> Fotoğrafı kaldır</button>
             </div>
             <div id="faceSelection" class="face-selection" hidden>
@@ -86,71 +80,71 @@
           </div>
 
           <div class="under-canvas-row">
-            <div class="micro-note"><span class="micro-icon">↳</span><span>Yüz dışındaki alanlar, kaynak fotoğraftan piksel düzeyinde korunur.</span></div>
-            <div class="frame-number">FRAME <b>001</b></div>
+            <div class="micro-note"><span class="micro-icon">✳</span><span>Sonuçta yüz dışındaki pikseller korunur.</span></div>
           </div>
         </section>
 
         <aside class="control-column">
-          <section class="control-card" aria-labelledby="profileTitle">
-            <div class="section-kicker"><span>02</span><span class="kicker-rule"></span><span>THE PROFILE</span></div>
-            <div class="profile-head">
-              <div><div class="card-overline">YOUR IDENTITY, REFINED</div><h2 id="profileTitle">Kişisel profil</h2></div>
-              <span class="profile-emblem" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 5.5c-7.2 0-13 5.8-13 13 0 7.1 5.8 13 13 13s13-5.9 13-13c0-7.2-5.8-13-13-13Z"/><path d="M6.5 43c2.8-7.4 8.9-11.3 17.5-11.3S38.7 35.6 41.5 43M18 18.5h.01M30 18.5h.01M20 25c2.4 1.7 5.6 1.7 8 0"/></svg></span>
-            </div>
-            <p class="profile-copy">Aynı kişiye ait 25 fotoğraf seç. Net, farklı açılardan ve doğal ifadeli kareler profil doğruluğunu destekler.</p>
-            <div class="profile-state">
-              <div class="state-row"><span class="state-indicator" id="profileStateDot"></span><strong id="profileStatusText">Profil hazırlanıyor</strong><span id="referenceCount" class="state-meta">0 / 25</span></div>
-              <div class="profile-progress"><span id="profileProgressBar"></span></div>
-              <p id="profileStatusDetail" class="state-detail">Görseller ve yüz algılama motoru kontrol ediliyor.</p>
-            </div>
-            <div class="profile-specs">
-              <div><span class="spec-label">IDENTITY</span><strong>ArcFace</strong></div>
-              <div><span class="spec-label">RENDER</span><strong>CUDA / 1024</strong></div>
-              <div><span class="spec-label">PRIVACY</span><strong>On-device</strong></div>
-            </div>
-            <div class="profile-actions">
-              <input id="referencesInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Kişisel yüz profili için 25 fotoğraf seç">
-              <button id="chooseReferencesButton" class="choose-file-button" type="button"><span>Kendi 25 fotoğrafını seç</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-              <div class="profile-reference-links">
-                <button id="reloadReferencesButton" class="text-button" type="button">Varsayılan havuza dön</button>
-                <button id="clearReferencesButton" class="text-button" type="button">Fotoğrafları ve profili temizle</button>
-              </div>
-              <p id="referenceProgress" class="state-detail" aria-live="polite">Fotoğraflar tarayıcıda işlenir; işlem yalnızca açık onayla yerel bilgisayara gönderilir.</p>
-            </div>
-          </section>
-
           <section class="result-card" aria-labelledby="outputTitle">
             <div class="result-head">
-              <div><div class="card-overline">03 / THE RESULT</div><h2 id="outputTitle">Son görünüm</h2></div>
+              <div><div class="card-overline">SONUÇ</div><h2 id="outputTitle">Önizleme</h2></div>
               <span id="outputStatus" class="result-status"><span class="status-orb"></span> Beklemede</span>
             </div>
             <div class="output-stage">
               <div class="result-grid-texture" aria-hidden="true"></div>
               <div class="output-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 8c-9.5 0-17.2 7.7-17.2 17.2S22.5 42.4 32 42.4s17.2-7.7 17.2-17.2S41.5 8 32 8Z"/><path d="M8.5 56c3.8-8.5 12.4-13.6 23.5-13.6S51.7 47.5 55.5 56"/><path d="m43 12 3.5-5M52 23h5"/></svg></div>
               <img id="resultImage" class="result-image" alt="Retake ile düzenlenmiş sonuç fotoğrafı" hidden>
-              <span id="outputPlaceholder"><strong>Sonuç henüz oluşturulmadı</strong><p id="outputMessage">Kaynak fotoğrafını yükle ve hazır olduğunda düzenlemeyi başlat.</p><span class="stage-caption">RESULT PREVIEW / 001</span></span>
+              <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p><span class="stage-caption">YEREL SONUÇ</span></span>
             </div>
             <div class="engine-status">
               <span class="engine-status-mark"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></svg></span>
-              <div><strong id="engineTitle">Yerel motor kontrol ediliyor</strong><p id="engineDescription">Yüz algılama tarayıcıda, yüz dönüşümü bilgisayarındaki FaceFusion motorunda çalışır.</p></div>
+              <div><strong id="engineTitle">Yerel motor kontrol ediliyor</strong><p id="engineDescription">Fotoğrafın bu cihazdaki FaceFusion motoruyla düzenlenir.</p></div>
             </div>
             <button id="swapButton" class="primary-button" type="button" disabled>
               <span class="button-sparkle"><svg viewBox="0 0 24 24"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span>
-              <span class="button-copy">Yüzü düzenle</span><span class="button-state">Hazırlanıyor</span>
+              <span class="button-copy">Yüzümü uygula</span><span class="button-state">Hazırlanıyor</span>
             </button>
             <button id="downloadButton" class="download-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg> Sonucu indir</button>
-            <p id="disabledNote" class="disabled-note">Profil, 25 referansın tamamı doğrulandığında hazır olur. Kimlik aktarımı garanti edilmez; maske dışındaki kaynak pikseller korunur.</p>
+            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.</p>
           </section>
+
+          <details class="profile-details">
+            <summary><span>Yüz profili ayarları</span><span class="profile-summary-note">İsteğe bağlı</span></summary>
+            <section class="control-card" aria-labelledby="profileTitle">
+              <div class="profile-head">
+                <div><div class="card-overline">YEREL REFERANSLAR</div><h2 id="profileTitle">Yüz profili</h2></div>
+                <span class="profile-emblem" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 5.5c-7.2 0-13 5.8-13 13 0 7.1 5.8 13 13 13s13-5.9 13-13c0-7.2-5.8-13-13-13Z"/><path d="M6.5 43c2.8-7.4 8.9-11.3 17.5-11.3S38.7 35.6 41.5 43M18 18.5h.01M30 18.5h.01M20 25c2.4 1.7 5.6 1.7 8 0"/></svg></span>
+              </div>
+              <p class="profile-copy">Varsayılan 25 referans otomatik kullanılır. İstersen aynı kişiye ait 25 fotoğrafınla değiştirebilirsin.</p>
+              <div class="profile-state">
+                <div class="state-row"><span class="state-indicator" id="profileStateDot"></span><strong id="profileStatusText">Profil hazırlanıyor</strong><span id="referenceCount" class="state-meta">0 / 25</span></div>
+                <div class="profile-progress"><span id="profileProgressBar"></span></div>
+                <p id="profileStatusDetail" class="state-detail">Görseller ve yüz algılama motoru kontrol ediliyor.</p>
+              </div>
+              <div class="profile-specs">
+                <div><span class="spec-label">KİMLİK</span><strong>ArcFace</strong></div>
+                <div><span class="spec-label">İŞLEM</span><strong>Yerel CUDA</strong></div>
+                <div><span class="spec-label">GİZLİLİK</span><strong>Cihazında</strong></div>
+              </div>
+              <div class="profile-actions">
+                <input id="referencesInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Kişisel yüz profili için 25 fotoğraf seç">
+                <button id="chooseReferencesButton" class="choose-file-button" type="button"><span>Kendi 25 fotoğrafını seç</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                <div class="profile-reference-links">
+                  <button id="reloadReferencesButton" class="text-button" type="button">Varsayılan havuza dön</button>
+                  <button id="clearReferencesButton" class="text-button" type="button">Fotoğrafları ve profili temizle</button>
+                </div>
+                <p id="referenceProgress" class="state-detail" aria-live="polite">Fotoğraflar tarayıcıda işlenir; yerel motora gönderim açık onay gerektirir.</p>
+              </div>
+            </section>
+          </details>
         </aside>
       </div>
 
       <section class="bottom-strip">
-        <div class="privacy-lock"><span class="lock-icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><div><strong>Private by design.</strong><span>Kaynak fotoğrafları değil, açık onayla yalnızca yüz crop'ları bu bilgisayardaki yerel motora gider.</span></div></div>
-        <div class="bottom-steps"><span><i>01</i> SELECT</span><span class="steps-arrow">—</span><span><i>02</i> REFINE</span><span class="steps-arrow">—</span><span><i>03</i> EXPORT</span></div>
+        <div class="privacy-lock"><span class="lock-icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><div><strong>Düzenleme cihazında yapılır.</strong><span>Açık onayınla gerekli yüz kırpımları bu bilgisayardaki yerel motora gönderilir.</span></div></div>
       </section>
 
-      <footer class="app-footer"><span>© RETAKE STUDIO <span class="footer-divider">/</span> PERSONAL VISUAL LAB</span><span id="runtimeStatus">Yüz algılama motoru hazırlanıyor…</span></footer>
+      <footer class="app-footer"><span>© RETAKE STUDIO <span class="footer-divider">/</span> YEREL FOTOĞRAF DÜZENLEME</span><span id="runtimeStatus">Yüz algılama motoru hazırlanıyor…</span></footer>
     </main>
   </div>
 
@@ -160,6 +154,15 @@
     <div id="referencesEmpty"><strong>Yerel profil hazırlanıyor</strong><p>Arka planda yükleniyor.</p></div>
     <div id="referencesGrid"></div>
   </section>
+  <dialog id="appDialog" class="app-dialog" aria-labelledby="dialogTitle" aria-describedby="dialogMessage">
+    <div class="dialog-mark" aria-hidden="true">✳</div>
+    <h2 id="dialogTitle">Onay gerekli</h2>
+    <p id="dialogMessage"></p>
+    <form method="dialog" class="dialog-actions">
+      <button id="dialogCancel" class="dialog-button secondary" type="submit" value="cancel">Vazgeç</button>
+      <button id="dialogConfirm" class="dialog-button primary" type="submit" value="confirm">Devam et</button>
+    </form>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="./app.js"></script>
 </body>

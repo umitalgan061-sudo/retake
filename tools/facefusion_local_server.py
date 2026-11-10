@@ -12,6 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+try:
+    from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+except ImportError:
+    from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
 MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -20,7 +25,26 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v3"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v4"
+IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
+FACE_ENHANCER_MODEL = "gfpgan_1.4"
+FACE_ENHANCER_BLEND = 25
+FACE_ENHANCER_WEIGHT = 0.25
+DETAIL_TRANSFER_STRENGTH = 0.20
+
+
+class IdentityVerificationError(RuntimeError):
+    pass
+
+
+class IdentityConflictError(IdentityVerificationError):
+    pass
+
+
+class NoOpSwapError(RuntimeError):
+    pass
+
+
 FACE_OCCLUDER_MODEL = "xseg_1"
 FACE_PARSER_MODEL = "bisenet_resnet_34"
 FACE_MASK_TYPES = ("box", "occlusion", "region")
@@ -89,6 +113,44 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
 def validate_reference_count(reference_count: int) -> None:
     if reference_count != MAX_REFERENCES:
         raise ValueError(f"Retake hibrit profil işlemi için tam olarak {MAX_REFERENCES} referans fotoğrafı gerekli.")
+
+
+def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
+    worker_path = Path(__file__).with_name("facefusion_identity_worker.py")
+    if not worker_path.is_file():
+        raise IdentityVerificationError("ArcFace doğrulama worker dosyası bulunamadı.")
+    command = [
+        sys.executable, str(worker_path),
+        "--facefusion-dir", str(facefusion_dir),
+        "--reference-paths", *[str(path) for path in reference_paths]
+    ]
+    try:
+        completed = subprocess.run(
+            command, cwd=str(facefusion_dir), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=600, check=False
+        )
+    except subprocess.TimeoutExpired as error:
+        raise IdentityVerificationError("ArcFace 25 referans ön kontrolü 10 dakika içinde tamamlanamadı.") from error
+
+    marker = "RETAKE_IDENTITY_REPORT="
+    report_lines = [line[len(marker):] for line in completed.stdout.splitlines() if line.startswith(marker)]
+    if not report_lines:
+        detail = tail(completed.stderr + "\n" + completed.stdout)
+        raise IdentityVerificationError("ArcFace doğrulama raporu alınamadı. " + detail)
+    try:
+        report = json.loads(report_lines[-1])
+    except json.JSONDecodeError as error:
+        raise IdentityVerificationError("ArcFace doğrulama raporu geçerli JSON değil.") from error
+
+    if completed.returncode != 0 or not report.get("ok"):
+        raise IdentityVerificationError(str(report.get("error") or tail(completed.stderr + "\n" + completed.stdout)))
+    if report.get("hard_conflict"):
+        raise IdentityConflictError(
+            "ArcFace, 25 referans arasında ortak bir kimlik profili bulamadı "
+            f"(medyan cosine benzerliği: {report.get('median_similarity')}). "
+            "Farklı kişiye ait veya ağır bozulmuş fotoğrafları kontrol edip tekrar deneyin."
+        )
+    return report
 
 
 def parse_multipart(
@@ -205,33 +267,88 @@ def run_with_memory_fallback(
     model: str,
     preferred_pixel_boost: str
 ) -> str:
-    try:
-        ok, detail = run_facefusion(
-            facefusion_dir, target_path, source_paths, output_path, model, preferred_pixel_boost
-        )
-    except subprocess.TimeoutExpired as error:
-        detail = tail(str(error))
-        ok = False
-    if ok:
-        return preferred_pixel_boost
+    attempts = (preferred_pixel_boost, *PIXEL_BOOST_FALLBACKS.get(preferred_pixel_boost, ()))
+    last_detail = ""
+    for index, pixel_boost in enumerate(attempts):
+        try:
+            ok, detail = run_facefusion(
+                facefusion_dir, target_path, source_paths, output_path, model, pixel_boost
+            )
+        except subprocess.TimeoutExpired as error:
+            detail = tail(str(error))
+            ok = False
+        if ok:
+            return pixel_boost
 
-    lower_detail = detail.lower()
-    is_memory_error = any(marker in lower_detail for marker in (
-        "out of memory", "cuda error: out of memory", "failed to allocate", "cudnn_status_alloc_failed"
-    ))
-    if not is_memory_error or preferred_pixel_boost == "512x512":
-        raise RuntimeError(f"{model} işlemi başarısız ({preferred_pixel_boost}). {detail}")
+        last_detail = detail
+        lower_detail = detail.lower()
+        is_memory_error = any(marker in lower_detail for marker in (
+            "out of memory", "cuda error: out of memory", "failed to allocate",
+            "cudnn_status_alloc_failed", "cublas_status_alloc_failed"
+        ))
+        has_fallback = index + 1 < len(attempts)
+        if not is_memory_error or not has_fallback:
+            raise RuntimeError(f"{model} işlemi başarısız ({pixel_boost}). {detail}")
+        next_boost = attempts[index + 1]
+        print(f"{model}: {pixel_boost} bellek hatası; {next_boost} ayarına düşülüyor.", flush=True)
 
-    print(f"{model}: {preferred_pixel_boost} bellek hatası; 512x512 güvenli ayarına düşülüyor.", flush=True)
-    try:
-        ok, retry_detail = run_facefusion(
-            facefusion_dir, target_path, source_paths, output_path, model, "512x512"
+    raise RuntimeError(f"{model} işlemi tamamlanamadı. {last_detail}")
+
+
+def run_face_enhancer(
+    facefusion_dir: Path,
+    target_path: Path,
+    source_paths: list[Path],
+    output_path: Path
+) -> None:
+    command = [
+        sys.executable, str(facefusion_dir / "facefusion.py"), "headless-run",
+        "--source-paths", *[str(path) for path in source_paths],
+        "--target-path", str(target_path),
+        "--output-path", str(output_path),
+        "--processors", "face_enhancer",
+        "--face-enhancer-model", FACE_ENHANCER_MODEL,
+        "--face-enhancer-blend", str(FACE_ENHANCER_BLEND),
+        "--face-enhancer-weight", str(FACE_ENHANCER_WEIGHT),
+        "--face-selector-mode", "one",
+        *face_mask_cli_arguments(),
+        "--execution-providers", "cuda",
+        "--execution-device-ids", "0",
+        "--output-image-quality", "100",
+        "--log-level", "info"
+    ]
+    completed = subprocess.run(
+        command, cwd=str(facefusion_dir), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=900, check=False
+    )
+    if completed.returncode != 0 or not output_path.is_file() or output_path.stat().st_size <= 0:
+        raise RuntimeError(
+            "GFPGAN isteğe bağlı yüz iyileştirme aşaması başarısız. "
+            + tail(completed.stderr + "\n" + completed.stdout)
         )
-    except subprocess.TimeoutExpired as error:
-        raise RuntimeError(f"{model} 512x512 yeniden denemesi zaman aşımına uğradı. {tail(str(error))}") from error
-    if not ok:
-        raise RuntimeError(f"{model} işlemi 512x512 ayarında da başarısız. {retry_detail}")
-    return "512x512"
+
+
+def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_path: Path) -> None:
+    try:
+        import cv2
+        import numpy as np
+    except Exception as error:
+        raise RuntimeError(f"GFPGAN harmanlaması için OpenCV/NumPy yüklenemedi: {error}") from error
+    hybrid = cv2.imread(str(hybrid_path), cv2.IMREAD_UNCHANGED)
+    enhanced = cv2.imread(str(enhanced_path), cv2.IMREAD_COLOR)
+    if hybrid is None or enhanced is None or hybrid.ndim != 3 or hybrid.shape[2] != 4:
+        raise RuntimeError("GFPGAN çıktısı ve alfa maskeli hibrit görüntü okunamadı.")
+    if hybrid.shape[:2] != enhanced.shape[:2]:
+        raise RuntimeError("GFPGAN ve hibrit yüz çıktı boyutları eşleşmiyor.")
+    blend = FACE_ENHANCER_BLEND / 100.0
+    mixed = (
+        hybrid[:, :, :3].astype(np.float32) * (1.0 - blend)
+        + enhanced.astype(np.float32) * blend
+    )
+    hybrid[:, :, :3] = np.clip(np.rint(mixed), 0, 255).astype(np.uint8)
+    # Retain the exact pre-existing semantic/change matte.
+    if not cv2.imwrite(str(output_path), hybrid):
+        raise RuntimeError("GFPGAN sonrası alfa maskeli hibrit sonuç yazılamadı.")
 
 
 def blend_lower_face(
@@ -274,11 +391,30 @@ def blend_lower_face(
     cv2.ellipse(mask, center, axes, 0, 0, 360, 255, -1)
     blur_sigma = max(5.0, face_width * 0.055)
     mask = cv2.GaussianBlur(mask, (0, 0), blur_sigma).astype(np.float32) / 255.0
-    # The identity pass stays dominant; the appearance pass contributes beard,
-    # moustache, lower-cheek texture and chin detail inside a soft lower-face region.
-    alpha = np.clip(mask * 0.82, 0.0, 0.82)[:, :, None]
-    blended = identity.astype(np.float32) * (1.0 - alpha) + appearance.astype(np.float32) * alpha
+    # Keep AlphaFace's identity geometry; add only restrained high-frequency
+    # UniFace details to the lower face instead of the previous 82% pixel blend.
+    detail_sigma = max(1.0, face_width * 0.012)
+    appearance_low = cv2.GaussianBlur(appearance, (0, 0), detail_sigma).astype(np.float32)
+    appearance_detail = appearance.astype(np.float32) - appearance_low
+    detail_alpha = np.clip(mask * DETAIL_TRANSFER_STRENGTH, 0.0, DETAIL_TRANSFER_STRENGTH)[:, :, None]
+    blended = identity.astype(np.float32) + appearance_detail * detail_alpha
     result = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+
+    # Reject only practically unchanged results rather than reporting a no-op as success.
+    x0 = max(0, min(width - 1, int(face_bounds["x"])))
+    y0 = max(0, min(height - 1, int(face_bounds["y"])))
+    x1 = max(x0 + 1, min(width, int(face_bounds["x"] + face_width + 0.999)))
+    y1 = max(y0 + 1, min(height, int(face_bounds["y"] + face_height + 0.999)))
+    face_delta = np.max(cv2.absdiff(result, target), axis=2)[y0:y1, x0:x1]
+    changed_ratio = float(np.count_nonzero(face_delta >= 3) / face_delta.size)
+    mean_delta = float(np.mean(face_delta))
+    p95_delta = float(np.percentile(face_delta, 95))
+    if is_near_noop(changed_ratio, mean_delta, p95_delta):
+        raise NoOpSwapError(
+            "FaceFusion iki geçişte de hedef yüze anlamlı bir değişiklik uygulamadı "
+            f"(değişen piksel oranı %{changed_ratio * 100:.3f}, ortalama fark {mean_delta:.3f}). "
+            "İşlem başarılı gibi gösterilmedi; kaynak/hedef yüz algılamasını kontrol edin."
+        )
 
     # FaceFusion has already applied its parser + occlusion masks while pasting
     # each pass back into the target crop. Derive a final alpha matte from the
@@ -329,6 +465,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header(
+            "Access-Control-Expose-Headers",
+            "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
+            "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer"
+        )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
@@ -373,8 +514,12 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
             "identity_model": IDENTITY_MODEL,
+            "identity_verifier": IDENTITY_VERIFIER_MODEL,
+            "identity_verification": "local-arcface-medoid-screen",
             "appearance_model": APPEARANCE_MODEL,
             "pixel_boost": self.server.face_swapper_pixel_boost,  # type: ignore[attr-defined]
+            "face_enhancer_enabled": self.server.face_enhancer_enabled,  # type: ignore[attr-defined]
+            "face_enhancer_model": FACE_ENHANCER_MODEL if self.server.face_enhancer_enabled else None,  # type: ignore[attr-defined]
             "face_mask_types": list(FACE_MASK_TYPES),
             "face_parser_model": FACE_PARSER_MODEL,
             "face_occluder_model": FACE_OCCLUDER_MODEL,
@@ -438,9 +583,23 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     source_path.write_bytes(payload)
                     reference_paths.append(source_path)
 
-                weights: list[int] = metadata["referenceWeights"]
+                identity_report = verify_reference_identity(self.facefusion_dir, reference_paths)
+                outlier_indices = [int(index) for index in identity_report.get("outlier_indices", [])]
+                weights: list[int] = list(metadata["referenceWeights"])
+                for outlier_index in outlier_indices:
+                    if 0 <= outlier_index < len(weights):
+                        weights[outlier_index] = 1
+                outlier_names = identity_report.get("outlier_files", [])
+                print(
+                    "ArcFace 25 referans kontrolü: "
+                    f"medyan cosine={identity_report.get('median_similarity')}; "
+                    f"inceleme gerektiren fotoğraf={outlier_names or 'yok'}. "
+                    "Aykırı referanslar çıkarılmadı; kimlik ağırlıkları 1 oya indirildi.",
+                    flush=True
+                )
                 # Repeating paths makes FaceFusion's source-face embedding mean
-                # quality-weighted while guaranteeing every accepted reference votes.
+                # quality-weighted. Every reference remains in the profile and
+                # every accepted reference receives at least one identity vote.
                 weighted_identity_paths = [
                     path
                     for path, weight in zip(reference_paths, weights)
@@ -449,6 +608,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 identity_output = temp_dir / "retake-identity-alpha.png"
                 appearance_output = temp_dir / "retake-appearance-uniface.png"
                 hybrid_output = temp_dir / "retake-hybrid-profile.png"
+                enhanced_output = temp_dir / "retake-gfpgan.png"
+                final_output = temp_dir / "retake-final.png"
                 preferred_boost = self.server.face_swapper_pixel_boost  # type: ignore[attr-defined]
 
                 print(
@@ -489,18 +650,46 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     hybrid_output,
                     metadata["faceBounds"]
                 )
-                result = hybrid_output.read_bytes()
+                used_enhancer = bool(self.server.face_enhancer_enabled)  # type: ignore[attr-defined]
+                if used_enhancer:
+                    print(
+                        f"İsteğe bağlı son aşama: {FACE_ENHANCER_MODEL}, blend={FACE_ENHANCER_BLEND}%.",
+                        flush=True
+                    )
+                    run_face_enhancer(self.facefusion_dir, hybrid_output, reference_paths, enhanced_output)
+                    blend_enhanced_hybrid_output(hybrid_output, enhanced_output, final_output)
+                else:
+                    final_output = hybrid_output
+
+                result = final_output.read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "image/png")
                 self.send_header("Content-Length", str(len(result)))
+                self.send_header(
+                    "X-Retake-Identity-Median-Similarity",
+                    str(identity_report.get("median_similarity", ""))
+                )
+                self.send_header(
+                    "X-Retake-Identity-Outliers",
+                    ",".join(str(index + 1) for index in outlier_indices)
+                )
+                self.send_header("X-Retake-Pixel-Boost", f"{identity_boost},{appearance_boost}")
+                self.send_header("X-Retake-Face-Enhancer", FACE_ENHANCER_MODEL if used_enhancer else "off")
                 self._cors_headers()
                 self.end_headers()
                 self.wfile.write(result)
                 print(
-                    "İşlem tamamlandı: AlphaFace ağırlıklı kimlik + UniFace 25 fotoğraflı görünüm profili "
-                    "alt yüzde harmanlandı; tek PNG çıktı döndürüldü.",
+                    "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
+                    f"katmanı; pixel boost={identity_boost}/{appearance_boost}; "
+                    f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
                     flush=True
                 )
+        except IdentityConflictError as error:
+            self._send_json(422, {"ok": False, "error": str(error)})
+        except IdentityVerificationError as error:
+            self._send_json(503, {"ok": False, "error": f"ArcFace kimlik kontrolü yapılamadı: {error}"})
+        except NoOpSwapError as error:
+            self._send_json(422, {"ok": False, "error": str(error)})
         except ValueError as error:
             self._send_json(400, {"ok": False, "error": str(error)})
         except (BrokenPipeError, ConnectionResetError):
@@ -519,8 +708,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--face-swapper-pixel-boost",
         choices=("512x512", "768x768", "1024x1024"),
-        default="768x768",
-        help="İki geçiş için tercih edilen çözünürlük; CUDA bellek hatasında otomatik 512x512 denenir."
+        default="1024x1024",
+        help="İlk deneme 1024x1024; CUDA bellek hatasında sırasıyla 768x768 ve 512x512 denenir."
+    )
+    parser.add_argument(
+        "--enable-face-enhancer",
+        action="store_true",
+        help="İsteğe bağlı GFPGAN 1.4 son aşamasını %25 karışımla etkinleştir."
     )
     parser.add_argument("--origin", action="append", default=[], help="İzin verilen web origin'i; birden çok kez verilebilir.")
     return parser.parse_args()
@@ -545,9 +739,11 @@ def main() -> int:
     server.allowed_origins = origins  # type: ignore[attr-defined]
     server.facefusion_dir = facefusion_dir  # type: ignore[attr-defined]
     server.face_swapper_pixel_boost = args.face_swapper_pixel_boost  # type: ignore[attr-defined]
+    server.face_enhancer_enabled = args.enable_face_enhancer  # type: ignore[attr-defined]
     print(
         f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
-        f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost})",
+        f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "
+        f"GFPGAN={'on' if args.enable_face_enhancer else 'off'})",
         flush=True
     )
     print("Yalnızca loopback; dış ağ erişimi kapalı.", flush=True)

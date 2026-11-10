@@ -30,6 +30,7 @@ DerivedData/
 
 # Do not publish face photographs or model weights in this public repository
 /reference-faces/*.jpg
+/reference-faces/*.jpeg
 /reference-faces/*.png
 /reference-faces/*.heic
 /models/*.onnx

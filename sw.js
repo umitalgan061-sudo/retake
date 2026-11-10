@@ -1,6 +1,6 @@
-const SHELL_CACHE = "retake-shell-v5";
+const SHELL_CACHE = "retake-shell-v6";
 const AI_CACHE = "retake-ai-assets-v1";
-const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./manifest.webmanifest", "./icons/retake.svg"];
+const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./workflows/retake-flux-api.json", "./manifest.webmanifest", "./icons/retake.svg"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));

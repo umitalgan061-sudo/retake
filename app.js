@@ -12,13 +12,10 @@ import {
   REFERENCE_MANIFEST_URL
 } from "./src/reference-catalog.js";
 import {
-  NVIDIA_BOARD_WIDTH,
   NVIDIA_BOARD_HEIGHT,
   NVIDIA_TARGET_PANEL_WIDTH,
   getFaceCropRect,
-  createFaceAlphaMask,
-  createNvidiaEditPrompt,
-  imageDataUrlFromNvidiaResponse
+  createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
 import { compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 
@@ -87,12 +84,14 @@ function setRuntimeStatus(message) {
   elements.runtimeStatus.textContent = message;
 }
 
-function nvidiaApiBase() {
-  const configured = document.querySelector('meta[name="retake-ai-base"]')?.content?.trim();
-  if (!configured) return "";
+function localComfyBase() {
+  const configured = document.querySelector('meta[name="retake-comfy-base"]')?.content?.trim();
+  const value = configured || "http://127.0.0.1:8188";
   try {
-    const parsed = new URL(configured);
-    return parsed.protocol === "https:" ? parsed.origin.replace(/\/+$/, "") : "";
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname)
+      ? parsed.origin.replace(/\/+$/, "")
+      : "";
   } catch {
     return "";
   }
@@ -108,48 +107,56 @@ function updateSwapAvailability() {
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector("span");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
-    (enabled ? "NVIDIA hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Giriş gerekli"));
+    (enabled ? "Yerel FLUX hazır" : (state.nvidiaStatus.configured ? "Fotoğraf seç" : "Bilgisayara bağlan"));
 }
 
 async function checkNvidiaStatus() {
-  const base = nvidiaApiBase();
+  const base = localComfyBase();
   if (!base) {
     state.nvidiaStatus = {
       checked: true,
       configured: false,
-      message: "Dış AI düzenleme servisi yapılandırılmamış; yerel yüz algılama kullanılabilir."
+      message: "Yerel ComfyUI adresi geçersiz."
     };
   } else {
     try {
-      const response = await fetch(base + "/status", {
+      const response = await fetch(base + "/system_stats", {
         method: "GET",
         cache: "no-store",
         headers: { Accept: "application/json" }
       });
-      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error("ComfyUI HTTP " + response.status);
+      const nodeResponse = await fetch(base + "/object_info/UnetLoaderGGUF", {
+        cache: "no-store",
+        headers: { Accept: "application/json" }
+      });
+      if (!nodeResponse.ok) {
+        throw new Error("ComfyUI çalışıyor ancak UnetLoaderGGUF düğümü bulunamadı. GGUF eklentisini ve ComfyUI başlangıç kayıtlarını kontrol et.");
+      }
       state.nvidiaStatus = {
         checked: true,
-        configured: Boolean(response.ok && payload.configured),
-        message: payload.error || payload.message ||
-          (response.ok ? "" : "NVIDIA sunucu bağlantısı yanıt vermedi.")
+        configured: true,
+        message: "Yerel ComfyUI ve GGUF düğümü hazır."
       };
     } catch (error) {
+      const detail = error?.message || "Yerel ComfyUI bağlantısı kurulamadı.";
       state.nvidiaStatus = {
         checked: true,
         configured: false,
-        message: error.message || "NVIDIA sunucusuna bağlanılamadı."
+        message: detail.includes("Failed to fetch") || detail.includes("NetworkError")
+          ? "127.0.0.1:8188 bağlantısı kurulamadı. ComfyUI'yi --enable-cors-header https://retake06.web.app parametresiyle başlat; tarayıcı yerel ağ izni sorarsa izin ver."
+          : detail
       };
     }
   }
 
   if (state.nvidiaStatus.configured) {
-    elements.engineTitle.textContent = "Deneysel AI düzenleme hazır";
+    elements.engineTitle.textContent = "Yerel FLUX hazır";
     elements.engineDescription.textContent =
-      `Sunucu bağlantısı hazır. Seçili yüz crop'u ve ${MAX_REFERENCE_FACES} yerel referans, yalnızca açık onayından sonra NVIDIA'ya gönderilir.`;
+      `ComfyUI bilgisayarında çalışıyor. Hedef yüz crop'u ve ${MAX_REFERENCE_FACES} referans fotoğrafı internet üzerinden bir AI servisine gönderilmeden RTX A4000'de işlenecek.`;
   } else {
-    elements.engineTitle.textContent = "Yerel algılama · düzenleme servisi yok";
-    elements.engineDescription.textContent = state.nvidiaStatus.message ||
-      "NVIDIA API anahtarı Cloudflare Worker üzerinde sunucu tarafında saklanır.";
+    elements.engineTitle.textContent = "Yerel FLUX servisi bekleniyor";
+    elements.engineDescription.textContent = state.nvidiaStatus.message;
   }
   updateSwapAvailability();
 }
@@ -244,7 +251,7 @@ function clearResult() {
   elements.outputSymbol.hidden = false;
   elements.outputTitle.textContent = "Önizleme";
   elements.outputStatus.textContent = "Beklemede";
-  elements.outputMessage.textContent = "NVIDIA FLUX deneysel düzenleme için hazır olduğunda sonuç burada görünecek.";
+  elements.outputMessage.textContent = "Yerel FLUX modeli hazır olduğunda sonuç burada görünecek.";
   updateSwapAvailability();
 }
 
@@ -457,7 +464,7 @@ function drawContainedImage(context, image, x, y, width, height) {
   context.drawImage(image, x + (width - drawWidth) / 2, y + (height - drawHeight) / 2, drawWidth, drawHeight);
 }
 
-function buildNvidiaContactSheet() {
+function buildLocalComfyInputs() {
   const readyReferences = state.references.filter((reference) => reference.status === "ready" && reference.image);
   if (readyReferences.length !== MAX_REFERENCE_FACES) {
     throw new Error(`İşlem için ${MAX_REFERENCE_FACES} yerel referansın tamamı yüklenmiş olmalı.`);
@@ -470,46 +477,49 @@ function buildNvidiaContactSheet() {
     state.target.image.naturalHeight,
     face
   );
-  const canvas = document.createElement("canvas");
-  canvas.width = NVIDIA_BOARD_WIDTH;
-  canvas.height = NVIDIA_BOARD_HEIGHT;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  if (!context) throw new Error("NVIDIA referans panosu oluşturulamadı.");
 
-  context.fillStyle = "#10151d";
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.fillStyle = "#18212b";
-  context.fillRect(NVIDIA_TARGET_PANEL_WIDTH, 0, NVIDIA_BOARD_WIDTH - NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT);
-
-  context.drawImage(
+  // ComfyUI ImageStitch receives two separate, equally sized image panels.
+  const targetCanvas = document.createElement("canvas");
+  targetCanvas.width = NVIDIA_TARGET_PANEL_WIDTH;
+  targetCanvas.height = NVIDIA_BOARD_HEIGHT;
+  const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
+  if (!targetContext) throw new Error("Hedef yüz panosu oluşturulamadı.");
+  targetContext.fillStyle = "#10151d";
+  targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  targetContext.drawImage(
     state.target.image,
     crop.x, crop.y, crop.width, crop.height,
-    0, 0, NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT
+    0, 0, targetCanvas.width, targetCanvas.height
   );
+  targetContext.fillStyle = "rgba(10, 15, 22, .78)";
+  targetContext.fillRect(0, 0, targetCanvas.width, 38);
+  targetContext.fillStyle = "#ffffff";
+  targetContext.font = "700 16px system-ui";
+  targetContext.fillText("TARGET FACE", 22, 25);
 
-  context.fillStyle = "rgba(10, 15, 22, .78)";
-  context.fillRect(0, 0, NVIDIA_TARGET_PANEL_WIDTH, 38);
-  context.fillStyle = "#ffffff";
-  context.font = "700 16px system-ui";
-  context.fillText("TARGET FACE", 22, 25);
-
-  const panelX = NVIDIA_TARGET_PANEL_WIDTH;
+  const referencesCanvas = document.createElement("canvas");
+  referencesCanvas.width = NVIDIA_TARGET_PANEL_WIDTH;
+  referencesCanvas.height = NVIDIA_BOARD_HEIGHT;
+  const context = referencesCanvas.getContext("2d", { willReadFrequently: true });
+  if (!context) throw new Error("Referans panosu oluşturulamadı.");
+  context.fillStyle = "#18212b";
+  context.fillRect(0, 0, referencesCanvas.width, referencesCanvas.height);
   context.fillStyle = "#f0f5f7";
   context.font = "700 17px system-ui";
-  context.fillText(`${MAX_REFERENCE_FACES} IDENTITY REFERENCES`, panelX + 22, 29);
+  context.fillText(`${MAX_REFERENCE_FACES} IDENTITY REFERENCES`, 22, 29);
   context.fillStyle = "#9caaba";
   context.font = "12px system-ui";
-  context.fillText("All photos show the same person", panelX + 22, 50);
+  context.fillText("All photos show the same person", 22, 50);
 
   const columns = 5;
   const rows = 5;
   const startY = 66;
   const gapX = 10;
   const gapY = 10;
-  const outerX = panelX + 16;
-  const outerWidth = NVIDIA_BOARD_WIDTH - panelX - 32;
+  const outerX = 16;
+  const outerWidth = referencesCanvas.width - 32;
   const cellWidth = (outerWidth - gapX * (columns - 1)) / columns;
-  const cellHeight = (NVIDIA_BOARD_HEIGHT - startY - 20 - gapY * (rows - 1)) / rows;
+  const cellHeight = (referencesCanvas.height - startY - 20 - gapY * (rows - 1)) / rows;
   context.imageSmoothingEnabled = true;
   context.imageSmoothingQuality = "high";
 
@@ -523,7 +533,7 @@ function buildNvidiaContactSheet() {
     drawContainedImage(context, reference.image, x + 5, y + 4, cellWidth - 10, cellHeight - 8);
   });
 
-  return { canvas, crop };
+  return { targetCanvas, referencesCanvas, crop };
 }
 
 function applyGeneratedFacePatch(generatedBoardImage, crop) {
@@ -542,9 +552,12 @@ function applyGeneratedFacePatch(generatedBoardImage, crop) {
   generatedCanvas.width = crop.width;
   generatedCanvas.height = crop.height;
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
+  const outputWidth = generatedBoardImage.naturalWidth || generatedBoardImage.width;
+  const outputHeight = generatedBoardImage.naturalHeight || generatedBoardImage.height;
+  const outputTargetPanelWidth = Math.floor(outputWidth / 2);
   generatedContext.drawImage(
     generatedBoardImage,
-    0, 0, NVIDIA_TARGET_PANEL_WIDTH, NVIDIA_BOARD_HEIGHT,
+    0, 0, outputTargetPanelWidth, outputHeight,
     0, 0, crop.width, crop.height
   );
   const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
@@ -585,10 +598,60 @@ function applyGeneratedFacePatch(generatedBoardImage, crop) {
   return canvasToBlob(fullCanvas);
 }
 
+async function uploadComfyImage(base, blob, filename) {
+  const form = new FormData();
+  form.append("image", blob, filename);
+  form.append("type", "input");
+  form.append("overwrite", "true");
+
+  const response = await fetch(base + "/upload/image", {
+    method: "POST",
+    body: form
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || !payload.name) {
+    throw new Error(payload.error || "ComfyUI görseli yükleyemedi (HTTP " + response.status + ").");
+  }
+  return payload.name;
+}
+
+async function waitForComfyResult(base, promptId, timeoutMs = 15 * 60 * 1000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 1200));
+    const response = await fetch(base + "/history/" + encodeURIComponent(promptId), {
+      cache: "no-store",
+      headers: { Accept: "application/json" }
+    });
+    if (!response.ok) throw new Error("ComfyUI işlem geçmişi okunamadı (HTTP " + response.status + ").");
+    const history = await response.json();
+    const entry = history[promptId];
+    const images = entry?.outputs?.["136"]?.images;
+    if (Array.isArray(images) && images.length > 0) {
+      const image = images[0];
+      const query = new URLSearchParams({
+        filename: image.filename,
+        subfolder: image.subfolder || "",
+        type: image.type || "output"
+      });
+      const imageResponse = await fetch(base + "/view?" + query.toString(), {
+        cache: "no-store"
+      });
+      if (!imageResponse.ok) throw new Error("ComfyUI sonuç görseli alınamadı (HTTP " + imageResponse.status + ").");
+      return imageResponse.blob();
+    }
+    if (entry?.status?.completed === true || entry?.status?.status_str === "error") {
+      const details = JSON.stringify(entry.status.messages || []);
+      throw new Error("ComfyUI iş akışı tamamlanamadı: " + details.slice(0, 1200));
+    }
+  }
+  throw new Error("ComfyUI işlemi 15 dakika içinde tamamlanmadı. Bilgisayarındaki ComfyUI kuyruğunu kontrol et.");
+}
+
 async function runNvidiaFaceEdit() {
   if (state.isSwapping) return;
   if (!state.nvidiaStatus.configured) {
-    showToast("NVIDIA sunucu anahtarı yapılandırılmamış. Kurulum dosyasını kontrol et.");
+    showToast("Önce bilgisayarındaki ComfyUI servisini başlat.");
     return;
   }
   if (!state.target || !Number.isInteger(state.selectedFaceIndex)) {
@@ -601,52 +664,78 @@ async function runNvidiaFaceEdit() {
   }
 
   const consent = window.confirm(
-    "GİZLİLİK ONAYI\n\n" +
-    `Yalnızca seçtiğin yüzün bulunduğu crop ve yerel klasörden yüklenen ${MAX_REFERENCE_FACES} referans fotoğrafı NVIDIA FLUX servisine gönderilecek. ` +
-    "Hedef fotoğrafın geri kalanı gönderilmeyecek. Görseller NVIDIA altyapısında işlenecek. " +
-    "Devam etmek istiyor musun?"
+    "YEREL İŞLEM ONAYI\\n\\n" +
+    `Seçtiğin yüzün crop'u ve ${MAX_REFERENCE_FACES} referans fotoğrafı bu tarayıcıdan bilgisayarındaki ComfyUI servisine (127.0.0.1:8188) gönderilecek. ` +
+    "Model RTX A4000 üzerinde yerel çalışacak; görseller NVIDIA bulut API'sine veya başka bir harici AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
   if (!consent) return;
 
   state.isSwapping = true;
   updateSwapAvailability();
   clearResult();
-  elements.outputTitle.textContent = "NVIDIA ile işleniyor";
-  elements.outputStatus.textContent = "Yükleniyor";
+  elements.outputTitle.textContent = "Yerel FLUX ile işleniyor";
+  elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   elements.outputPlaceholder.hidden = false;
-  elements.outputPlaceholder.querySelector("strong").textContent = "Yüz düzenleniyor…";
+  elements.outputPlaceholder.querySelector("strong").textContent = "Fotoğraflar yerel modele gönderiliyor…";
   elements.outputMessage.textContent =
-    `Seçilen yüz crop'u ve ${MAX_REFERENCE_FACES} referans NVIDIA'ya gönderildi. Orijinal fotoğrafın geri kalanı tarayıcıda kalıyor.`;
+    "Hedef yüz crop'u ve 25 referans fotoğrafı bilgisayarındaki ComfyUI'ye aktarılıyor. İşlem RTX A4000 üzerinde yapılacak.";
 
   let generatedUrl = null;
   try {
-    const { canvas, crop } = buildNvidiaContactSheet();
-    const boardBlob = await canvasToBlob(canvas);
-    if (boardBlob.size > 10 * 1024 * 1024) {
-      throw new Error("Referans panosu 10 MB sınırını aşıyor.");
-    }
-    setRuntimeStatus("NVIDIA FLUX · görsel gönderiliyor…");
+    const base = localComfyBase();
+    const { targetCanvas, referencesCanvas, crop } = buildLocalComfyInputs();
+    const [targetBlob, referencesBlob] = await Promise.all([
+      canvasToBlob(targetCanvas),
+      canvasToBlob(referencesCanvas)
+    ]);
 
-    const response = await fetch(nvidiaApiBase() + "/edit", {
-      method: "POST",
-      headers: {
-        "Content-Type": "image/png",
-        Accept: "application/json",
-        "X-Retake-Consent": "true"
-      },
-      body: boardBlob
+    setRuntimeStatus("Yerel FLUX · görseller ComfyUI'ye yükleniyor…");
+    const [targetName, referencesName] = await Promise.all([
+      uploadComfyImage(base, targetBlob, "retake-target-face.png"),
+      uploadComfyImage(base, referencesBlob, "retake-identity-references.png")
+    ]);
+
+    const workflowResponse = await fetch("./workflows/retake-flux-api.json", {
+      cache: "no-store",
+      headers: { Accept: "application/json" }
     });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      const detail = payload.error || ("NVIDIA API " + response.status + " yanıtı verdi.");
-      throw new Error(detail);
-    }
-    const imageDataUrl = payload.imageDataUrl || imageDataUrlFromNvidiaResponse(payload);
-    if (typeof imageDataUrl !== "string" || !imageDataUrl.startsWith("data:image/")) {
-      throw new Error("NVIDIA geçerli bir görsel çıktısı döndürmedi.");
+    if (!workflowResponse.ok) throw new Error("Retake FLUX API iş akışı indirilemedi.");
+    const workflow = await workflowResponse.json();
+    workflow["191"].inputs.image = targetName;
+    workflow["192"].inputs.image = referencesName;
+    workflow["6"].inputs.text = [
+      "The input is a single composite image containing two panels side by side.",
+      "LEFT PANEL: Change only the facial identity of the person in this target portrait to resemble the same person shown across the RIGHT PANEL reference photos.",
+      "RIGHT PANEL: These are identity references of one person. Use all references to infer stable facial identity. Do not edit this panel.",
+      "Preserve the target's head pose, expression, gaze, hairstyle, hairline, ears, neck, clothing, body, lighting and background.",
+      "Keep realistic skin texture, facial anatomy and photographic lighting. Do not copy the reference clothing or background.",
+      "Return the complete two-panel composition in the original arrangement."
+    ].join(" ");
+
+    workflow["31"].inputs.seed = Math.floor(Math.random() * 9007199254740000);
+    workflow["136"].inputs.filename_prefix = "Retake-Local-FLUX";
+    setRuntimeStatus("Yerel FLUX · RTX A4000 üzerinde çalışıyor…");
+    elements.outputPlaceholder.querySelector("strong").textContent = "RTX A4000 fotoğrafı düzenliyor…";
+    elements.outputMessage.textContent = "ComfyUI iş kuyruğuna gönderildi. Bu aşama bilgisayarındaki ekran kartında çalışır.";
+
+    const queueResponse = await fetch(base + "/prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({
+        prompt: workflow,
+        client_id: "retake-" + (crypto.randomUUID ? crypto.randomUUID() : Date.now())
+      })
+    });
+    const queuePayload = await queueResponse.json().catch(() => ({}));
+    if (!queueResponse.ok || !queuePayload.prompt_id) {
+      const validation = queuePayload.node_errors
+        ? JSON.stringify(queuePayload.node_errors).slice(0, 1200)
+        : (queuePayload.error || "ComfyUI iş akışını kuyruğa alamadı.");
+      throw new Error(validation);
     }
 
-    const generated = await loadImage(await (await fetch(imageDataUrl)).blob());
+    const generatedBlob = await waitForComfyResult(base, queuePayload.prompt_id);
+    const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
     const resultUrl = createObjectURL(resultBlob);
@@ -657,24 +746,24 @@ async function runNvidiaFaceEdit() {
     elements.outputPlaceholder.hidden = true;
     elements.outputStage.classList.add("has-result");
     elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "Sonuç önizlemesi";
-    elements.outputStatus.textContent = "Deneysel çıktı";
+    elements.outputTitle.textContent = "Yerel FLUX sonucu";
+    elements.outputStatus.textContent = "Yerel çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      "NVIDIA FLUX genel amaçlı görsel düzenleme modelidir. Kimlik benzerliği garanti edilmez; sonucu kontrol ederek indir.";
-    showToast("Deneysel NVIDIA çıktısı hazır. Lütfen yüz benzerliğini kontrol et.");
-    setRuntimeStatus("NVIDIA FLUX · sonuç hazır");
+      "FLUX.1-Kontext-dev bilgisayarındaki RTX A4000'de çalıştı. Kimlik benzerliği garanti edilmez; sonucu kontrol ederek indir.";
+    showToast("Yerel FLUX çıktısı hazır. Lütfen yüz benzerliğini kontrol et.");
+    setRuntimeStatus("Yerel FLUX · sonuç hazır");
   } catch (error) {
-    console.error("NVIDIA FLUX işlemi başarısız:", error);
+    console.error("Yerel ComfyUI FLUX işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";
     elements.outputStatus.textContent = "Hata";
     elements.outputPlaceholder.hidden = false;
-    elements.outputPlaceholder.querySelector("strong").textContent = "NVIDIA işlemi başarısız";
-    elements.outputMessage.textContent = error.message || "NVIDIA API isteği başarısız oldu.";
+    elements.outputPlaceholder.querySelector("strong").textContent = "Yerel FLUX işlemi başarısız";
+    elements.outputMessage.textContent = error.message || "ComfyUI isteği başarısız oldu.";
     elements.outputStage.classList.remove("has-result");
     elements.outputSymbol.hidden = false;
-    showToast(error.message || "NVIDIA yüz düzenleme işlemi başarısız.");
-    setRuntimeStatus("NVIDIA FLUX · hata");
+    showToast(error.message || "Yerel FLUX düzenleme başarısız.");
+    setRuntimeStatus("Yerel FLUX · hata");
   } finally {
     if (generatedUrl) URL.revokeObjectURL(generatedUrl);
     state.isSwapping = false;

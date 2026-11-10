@@ -22,12 +22,12 @@ Statik web uygulaması: \`index.html\`
 - MediaPipe Face Landmarker 1.2.2 ile cihazda çoklu yüz algılama ve hedef seçimi.
 - Veritabanında önceden kayıtlı 20 referansı `GET /api/images/{id}` üzerinden otomatik ve salt okunur yükleme.
 - Referans fotoğrafları yeniden yükletilmez, IndexedDB'ye kopyalanmaz; hedef görsel yalnızca oturum belleğinde tutulur.
-- Yerel ComfyUI FLUX iş akışı için hedef yüz crop'u ve 25 referansı iki ayrı panel olarak hazırlar; bunları bilgisayardaki ComfyUI API'sine yükler ve sonucu tarayıcıda yüz maskesiyle birleştirir.
+- Yerel ComfyUI FLUX iş akışı için hedef yüz crop'unu ve 25 referans arasından en net üç ayrı yüz crop'unu hazırlar; her görseli ayrı latent referans olarak ComfyUI'ye gönderir ve tek portre çıktısını tarayıcıda yüz maskesiyle birleştirir.
 - Görsel çıkarımı kullanıcının RTX GPU'sunda yapılır; NVIDIA hosted API anahtarı, Firebase Functions veya ücretli inference servisi kullanılmaz.
 - Koyu/açık tema ve kurulabilir Progressive Web App (PWA).
 - Uygulama kabuğu, MediaPipe WebAssembly dosyaları ve yüz modeli için servis çalışanı önbelleği. İlk açılışta internet gerekir; önbellek oluştuğunda desteklenen tarayıcılarda çevrimdışı açılış mümkündür.
 
-Hedef fotoğrafın tamamı gönderilmez. Açık onaydan sonra seçili yüz crop'u ve 25 referans panosu, aynı bilgisayardaki `http://127.0.0.1:8188` ComfyUI servisine aktarılır; FLUX çıkarımı yerelde yapılır. `meta[name="retake-comfy-base"]` yerel ComfyUI adresini belirler. Kurulum: [docs/LOCAL_COMFYUI_SETUP.md](docs/LOCAL_COMFYUI_SETUP.md). Referans görsellerin kaynağı ayrıca gizli tutulmalıdır; public Hosting'e eklenen fotoğraflar herkese açık olabilir. MediaPipe yüz algılamayı cihazda çalıştırır; kütüphane ölçümleri Google'a gönderilebilir: https://goo.gle/mediapipe-privacy
+Hedef fotoğrafın tamamı gönderilmez. Açık onaydan sonra seçili yüz crop'u ve seçilen üç ayrı referans görseli, aynı bilgisayardaki `http://127.0.0.1:8188` ComfyUI servisine aktarılır; FLUX çıkarımı yerelde yapılır. `meta[name="retake-comfy-base"]` yerel ComfyUI adresini belirler. Kurulum: [docs/LOCAL_COMFYUI_SETUP.md](docs/LOCAL_COMFYUI_SETUP.md). Referans görsellerin kaynağı ayrıca gizli tutulmalıdır; public Hosting'e eklenen fotoğraflar herkese açık olabilir. MediaPipe yüz algılamayı cihazda çalıştırır; kütüphane ölçümleri Google'a gönderilebilir: https://goo.gle/mediapipe-privacy
 
 ### Web'i çalıştırma
 

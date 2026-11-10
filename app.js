@@ -151,7 +151,7 @@ async function checkNvidiaStatus() {
   }
 
   if (state.nvidiaStatus.configured) {
-    elements.engineTitle.textContent = "Yerel Yerel FLUX hazır";
+    elements.engineTitle.textContent = "Yerel FLUX hazır";
     elements.engineDescription.textContent =
       `ComfyUI bilgisayarında çalışıyor. Hedef yüz crop'u ve ${MAX_REFERENCE_FACES} referans fotoğrafı internet üzerinden bir AI servisine gönderilmeden RTX A4000'de işlenecek.`;
   } else {

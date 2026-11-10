@@ -63,6 +63,7 @@ const state = {
   target: null,
   references: [],
   referencesLoading: false,
+  referenceFaceCropCount: null,
   referenceLoadError: null,
   referenceLoadToken: 0,
   selectedFaceIndex: null,
@@ -559,6 +560,7 @@ function buildLocalComfyInputs() {
     }
   });
 
+  state.referenceFaceCropCount = faceCroppedReferences;
   showToast(`${faceCroppedReferences}/${MAX_REFERENCE_FACES} referans yüzü yakınlaştırıldı.`);
   return { targetCanvas, referencesCanvas, crop };
 }
@@ -779,9 +781,9 @@ async function runNvidiaFaceEdit() {
     elements.outputStatus.textContent = "Yerel çıktı";
     elements.downloadButton.disabled = false;
     elements.disabledNote.textContent =
-      "FLUX.1-Kontext-dev bilgisayarındaki RTX A4000'de çalıştı. Kimlik benzerliği garanti edilmez; sonucu kontrol ederek indir.";
-    showToast("Yerel FLUX çıktısı hazır. Lütfen yüz benzerliğini kontrol et.");
-    setRuntimeStatus("Yerel FLUX · sonuç hazır");
+      `Referans yüzleri: ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} yakınlaştırıldı. FLUX.1-Kontext-dev bilgisayarındaki RTX A4000'de çalıştı; kimlik benzerliği garanti edilmez.`;
+    showToast(`Yerel FLUX çıktısı hazır · ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referans yüzü yakınlaştırıldı.`);
+    setRuntimeStatus(`Yerel FLUX · ${state.referenceFaceCropCount ?? "?"}/${MAX_REFERENCE_FACES} referans yüzü · sonuç hazır`);
   } catch (error) {
     console.error("Yerel ComfyUI FLUX işlemi başarısız:", error);
     elements.outputTitle.textContent = "İşlem tamamlanamadı";

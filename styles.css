@@ -173,6 +173,11 @@ h1 em { color: var(--lime); font-family: Georgia, "Times New Roman", serif; font
 .profile-specs>div { min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 9px; border: 1px solid var(--line); border-radius: 8px; background: color-mix(in srgb, var(--surface-2) 62%, transparent); }
 .spec-label { color: var(--soft); font-size: 7px; font-weight: 850; letter-spacing: .11em; }
 .profile-specs strong { overflow: hidden; color: var(--ink); font-size: 10px; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.profile-actions { margin-top: 15px; }
+.profile-actions .choose-file-button { width: 100%; justify-content: space-between; margin-top: 0; }
+.profile-reference-links { display: flex; justify-content: space-between; gap: 12px; margin-top: 5px; }
+.profile-reference-links .text-button { padding-left: 0; white-space: normal; text-align: left; }
+.profile-actions .state-detail { margin-top: 4px; }
 .result-card { padding: 19px; }
 .result-head { margin-bottom: 14px; }
 .result-status { display: inline-flex; align-items: center; gap: 7px; padding: 7px 9px; color: var(--soft); border: 1px solid var(--line); border-radius: 99px; font-size: 8px; white-space: nowrap; }

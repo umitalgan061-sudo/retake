@@ -1,6 +1,17 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ACCEPTED_IMAGE_TYPES, getContainedRect, getLandmarkBounds, formatBytes, validateImageFile } from "../src/core.js";
+import {
+  ACCEPTED_IMAGE_TYPES,
+  getContainedRect,
+  getLandmarkBounds,
+  formatBytes,
+  MAX_IMAGE_EDGE,
+  MAX_IMAGE_PIXELS,
+  MAX_REFERENCE_FACES,
+  validateImageFile,
+  validateImageDimensions,
+  validateReferenceFiles
+} from "../src/core.js";
 
 test("accepts supported image files within the size limit", () => {
   assert.deepEqual(validateImageFile({ type: "image/jpeg", size: 1024 }), { valid: true, reason: "" });
@@ -11,6 +22,28 @@ test("rejects unsupported types, empty files and oversized files", () => {
   assert.equal(validateImageFile({ type: "image/png", size: 0 }).valid, false);
   assert.equal(validateImageFile({ type: "image/png", size: 26 * 1024 * 1024 }).valid, false);
   assert.equal(ACCEPTED_IMAGE_TYPES.size, 3);
+});
+
+test("requires exactly 25 supported, non-empty personal reference photos", () => {
+  const files = Array.from({ length: MAX_REFERENCE_FACES }, (_, index) => ({
+    name: `face-${index + 1}.jpg`,
+    type: "image/jpeg",
+    size: 1024
+  }));
+  assert.equal(validateReferenceFiles(files).valid, true);
+  assert.match(validateReferenceFiles(files.slice(0, 24)).reason, /tam 25/);
+  assert.match(validateReferenceFiles([...files, files[0]]).reason, /tam 25/);
+  assert.match(
+    validateReferenceFiles(files.map((file, index) => index === 4 ? { ...file, type: "image/gif" } : file)).reason,
+    /face-5\.jpg/
+  );
+});
+
+test("rejects images that exceed safe pixel dimensions", () => {
+  assert.deepEqual(validateImageDimensions(4000, 3000), { valid: true, reason: "" });
+  assert.match(validateImageDimensions(MAX_IMAGE_EDGE + 1, 100).reason, /boyutu çok büyük/);
+  assert.match(validateImageDimensions(MAX_IMAGE_PIXELS, 2).reason, /boyutu çok büyük/);
+  assert.equal(validateImageDimensions(0, 10).valid, false);
 });
 
 test("computes a normalized face rectangle with padding", () => {

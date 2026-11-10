@@ -4,7 +4,9 @@ import {
   getLandmarkBounds,
   MAX_IMAGE_BYTES,
   MAX_REFERENCE_FACES,
-  validateImageFile
+  validateImageDimensions,
+  validateImageFile,
+  validateReferenceFiles
 } from "./src/core.js";
 import {
   getReferenceImageUrl,
@@ -17,9 +19,15 @@ import {
 } from "./src/nvidia-pipeline.js";
 import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
-import { createReferenceSetKey, getCachedProfile, saveCachedProfile } from "./src/profile-storage.js";
+import {
+  createReferenceSetKey,
+  deleteCachedProfile,
+  getCachedProfile,
+  saveCachedProfile
+} from "./src/profile-storage.js";
 
 const MAX_PREVIEW_EDGE = 2048;
+const MAX_REFERENCE_EDGE = 2048;
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const FACE_DETECTOR_MODEL_URLS = {
   short: "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
@@ -38,7 +46,11 @@ const elements = {
   faceSelection: $("#faceSelection"),
   faceCount: $("#faceCount"),
   faceChips: $("#faceChips"),
+  referencesInput: $("#referencesInput"),
+  chooseReferences: $("#chooseReferencesButton"),
   reloadReferences: $("#reloadReferencesButton"),
+  clearReferences: $("#clearReferencesButton"),
+  referenceProgress: $("#referenceProgress"),
   swapButton: $("#swapButton"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
@@ -75,10 +87,14 @@ const state = {
   referenceSetKey: null,
   profileIsBuilding: false,
   referencesLoading: false,
+  referenceLoadProgress: null,
+  profilePreparationProgress: null,
   referenceFaceCropCount: null,
   selectedReferenceCount: 0,
   referenceLoadError: null,
   referenceLoadToken: 0,
+  targetLoadToken: 0,
+  targetLoading: false,
   selectedFaceIndex: null,
   faceFusionStatus: { checked: false, configured: false },
   isSwapping: false,
@@ -133,12 +149,19 @@ function updateSwapAvailability() {
   const hasTarget = Boolean(state.target && Number.isInteger(state.selectedFaceIndex) &&
     state.target.faces[state.selectedFaceIndex]);
   const enabled = state.faceFusionStatus.configured && state.detector &&
-    referenceCount === MAX_REFERENCE_FACES && hasTarget && !state.isSwapping;
+    referenceCount === MAX_REFERENCE_FACES && hasTarget &&
+    !state.targetLoading && !state.referencesLoading && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   const tag = elements.swapButton.querySelector(".button-state");
   if (tag) tag.textContent = state.isSwapping ? "İşleniyor" :
     (enabled ? "HAZIR" : (state.faceFusionStatus.configured ? "FOTOĞRAF SEÇ" : "MOTORU BAĞLA"));
+  elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
+  elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
+  elements.clearReferences.disabled = state.referencesLoading || state.isSwapping;
+  elements.targetInput.disabled = state.targetLoading || state.isSwapping;
+  elements.clearTarget.disabled = state.targetLoading || state.isSwapping;
+  elements.targetDropzone.setAttribute("aria-disabled", String(state.targetLoading || state.isSwapping));
 }
 
 async function checkFaceFusionStatus() {
@@ -202,6 +225,35 @@ function loadImage(fileOrBlob) {
     };
     image.src = url;
   });
+}
+
+async function loadReferenceImage(blob) {
+  const loaded = await loadImage(blob);
+  const width = loaded.image.naturalWidth || loaded.image.width;
+  const height = loaded.image.naturalHeight || loaded.image.height;
+  const validation = validateImageDimensions(width, height);
+  if (!validation.valid) {
+    URL.revokeObjectURL(loaded.url);
+    throw new Error(validation.reason);
+  }
+  if (Math.max(width, height) <= MAX_REFERENCE_EDGE) return loaded;
+
+  const scale = MAX_REFERENCE_EDGE / Math.max(width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const context = canvas.getContext("2d");
+  if (!context) {
+    URL.revokeObjectURL(loaded.url);
+    throw new Error("Referans fotoğrafını güvenli boyuta küçültmek için görsel alanı oluşturulamadı.");
+  }
+  try {
+    context.drawImage(loaded.image, 0, 0, canvas.width, canvas.height);
+    const resizedBlob = await canvasToBlob(canvas, blob.type);
+    return await loadImage(resizedBlob);
+  } finally {
+    URL.revokeObjectURL(loaded.url);
+  }
 }
 
 function detectFaces(image) {
@@ -282,6 +334,7 @@ function clearResult() {
 }
 
 function selectTargetFace(index) {
+  if (state.isSwapping || state.targetLoading) return;
   if (!state.target || !Number.isInteger(index) || !state.target.faces[index]) return;
   state.selectedFaceIndex = index;
   clearResult();
@@ -291,13 +344,31 @@ function selectTargetFace(index) {
 }
 
 async function setTargetPhoto(file) {
+  if (state.isSwapping || state.targetLoading) return;
   const validation = validateImageFile(file);
   if (!validation.valid) {
     showToast(validation.reason);
     return;
   }
+  const token = ++state.targetLoadToken;
+  state.targetLoading = true;
+  elements.targetMeta.textContent = "Fotoğraf yükleniyor…";
+  updateSwapAvailability();
   try {
     const loaded = await loadImage(file);
+    if (token !== state.targetLoadToken) {
+      URL.revokeObjectURL(loaded.url);
+      return;
+    }
+    const dimensions = validateImageDimensions(loaded.image.naturalWidth, loaded.image.naturalHeight);
+    if (!dimensions.valid) {
+      URL.revokeObjectURL(loaded.url);
+      state.targetLoading = false;
+      elements.targetMeta.textContent = dimensions.reason;
+      updateSwapAvailability();
+      showToast(dimensions.reason);
+      return;
+    }
     let faces = [];
     let detectionMessage = "Yüz algılama yapılamadı.";
     if (state.detector) {
@@ -313,9 +384,14 @@ async function setTargetPhoto(file) {
       detectionMessage = "Yüz algılama motoru hazırlanıyor; fotoğraf şimdilik önizleme için açıldı.";
     }
 
+    if (token !== state.targetLoadToken) {
+      URL.revokeObjectURL(loaded.url);
+      return;
+    }
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
     clearResult();
     state.target = { file, image: loaded.image, url: loaded.url, faces };
+    state.targetLoading = false;
     state.selectedFaceIndex = faces.length > 0 ? 0 : null;
     elements.targetEmpty.hidden = true;
     elements.targetPreview.hidden = false;
@@ -327,11 +403,18 @@ async function setTargetPhoto(file) {
     updateSwapAvailability();
     showToast(detectionMessage);
   } catch (error) {
+    if (token === state.targetLoadToken) {
+      state.targetLoading = false;
+      elements.targetMeta.textContent = error.message || "Fotoğraf yüklenemedi.";
+      updateSwapAvailability();
+    }
     showToast(error.message || "Fotoğraf yüklenemedi.");
   }
 }
 
 function clearTargetPhoto() {
+  if (state.isSwapping || state.targetLoading) return;
+  state.targetLoadToken += 1;
   if (state.target?.url) URL.revokeObjectURL(state.target.url);
   clearResult();
   state.target = null;
@@ -391,11 +474,11 @@ function renderReferences() {
     const title = elements.referencesEmpty.querySelector("strong");
     const description = elements.referencesEmpty.querySelector("p");
     title.textContent = state.referencesLoading
-      ? "Yerel yüzler yükleniyor"
-      : "Yerel referans havuzu okunamadı";
+      ? "Referans fotoğrafları yükleniyor"
+      : "Henüz referans fotoğrafı yok";
     description.textContent = state.referencesLoading
-      ? `${MAX_REFERENCE_FACES} fotoğraf reference-faces/manifest.json listesinden okunuyor.`
-      : (state.referenceLoadError || "reference-faces/manifest.json dosyasını kontrol et.");
+      ? `${MAX_REFERENCE_FACES} fotoğraf hazırlanıyor.`
+      : (state.referenceLoadError || "Kendi 25 fotoğrafını seç veya varsayılan havuza dön.");
   }
 
   state.references.forEach((reference) => {
@@ -413,7 +496,7 @@ function renderReferences() {
     } else {
       const placeholder = document.createElement("div");
       placeholder.className = "reference-error";
-      placeholder.textContent = reference.status === "loading" ? "Yükleniyor…" : "Görsel alınamadı";
+      placeholder.textContent = reference.status === "loading" ? "Yükleniyor…" : "Görsel açılamadı";
       card.append(placeholder);
     }
 
@@ -424,28 +507,36 @@ function renderReferences() {
     const label = document.createElement("span");
     label.className = "reference-state";
     label.textContent = reference.status !== "ready"
-      ? (reference.status === "loading" ? "YÜKLENİYOR" : "ERİŞİLEMİYOR")
+      ? (reference.status === "loading" ? "YÜKLENİYOR" : "AÇILAMADI")
       : reference.profileStatus === "included"
         ? (reference.profileMethod?.startsWith("FaceDetector") ? "PROFİLDE · YEDEK" : "PROFİLDE")
         : reference.profileStatus === "excluded"
           ? "PROFİLE ALINAMADI"
           : "YERELDE";
-    if (reference.profileError) label.title = reference.profileError;
+    if (reference.error || reference.profileError) label.title = reference.error || reference.profileError;
 
     card.append(name, label);
     elements.referencesGrid.append(card);
   });
 
   elements.reloadReferences.disabled = state.referencesLoading;
-  elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Klasörden yenile";
+  elements.reloadReferences.textContent = state.referencesLoading ? "Yükleniyor…" : "Varsayılan havuza dön";
+  elements.referenceProgress.textContent = state.referencesLoading && state.referenceLoadProgress
+    ? `Fotoğraflar açılıyor · ${state.referenceLoadProgress.completed}/${state.referenceLoadProgress.total}`
+    : state.profilePreparationProgress
+      ? `Yüzler hizalanıyor · ${state.profilePreparationProgress.completed}/${state.profilePreparationProgress.total}`
+    : "Fotoğraflar tarayıcıda işlenir; kişisel profil önbelleğini istediğin zaman temizleyebilirsin.";
   updateSwapAvailability();
 }
 
 async function loadLocalReferences({ force = false } = {}) {
+  if (state.isSwapping) return 0;
   const token = ++state.referenceLoadToken;
+  clearResult();
   state.identityProfile = null;
   state.referenceSetKey = null;
   state.referencesLoading = true;
+  state.referenceLoadProgress = { completed: 0, total: MAX_REFERENCE_FACES };
   state.referenceLoadError = null;
   state.references.forEach((reference) => {
     if (reference.url) URL.revokeObjectURL(reference.url);
@@ -480,7 +571,7 @@ async function loadLocalReferences({ force = false } = {}) {
         throw new Error(`${reference.file}: görsel boş veya 25 MB sınırını aşıyor.`);
       }
 
-      const loaded = await loadImage(blob);
+      const loaded = await loadReferenceImage(blob);
       return { ...reference, status: "ready", url: loaded.url, image: loaded.image, blob, size: blob.size };
     }));
 
@@ -505,6 +596,8 @@ async function loadLocalReferences({ force = false } = {}) {
       }
     }
     state.referencesLoading = false;
+    state.referenceLoadProgress = null;
+    state.profilePreparationProgress = null;
     state.referenceLoadError = failedCount
       ? `${loadedCount}/${MAX_REFERENCE_FACES} görsel yüklendi; ${failedCount} dosyayı manifest ve dosya adıyla karşılaştır.`
       : null;
@@ -516,6 +609,8 @@ async function loadLocalReferences({ force = false } = {}) {
     if (token !== state.referenceLoadToken) return 0;
     state.references = [];
     state.referencesLoading = false;
+    state.referenceLoadProgress = null;
+    state.profilePreparationProgress = null;
     state.referenceLoadError = error.message || "Yerel referans dosyaları okunamadı.";
     renderReferences();
     showToast(state.referenceLoadError);
@@ -523,13 +618,143 @@ async function loadLocalReferences({ force = false } = {}) {
   }
 }
 
-async function canvasToBlob(canvas) {
+async function loadUserReferences(files) {
+  if (state.isSwapping) return;
+  const validation = validateReferenceFiles(files);
+  if (!validation.valid) {
+    showToast(validation.reason);
+    return;
+  }
+
+  const token = ++state.referenceLoadToken;
+  clearResult();
+  state.identityProfile = null;
+  state.referenceSetKey = null;
+  state.referenceFaceCropCount = null;
+  state.selectedReferenceCount = 0;
+  state.referencesLoading = true;
+  state.referenceLoadProgress = { completed: 0, total: files.length };
+  state.profilePreparationProgress = null;
+  state.referenceLoadError = null;
+  state.references.forEach((reference) => {
+    if (reference.url) URL.revokeObjectURL(reference.url);
+  });
+  state.references = files.map((file, index) => ({
+    file: file.name,
+    name: file.name || `Kişisel referans ${index + 1}`,
+    status: "loading"
+  }));
+  renderReferences();
+
+  const results = [];
+  for (let index = 0; index < files.length; index += 1) {
+    const file = files[index];
+    const name = file.name || `Kişisel referans ${index + 1}`;
+    try {
+      const loaded = await loadReferenceImage(file);
+      results.push({
+        status: "fulfilled",
+        value: {
+          file: file.name,
+          name,
+          status: "ready",
+          url: loaded.url,
+          image: loaded.image,
+          blob: file,
+          size: file.size
+        }
+      });
+    } catch (error) {
+      results.push({
+        status: "rejected",
+        reason: error,
+        value: {
+          file: file.name,
+          name,
+          status: "error",
+          error: error?.message || "Görsel açılamadı."
+        }
+      });
+    }
+
+    if (token !== state.referenceLoadToken) {
+      results.forEach((result) => {
+        if (result.value?.url) URL.revokeObjectURL(result.value.url);
+      });
+      return;
+    }
+    state.references[index] = results[index].value;
+    state.referenceLoadProgress.completed = index + 1;
+    renderReferences();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+  }
+
+  state.references = results.map((result) => result.value);
+
+  const readyReferences = state.references.filter((reference) => reference.status === "ready");
+  if (readyReferences.length === MAX_REFERENCE_FACES) {
+    try {
+      state.referenceSetKey = await createReferenceSetKey(readyReferences);
+    } catch (error) {
+      console.warn("Kişisel referans profil anahtarı oluşturulamadı.", error);
+    }
+  }
+
+  if (token !== state.referenceLoadToken) {
+    state.references.forEach((reference) => {
+      if (reference.url) URL.revokeObjectURL(reference.url);
+    });
+    return;
+  }
+
+  state.referencesLoading = false;
+  const failedCount = MAX_REFERENCE_FACES - readyReferences.length;
+  state.referenceLoadError = failedCount
+    ? `${readyReferences.length}/${MAX_REFERENCE_FACES} fotoğraf açıldı; başarısız dosyaları yeniden seç.`
+    : null;
+  renderReferences();
+  showToast(`${readyReferences.length}/${MAX_REFERENCE_FACES} kişisel referans yüklendi.`);
+}
+
+async function canvasToBlob(canvas, type = "image/png") {
   return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Görsel hazırlanamadı.")), "image/png");
+    canvas.toBlob(
+      (blob) => blob ? resolve(blob) : reject(new Error("Görsel hazırlanamadı.")),
+      type,
+      type === "image/jpeg" ? 0.92 : undefined
+    );
   });
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-fallback-v3";
+async function clearReferenceData() {
+  if (state.referencesLoading || state.isSwapping) return;
+  if (!window.confirm(
+    "Seçili referansları ve bu tarayıcıda saklanan kırpılmış kişisel profil önbelleğini silmek istiyor musun? Kaynak fotoğraflar dosyalarından silinmez."
+  )) return;
+
+  state.referenceLoadToken += 1;
+  state.identityProfile = null;
+  state.referenceSetKey = null;
+  state.referenceFaceCropCount = null;
+  state.selectedReferenceCount = 0;
+  state.referencesLoading = false;
+  state.referenceLoadProgress = null;
+  state.profilePreparationProgress = null;
+  state.referenceLoadError = null;
+  state.references.forEach((reference) => {
+    if (reference.url) URL.revokeObjectURL(reference.url);
+  });
+  state.references = [];
+  clearResult();
+  renderReferences();
+
+  const removed = await deleteCachedProfile();
+  showToast(removed
+    ? "Seçili fotoğraflar ve yerel profil önbelleği temizlendi."
+    : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
+}
+
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-downscale-v4";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
 const FACEFUSION_TARGET_WIDTH = 784;
@@ -910,7 +1135,10 @@ async function buildLocalFaceFusionInputs() {
     } else {
       const candidates = [];
       const referenceDiagnostics = [];
-      for (const reference of readyReferences) {
+      state.profilePreparationProgress = { completed: 0, total: readyReferences.length };
+      renderReferences();
+      for (let index = 0; index < readyReferences.length; index += 1) {
+        const reference = readyReferences[index];
         try {
           const candidate = await createReferenceFaceInput(reference);
           candidates.push(candidate);
@@ -936,8 +1164,12 @@ async function buildLocalFaceFusionInputs() {
           });
           console.warn("Referans yüz profili hazırlanamadı:", reference.name, reason);
         }
+        state.profilePreparationProgress.completed = index + 1;
         renderReferences();
+        await new Promise((resolve) => window.setTimeout(resolve, 0));
       }
+      state.profilePreparationProgress = null;
+      renderReferences();
 
       if (candidates.length !== MAX_REFERENCE_FACES) {
         const missing = referenceDiagnostics
@@ -1094,8 +1326,8 @@ async function runFaceFusionEdit() {
   }
 
   const consent = window.confirm(
-    "YEREL İŞLEM ONAYI\\n\\n" +
-    "Hedef yüz crop'u, 25 referansın tamamı ve hizalanmış ağırlıklı görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
+    "YEREL İŞLEM ONAYI\n\n" +
+    "Hedef yüz crop'u, 25 hizalanmış referans yüz crop'u ve görünüm profili bu bilgisayardaki FaceFusion servisine (127.0.0.1:8765) gönderilecek. " +
     "Kimlik profili tüm referansların ağırlıklı yüz gömmelerini kullanır; görünüm profili tüm hizalanmış referansları birleştirir. İki yerel model çıktısı tek fotoğrafta harmanlanır. " +
     "Fotoğraflar harici bir AI servisine gönderilmeyecek. Devam edilsin mi?"
   );
@@ -1315,10 +1547,12 @@ function initializeInteractions() {
   });
 
   elements.targetDropzone.addEventListener("click", (event) => {
+    if (state.isSwapping || state.targetLoading) return;
     if (event.target === elements.targetCanvas || event.target.closest(".preview-hint")) return;
     elements.targetInput.click();
   });
   elements.targetDropzone.addEventListener("keydown", (event) => {
+    if (state.isSwapping || state.targetLoading) return;
     if (event.target !== elements.targetDropzone) return;
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
@@ -1328,6 +1562,7 @@ function initializeInteractions() {
 
   ["dragenter", "dragover"].forEach((eventName) => {
     elements.targetDropzone.addEventListener(eventName, (event) => {
+      if (state.isSwapping || state.targetLoading) return;
       event.preventDefault();
       elements.targetDropzone.classList.add("drag-over");
     });
@@ -1339,6 +1574,7 @@ function initializeInteractions() {
     });
   });
   elements.targetDropzone.addEventListener("drop", async (event) => {
+    if (state.isSwapping || state.targetLoading) return;
     const file = event.dataTransfer?.files?.[0];
     if (file) await setTargetPhoto(file);
   });
@@ -1357,6 +1593,12 @@ function initializeInteractions() {
 
   elements.clearTarget.addEventListener("click", clearTargetPhoto);
   elements.reloadReferences.addEventListener("click", () => loadLocalReferences({ force: true }));
+  elements.clearReferences.addEventListener("click", clearReferenceData);
+  elements.chooseReferences.addEventListener("click", () => elements.referencesInput.click());
+  elements.referencesInput.addEventListener("change", async () => {
+    await loadUserReferences(Array.from(elements.referencesInput.files || []));
+    elements.referencesInput.value = "";
+  });
   elements.swapButton.addEventListener("click", runFaceFusionEdit);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);

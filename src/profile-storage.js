@@ -113,3 +113,23 @@ export async function saveCachedProfile(key, profile) {
     database?.close();
   }
 }
+
+export async function deleteCachedProfile() {
+  let database;
+  try {
+    database = await openDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, "readwrite");
+      transaction.objectStore(STORE_NAME).delete(ACTIVE_PROFILE_ID);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error("Yerel profil silinemedi."));
+      transaction.onabort = () => reject(transaction.error || new Error("Yerel profil silme işlemi iptal edildi."));
+    });
+    return true;
+  } catch (error) {
+    console.warn("Yerel profil önbelleği silinemedi.", error);
+    return false;
+  } finally {
+    database?.close();
+  }
+}

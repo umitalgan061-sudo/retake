@@ -98,9 +98,9 @@
               <div><div class="card-overline">YOUR IDENTITY, REFINED</div><h2 id="profileTitle">Kişisel profil</h2></div>
               <span class="profile-emblem" aria-hidden="true"><svg viewBox="0 0 48 48"><path d="M24 5.5c-7.2 0-13 5.8-13 13 0 7.1 5.8 13 13 13s13-5.9 13-13c0-7.2-5.8-13-13-13Z"/><path d="M6.5 43c2.8-7.4 8.9-11.3 17.5-11.3S38.7 35.6 41.5 43M18 18.5h.01M30 18.5h.01M20 25c2.4 1.7 5.6 1.7 8 0"/></svg></span>
             </div>
-            <p class="profile-copy">Referansların arka planda analiz edilir ve tek bir yüz profiline dönüştürülür. Fotoğraf galerisiyle uğraşmana gerek yok.</p>
+            <p class="profile-copy">Aynı kişiye ait 25 fotoğraf seç. Net, farklı açılardan ve doğal ifadeli kareler profil doğruluğunu destekler.</p>
             <div class="profile-state">
-              <div class="state-row"><span class="state-indicator" id="profileStateDot"></span><strong id="profileStatusText">Profil hazırlanıyor</strong><span id="profileStateMeta" class="state-meta">LOCAL</span></div>
+              <div class="state-row"><span class="state-indicator" id="profileStateDot"></span><strong id="profileStatusText">Profil hazırlanıyor</strong><span id="referenceCount" class="state-meta">0 / 25</span></div>
               <div class="profile-progress"><span id="profileProgressBar"></span></div>
               <p id="profileStatusDetail" class="state-detail">Görseller ve yüz algılama motoru kontrol ediliyor.</p>
             </div>
@@ -108,6 +108,15 @@
               <div><span class="spec-label">IDENTITY</span><strong>ArcFace</strong></div>
               <div><span class="spec-label">RENDER</span><strong>CUDA / 1024</strong></div>
               <div><span class="spec-label">PRIVACY</span><strong>On-device</strong></div>
+            </div>
+            <div class="profile-actions">
+              <input id="referencesInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp" multiple aria-label="Kişisel yüz profili için 25 fotoğraf seç">
+              <button id="chooseReferencesButton" class="choose-file-button" type="button"><span>Kendi 25 fotoğrafını seç</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+              <div class="profile-reference-links">
+                <button id="reloadReferencesButton" class="text-button" type="button">Varsayılan havuza dön</button>
+                <button id="clearReferencesButton" class="text-button" type="button">Fotoğrafları ve profili temizle</button>
+              </div>
+              <p id="referenceProgress" class="state-detail" aria-live="polite">Fotoğraflar tarayıcıda işlenir; işlem yalnızca açık onayla yerel bilgisayara gönderilir.</p>
             </div>
           </section>
 
@@ -137,7 +146,7 @@
       </div>
 
       <section class="bottom-strip">
-        <div class="privacy-lock"><span class="lock-icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><div><strong>Private by design.</strong><span>Fotoğraflar harici AI servisine gönderilmez.</span></div></div>
+        <div class="privacy-lock"><span class="lock-icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><div><strong>Private by design.</strong><span>Kaynak fotoğrafları değil, açık onayla yalnızca yüz crop'ları bu bilgisayardaki yerel motora gider.</span></div></div>
         <div class="bottom-steps"><span><i>01</i> SELECT</span><span class="steps-arrow">—</span><span><i>02</i> REFINE</span><span class="steps-arrow">—</span><span><i>03</i> EXPORT</span></div>
       </section>
 
@@ -150,8 +159,6 @@
   <section id="referenceVault" hidden aria-hidden="true">
     <div id="referencesEmpty"><strong>Yerel profil hazırlanıyor</strong><p>Arka planda yükleniyor.</p></div>
     <div id="referencesGrid"></div>
-    <span id="referenceCount">0 / 25</span>
-    <button id="reloadReferencesButton" type="button">Klasörden yenile</button>
   </section>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="./app.js"></script>

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -12,13 +10,11 @@ from email.parser import BytesParser
 from email import policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Iterable
 
 MIN_REFERENCES = 10
 MAX_REFERENCES = 25
 MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_REQUEST_BYTES = 180 * 1024 * 1024
-ALLOWED_TYPES = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
 
@@ -34,7 +30,7 @@ def image_extension(content_type: str, payload: bytes) -> str:
     raise ValueError("Yalnızca geçerli PNG, JPEG veya WebP görselleri kabul edilir.")
 
 
-def parse_multipart(content_type: str, body: bytes) -> tuple[bytes, list[bytes]]:
+def parse_multipart(content_type: str, body: bytes) -> tuple[bytes, list[bytes], str, list[str]]:
     headers = (
         f"Content-Type: {content_type}\r\n"
         "MIME-Version: 1.0\r\n\r\n"

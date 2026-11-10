@@ -28,10 +28,13 @@ def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
         raise ValueError(f"ArcFace doğrulaması için tam 25 referans gerekli; gelen: {len(reference_paths)}.")
 
     sys.path.insert(0, str(facefusion_dir))
-    from facefusion import face_detector, face_recognizer, state_manager, vision
+    from facefusion import choices, face_detector, face_recognizer, state_manager, vision
 
     # Keep the verifier isolated from the later high-resolution swap passes.
-    # Explicitly initialize every state item consumed by FaceFusion 3.9.2.
+    # FaceFusion's resolve_download_url() iterates download_providers while
+    # building detector/recognizer model metadata. CLI normally initializes
+    # this value; a standalone worker must initialize it explicitly.
+    state_manager.init_item("download_providers", list(choices.download_providers))
     state_manager.init_item("execution_device_ids", [0])
     state_manager.init_item("execution_providers", ["cuda", "cpu"])
     state_manager.init_item("face_detector_model", "yolo_face")

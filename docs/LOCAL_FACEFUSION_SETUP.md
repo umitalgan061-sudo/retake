@@ -42,7 +42,8 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Face mask types: `box`, `occlusion`, `region`.
 - Face occluder: `xseg_1`; face parser: `bisenet_resnet_34`.
 - Parser regions: skin, eyebrows, eyes, nose, mouth and lips; `glasses` is intentionally excluded to preserve target eyewear.
-- Final PNG includes an alpha matte derived from pixels actually changed by the two FaceFusion passes. The browser uses this matte instead of the old broad ellipse when available.
+- Final PNG includes an alpha matte derived from pixels actually changed by the two FaceFusion passes. Its edge is feathered with a 3–9 px face-relative Gaussian sigma; the browser uses this matte instead of the old broad ellipse.
+- A restrained 14% high-frequency detail pass is restricted to the inner matte, with detail values clipped to avoid sharpening the seam or surrounding photo.
 - A local ArcFace ONNX medoid/median screen compares all 25 face crops. Strong outliers keep at least one identity vote but are reduced to weight 1 and reported; the method is not biometric proof and does not use a universal 0.75 cutoff.
 - UniFace contributes a low-strength high-frequency lower-face detail layer instead of the former strong pixel blend, so AlphaFace geometry remains dominant.
 - Each output applies a mild affine width/height adjustment around the detected face center (first try: 0.98× width, 1.05× height; maximum height scale: 1.08×). The alpha matte is transformed with the face crop, so the browser still composites only the generated matte over the source.
@@ -73,7 +74,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v4, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v5, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 
@@ -98,6 +99,7 @@ Uygulama profil oluşturmayı ilk kullanımda yapar. Kırpılmış referans yüz
 - UniFace, tüm referansların hizalanmış piksel harmanını kaynak görüntü olarak kullanarak görünüm geçişi üretir.
 - AlphaFace yüz geometrisi ana katman olarak kalır. UniFace yüksek frekanslı alt yüz ayrıntısını düşük güçte ekler; eski %82 piksel karışımı kaldırılmıştır. Sonuçta hafif yüz oranı düzeltmesi uygulanır; yeniden oluşturma isteği dört sınırlı oran/harman varyasyonunu sırayla dener.
 - GFPGAN seçilirse FaceFusion'ın ayrı face_enhancer işlemcisi %25 blend ile çalışır; alfa matı korunur.
+- Alfa kenarı yüz genişliğine göre yumuşatılır ve yalnızca yüz matının iç çekirdeğine sınırlı keskinlik uygulanır.
 - Tek hibrit PNG hedef crop'a uygulanır; orijinal fotoğrafın geri kalanı korunur ve maske dışı piksel bütünlüğü kontrol edilir.
 
 Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. Her fotoğraf aynı hizalama düzlemine taşınır ve ağırlıklı bir profil bileşeni olur. Sonuç kalitesi referans fotoğrafların netliğine, poz çeşitliliğine, ışığına ve sakal/bıyığın kaç fotoğrafta belirgin olduğuna bağlıdır; kimlik benzerliği garanti edilmez.

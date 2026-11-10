@@ -8,8 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUIRED_FILES = (
-    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js", "src/nvidia-pipeline.js",
-    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "tests/nvidia-backend.test.js", "functions/index.js", "functions/lib/nvidia.js", "functions/package.json", "docs/FACE_ONLY_PIPELINE.md", "docs/NVIDIA_SETUP.md",
+    "index.html", "styles.css", "app.js", "src/core.js", "src/face-only.js", "src/reference-catalog.js", "src/nvidia-pipeline.js", "src/identity-profile.js",
+    "tests/core.test.js", "tests/face-only.test.js", "tests/no-camera.test.js", "tests/reference-catalog.test.js", "tests/nvidia-pipeline.test.js", "tests/nvidia-backend.test.js", "tests/identity-profile.test.js", "functions/index.js", "functions/lib/nvidia.js", "functions/package.json", "docs/FACE_ONLY_PIPELINE.md", "docs/NVIDIA_SETUP.md",
     "package.json", "manifest.webmanifest", "sw.js", "firebase.json", ".firebaserc", "functions/.env.example", "icons/retake.svg",
     "ios/Retake.xcodeproj/project.pbxproj",
 )

@@ -8,6 +8,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - 25 fotoğrafın tümü ortak göz koordinatına hizalanır ve netlik, açı, yüz alanı, ışık ölçütlerine göre 1–3 arası ağırlık alır.
 - Pixel boost varsayılanı `768x768`; daha yüksek ayrıntı için işlem süresini ve VRAM kullanımını artırır.
 - Tüm geçerli referanslardan ağırlıklı kimlik gömmesi ortalaması ve ağırlıklı hizalanmış piksel görünüm profili oluşturulur.
+- Profilin kırpılmış referansları ve hizalanmış görünüm görseli tarayıcı IndexedDB alanında cihazda saklanır; aynı referans kümesiyle sayfa yenilendiğinde tekrar hizalama yapılmaz.
 - AlphaFace geçişi tüm referanslardan ağırlıklı kimlik ortalaması alır; UniFace geçişi 25 fotoğrafın tamamından oluşan tek hizalı görünüm profiliyle çalışır.
 - RTX GPU üzerinde CUDA ile çıkarım; NVIDIA hosted API, Firebase Functions veya ücretli inference API kullanılmaz.
 - Retake, tek yüz sonucu orijinal fotoğrafa maskeli olarak birleştirir ve maske dışındaki pikseller için bütünlük kontrolü yapar.

@@ -2,7 +2,7 @@
 
 Retake, kamera kullanmayan ve yalnızca galeriden seçilen fotoğraflar üzerinde çalışan kişisel yüz düzenleme uygulamasıdır. Hedef fotoğrafta sadece seçilen yüz bölgesi değiştirilir; saç, arka plan, kıyafet, diğer insanlar ve yüz dışındaki alanlar korunur. Kimlik için aynı kişiye ait en fazla 20 referans fotoğrafı birlikte kullanılır.
 
-> **Gerçek durum:** Web sürümünde NVIDIA FLUX.1-Kontext-dev ile deneysel görsel düzenleme akışı bulunur. Bu model özel bir Face Swap modeli değildir; kimlik benzerliği garanti edilmez. Firebase sunucu fonksiyonunun ve NVIDIA erişiminin yapılandırılması gerekir. Native iOS uygulamasına aynı inference henüz bağlanmamıştır.
+> **Gerçek durum:** Web sürümündeki deneysel görsel düzenleme, kullanıcının bilgisayarında çalışan ComfyUI + FLUX.1-Kontext-dev GGUF iş akışına bağlanır. Hosted NVIDIA API veya Firebase Functions kullanılmaz. Model özel bir Face Swap modeli değildir; kimlik benzerliği garanti edilmez. Native iOS uygulamasına aynı inference henüz bağlanmamıştır.
 
 ## Kesin ürün kuralları
 
@@ -22,12 +22,12 @@ Statik web uygulaması: \`index.html\`
 - MediaPipe Face Landmarker 1.2.2 ile cihazda çoklu yüz algılama ve hedef seçimi.
 - Veritabanında önceden kayıtlı 20 referansı `GET /api/images/{id}` üzerinden otomatik ve salt okunur yükleme.
 - Referans fotoğrafları yeniden yükletilmez, IndexedDB'ye kopyalanmaz; hedef görsel yalnızca oturum belleğinde tutulur.
-- NVIDIA FLUX için tek panoda 20 referans ve seçili hedef yüz crop'u hazırlar; sonuç tarayıcıda yüz maskesiyle birleştirilir.
-- NVIDIA API anahtarı Firebase Cloud Functions Secret'ta saklanır; ön yüzde API anahtarı bulunmaz.
+- Yerel ComfyUI FLUX iş akışı için hedef yüz crop'u ve 25 referansı iki ayrı panel olarak hazırlar; bunları bilgisayardaki ComfyUI API'sine yükler ve sonucu tarayıcıda yüz maskesiyle birleştirir.
+- Görsel çıkarımı kullanıcının RTX GPU'sunda yapılır; NVIDIA hosted API anahtarı, Firebase Functions veya ücretli inference servisi kullanılmaz.
 - Koyu/açık tema ve kurulabilir Progressive Web App (PWA).
 - Uygulama kabuğu, MediaPipe WebAssembly dosyaları ve yüz modeli için servis çalışanı önbelleği. İlk açılışta internet gerekir; önbellek oluştuğunda desteklenen tarayıcılarda çevrimdışı açılış mümkündür.
 
-Hedef fotoğraf ve referans görselleri Face Swap API'sine gönderilmez. NVIDIA düzenlemesi başlatılırsa tam hedef fotoğraf değil, seçili yüz crop'u ve 20 referansın birleşik panosu NVIDIA'ya gönderilir; önce açık onay alınır. Referanslar mevcut görsel API'sinden okunur. `meta[name="retake-api-base"]` mevcut görsel API'sini, `meta[name="retake-ai-base"]` ise dağıtılmış Firebase Function URL'sini belirler. Kurulum: [docs/NVIDIA_SETUP.md](docs/NVIDIA_SETUP.md). MediaPipe yüz algılamayı cihazda çalıştırır; kütüphane ölçümleri Google'a gönderilebilir: https://goo.gle/mediapipe-privacy
+Hedef fotoğrafın tamamı gönderilmez. Açık onaydan sonra seçili yüz crop'u ve 25 referans panosu, aynı bilgisayardaki `http://127.0.0.1:8188` ComfyUI servisine aktarılır; FLUX çıkarımı yerelde yapılır. `meta[name="retake-comfy-base"]` yerel ComfyUI adresini belirler. Kurulum: [docs/LOCAL_COMFYUI_SETUP.md](docs/LOCAL_COMFYUI_SETUP.md). Referans görsellerin kaynağı ayrıca gizli tutulmalıdır; public Hosting'e eklenen fotoğraflar herkese açık olabilir. MediaPipe yüz algılamayı cihazda çalıştırır; kütüphane ölçümleri Google'a gönderilebilir: https://goo.gle/mediapipe-privacy
 
 ### Web'i çalıştırma
 

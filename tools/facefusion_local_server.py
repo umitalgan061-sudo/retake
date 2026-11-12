@@ -26,7 +26,7 @@ PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v5"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v6"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -35,16 +35,21 @@ FACE_ENHANCER_BLEND = 25
 FACE_ENHANCER_INTERNAL_BLEND = 100
 FACE_ENHANCER_WEIGHT = 0.25
 DETAIL_TRANSFER_STRENGTH = 0.20
-FACE_MATTE_FEATHER_RATIO = 0.035
-FACE_MATTE_FEATHER_MIN = 3.0
-FACE_MATTE_FEATHER_MAX = 9.0
-FACE_DETAIL_SHARPEN_RATIO = 0.008
-FACE_DETAIL_SHARPEN_STRENGTH = 0.14
+DEFAULT_TARGET_WIDTH = 784
+DEFAULT_TARGET_HEIGHT = 1024
+MIN_TARGET_EDGE = 256
+MAX_TARGET_WIDTH = 1600
+MAX_TARGET_HEIGHT = 2048
+HEAD_FIT_MIN = 0.90
+HEAD_FIT_MAX = 1.12
+# (swapper weight, lower-face detail strength, head-fit strength).
+# Head-fit strength scales the head reshape measured by the browser from the
+# 25 references: 1 = measured fit, 0 = keep the photo's own head proportions.
 FACE_SWAP_VARIATIONS = (
-    (1.00, 0.20, 0.98, 1.05),
-    (0.94, 0.24, 1.00, 1.00),
-    (0.98, 0.12, 0.97, 1.07),
-    (0.92, 0.30, 0.99, 1.03)
+    (1.00, 0.20, 1.0),
+    (0.94, 0.24, 0.0),
+    (0.98, 0.12, 1.5),
+    (0.92, 0.30, 0.5)
 )
 
 
@@ -120,39 +125,48 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     bounds = {key: float(face_bounds[key]) for key in required}
     if bounds["width"] <= 0 or bounds["height"] <= 0:
         raise ValueError("Hedef yüz sınırları pozitif genişlik ve yüksekliğe sahip olmalı.")
-    if bounds["x"] < 0 or bounds["y"] < 0 or bounds["x"] + bounds["width"] > 784 or bounds["y"] + bounds["height"] > 1024:
+    target_size = metadata.get("targetSize", {"width": DEFAULT_TARGET_WIDTH, "height": DEFAULT_TARGET_HEIGHT})
+    if (
+        not isinstance(target_size, dict)
+        or any(
+            isinstance(target_size.get(key), bool) or not isinstance(target_size.get(key), int)
+            for key in ("width", "height")
+        )
+        or not MIN_TARGET_EDGE <= target_size["width"] <= MAX_TARGET_WIDTH
+        or not MIN_TARGET_EDGE <= target_size["height"] <= MAX_TARGET_HEIGHT
+    ):
+        raise ValueError(
+            f"Hedef kırpım boyutu {MIN_TARGET_EDGE} px ile "
+            f"{MAX_TARGET_WIDTH}×{MAX_TARGET_HEIGHT} px arasında tam sayı olmalı."
+        )
+    if (
+        bounds["x"] < 0 or bounds["y"] < 0
+        or bounds["x"] + bounds["width"] > target_size["width"]
+        or bounds["y"] + bounds["height"] > target_size["height"]
+    ):
         raise ValueError("Hedef yüz sınırları, gönderilen portre kırpımının dışında.")
+    head_fit = metadata.get("headFit", {"scaleX": 1.0, "scaleY": 1.0})
+    if (
+        not isinstance(head_fit, dict)
+        or any(
+            isinstance(head_fit.get(key), bool)
+            or not isinstance(head_fit.get(key), (int, float))
+            or not math.isfinite(head_fit[key])
+            or not HEAD_FIT_MIN <= head_fit[key] <= HEAD_FIT_MAX
+            for key in ("scaleX", "scaleY")
+        )
+    ):
+        raise ValueError(f"Kafa oranı ölçekleri {HEAD_FIT_MIN} ile {HEAD_FIT_MAX} arasında sayı olmalı.")
     variation = metadata.get("variation", 0)
     if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
         raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
-    return {"referenceWeights": normalized_weights, "faceBounds": bounds, "variation": variation}
-
-
-def face_geometry_affine_matrix(
-    face_bounds: dict[str, float],
-    scale_x: float,
-    scale_y: float
-) -> list[list[float]]:
-    center_x = face_bounds["x"] + face_bounds["width"] / 2
-    center_y = face_bounds["y"] + face_bounds["height"] / 2
-    return [
-        [scale_x, 0.0, center_x * (1.0 - scale_x)],
-        [0.0, scale_y, center_y * (1.0 - scale_y)]
-    ]
-
-
-def face_matte_feather_sigma(face_width: float) -> float:
-    if (
-        isinstance(face_width, bool)
-        or not isinstance(face_width, (int, float))
-        or not math.isfinite(face_width)
-        or face_width <= 0
-    ):
-        raise ValueError("Yüz genişliği pozitif ve sonlu bir sayı olmalı.")
-    return min(
-        FACE_MATTE_FEATHER_MAX,
-        max(FACE_MATTE_FEATHER_MIN, face_width * FACE_MATTE_FEATHER_RATIO)
-    )
+    return {
+        "referenceWeights": normalized_weights,
+        "faceBounds": bounds,
+        "variation": variation,
+        "targetSize": {"width": target_size["width"], "height": target_size["height"]},
+        "headFit": {"scaleX": float(head_fit["scaleX"]), "scaleY": float(head_fit["scaleY"])}
+    }
 
 
 def validate_reference_count(reference_count: int) -> None:
@@ -424,39 +438,32 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
         raise RuntimeError("GFPGAN sonrası alfa maskeli hibrit sonuç yazılamadı.")
 
 
-def adjust_face_geometry(
+def fit_head_to_face(
     input_path: Path,
     output_path: Path,
     face_bounds: dict[str, float],
     scale_x: float,
     scale_y: float
 ) -> None:
+    """Smoothly lengthen/shorten/widen/narrow the head around the new face."""
     try:
         import cv2
-        import numpy as np
+        try:
+            from .retake_compositing import fit_head_geometry
+        except ImportError:
+            from retake_compositing import fit_head_geometry
     except Exception as error:
-        raise RuntimeError(f"Yüz oranı düzeltmesi için OpenCV/NumPy yüklenemedi: {error}") from error
-    if not 0.94 <= scale_x <= 1.02 or not 1.0 <= scale_y <= 1.08:
-        raise ValueError("Yüz oranı düzeltmesi izin verilen aralığın dışında.")
+        raise RuntimeError(f"Kafa oranı düzeltmesi için OpenCV/NumPy yüklenemedi: {error}") from error
 
     image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
     if image is None or image.ndim != 3 or image.shape[2] != 4:
-        raise RuntimeError("Yüz oranı düzeltmesi için alfa maskeli hibrit PNG okunamadı.")
-
-    height, width = image.shape[:2]
-    matrix = np.asarray(face_geometry_affine_matrix(face_bounds, scale_x, scale_y), dtype=np.float32)
-    size = (width, height)
-    color = cv2.warpAffine(
-        image[:, :, :3], matrix, size, flags=cv2.INTER_CUBIC,
-        borderMode=cv2.BORDER_REFLECT_101
-    )
-    alpha = cv2.warpAffine(
-        image[:, :, 3], matrix, size, flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT, borderValue=0
+        raise RuntimeError("Kafa oranı düzeltmesi için alfa maskeli hibrit PNG okunamadı.")
+    color, alpha = fit_head_geometry(
+        image[:, :, :3].copy(), image[:, :, 3].copy(), face_bounds, scale_x, scale_y
     )
     adjusted = cv2.merge((*cv2.split(color), alpha))
     if not cv2.imwrite(str(output_path), adjusted):
-        raise RuntimeError("Yüz oranı düzeltmesi uygulanmış PNG yazılamadı.")
+        raise RuntimeError("Kafa oranı düzeltmesi uygulanmış PNG yazılamadı.")
 
 
 def blend_lower_face(
@@ -465,11 +472,16 @@ def blend_lower_face(
     appearance_path: Path,
     output_path: Path,
     face_bounds: dict[str, float],
-    detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH
+    detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH,
+    expected_size: dict[str, int] | None = None
 ) -> None:
     try:
         import cv2
         import numpy as np
+        try:
+            from .retake_compositing import seamless_face_composite
+        except ImportError:
+            from retake_compositing import seamless_face_composite
     except Exception as error:
         raise RuntimeError(f"Alt yüz harmanlama için OpenCV/NumPy yüklenemedi: {error}") from error
 
@@ -483,6 +495,8 @@ def blend_lower_face(
         raise RuntimeError("Hedef, kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor.")
 
     height, width = identity.shape[:2]
+    if expected_size is not None and (width, height) != (expected_size["width"], expected_size["height"]):
+        raise ValueError("Hedef kırpımın gerçek boyutu bildirilen boyutla eşleşmiyor.")
     x = face_bounds["x"]
     y = face_bounds["y"]
     face_width = face_bounds["width"]
@@ -531,31 +545,12 @@ def blend_lower_face(
         )
 
     # FaceFusion has already applied its parser + occlusion masks while pasting
-    # each pass back into the target crop. Derive a final alpha matte from the
-    # actual changed pixels so the browser can preserve every unchanged source
-    # pixel byte-for-byte instead of applying a large landmark ellipse.
-    pixel_delta = np.max(cv2.absdiff(result, target), axis=2)
-    changed = np.where(pixel_delta >= 2, 255, 0).astype(np.uint8)
-    matte_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-    changed = cv2.morphologyEx(changed, cv2.MORPH_CLOSE, matte_kernel)
-    changed = cv2.dilate(changed, matte_kernel, iterations=1)
-    alpha = cv2.GaussianBlur(changed, (0, 0), face_matte_feather_sigma(face_width))
-
-    detail_sigma = max(0.8, min(2.0, face_width * FACE_DETAIL_SHARPEN_RATIO))
-    result_float = result.astype(np.float32)
-    low_frequency = cv2.GaussianBlur(result, (0, 0), detail_sigma).astype(np.float32)
-    detail = np.clip(result_float - low_frequency, -18.0, 18.0)
-    detail_core = np.clip(
-        (alpha.astype(np.float32) / 255.0 - 0.55) / 0.40,
-        0.0,
-        1.0
-    )[:, :, None]
-    result = np.clip(
-        np.rint(result_float + detail * detail_core * FACE_DETAIL_SHARPEN_STRENGTH),
-        0,
-        255
-    ).astype(np.uint8)
-    rgba = cv2.cvtColor(result, cv2.COLOR_BGR2BGRA)
+    # each pass back into the target crop. Re-blend that result into the photo
+    # without a visible border: rim tone matching (gradient domain), multi-band
+    # blending and sharpness/grain matching. The returned matte lets the
+    # browser keep every other source pixel byte-for-byte.
+    composite, alpha = seamless_face_composite(target, result, face_bounds)
+    rgba = cv2.cvtColor(composite, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 
     if not cv2.imwrite(str(output_path), rgba):
@@ -743,12 +738,16 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 final_output = temp_dir / "retake-final.png"
                 preferred_boost = self.server.face_swapper_pixel_boost  # type: ignore[attr-defined]
                 variation = metadata["variation"]
-                (
-                    face_swapper_weight,
-                    detail_transfer_strength,
-                    face_width_scale,
-                    face_height_scale
-                ) = FACE_SWAP_VARIATIONS[variation]
+                face_swapper_weight, detail_transfer_strength, head_fit_strength = (
+                    FACE_SWAP_VARIATIONS[variation]
+                )
+                head_fit = metadata["headFit"]
+                face_width_scale = min(HEAD_FIT_MAX, max(
+                    HEAD_FIT_MIN, 1.0 + (head_fit["scaleX"] - 1.0) * head_fit_strength
+                ))
+                face_height_scale = min(HEAD_FIT_MAX, max(
+                    HEAD_FIT_MIN, 1.0 + (head_fit["scaleY"] - 1.0) * head_fit_strength
+                ))
 
                 print(
                     f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
@@ -789,7 +788,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                     appearance_output,
                     hybrid_output,
                     metadata["faceBounds"],
-                    detail_transfer_strength
+                    detail_transfer_strength,
+                    metadata["targetSize"]
                 )
                 used_enhancer = bool(self.server.face_enhancer_enabled)  # type: ignore[attr-defined]
                 if used_enhancer:
@@ -802,7 +802,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 else:
                     final_output = hybrid_output
 
-                adjust_face_geometry(
+                fit_head_to_face(
                     final_output,
                     final_output,
                     metadata["faceBounds"],
@@ -830,7 +830,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self.wfile.write(result)
                 print(
                     "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
-                    f"katmanı; yüz oranı x{face_width_scale:.2f}/y{face_height_scale:.2f}; "
+                    f"katmanı; dikişsiz ton/çok bantlı birleştirme; "
+                    f"kafa oranı x{face_width_scale:.3f}/y{face_height_scale:.3f}; "
                     f"pixel boost={identity_boost}/{appearance_boost}; "
                     f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
                     flush=True

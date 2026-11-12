@@ -20,6 +20,15 @@ import {
 import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
+  estimateHeadFit,
+  getTargetRenderSize,
+  mapLandmarksFromRegion,
+  measureFaceShapeRatio,
+  rectIoU,
+  summarizeReferenceShape
+} from "./src/head-geometry.js";
+import { createStone } from "./src/stone.js";
+import {
   createReferenceSetKey,
   deleteCachedProfile,
   getCachedProfile,
@@ -29,10 +38,10 @@ import {
 const MAX_PREVIEW_EDGE = 2048;
 const MAX_REFERENCE_EDGE = 2048;
 const FACE_VARIATION_LABELS = [
-  "Biraz daha uzun",
-  "Doğal oran",
-  "Uzun ve dar",
-  "Hafif uzun"
+  "Otomatik oturtma",
+  "Fotoğraftaki kafa oranı",
+  "Güçlü oturtma",
+  "Hafif oturtma"
 ];
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const FACE_DETECTOR_MODEL_URLS = {
@@ -63,6 +72,9 @@ const elements = {
   outputPlaceholder: $("#outputPlaceholder"),
   outputMessage: $("#outputMessage"),
   outputStage: $(".output-stage"),
+  waitStage: $("#waitStage"),
+  waitTitle: $("#waitTitle"),
+  waitTimer: $("#waitTimer"),
   outputSymbol: $(".output-symbol"),
   outputTitle: $("#outputTitle"),
   outputStatus: $("#outputStatus"),
@@ -194,7 +206,7 @@ function updateSwapAvailability() {
           ? "Düzenleme için bu cihazda yerel FaceFusion servisini başlat."
           : !hasTarget
             ? "Başlamak için bir fotoğraf yükle ve değiştirilecek yüzü seç."
-            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
+            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
   }
   elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
@@ -295,12 +307,73 @@ async function loadReferenceImage(blob) {
   }
 }
 
-function detectFaces(image) {
+function faceFromLandmarks(landmarks, sourceWidth, sourceHeight) {
+  const bounds = getLandmarkBounds(landmarks);
+  if (!bounds) return null;
+  return { ...bounds, shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight) };
+}
+
+// FaceLandmarker's built-in detector is tuned for faces that fill the frame.
+// For a face the first pass missed, zoom into the region BlazeFace found and
+// run the 478-point mesh there, then map the mesh back to the full photo.
+function refineFaceInRegion(image, box, sourceWidth, sourceHeight) {
+  const centerX = (box.x + box.width / 2) * sourceWidth;
+  const centerY = (box.y + box.height / 2) * sourceHeight;
+  const side = Math.max(box.width * sourceWidth, box.height * sourceHeight) * 2.2;
+  const left = clamp(Math.round(centerX - side / 2), 0, sourceWidth - 1);
+  const top = clamp(Math.round(centerY - side / 2), 0, sourceHeight - 1);
+  const regionWidth = Math.min(sourceWidth - left, Math.round(side));
+  const regionHeight = Math.min(sourceHeight - top, Math.round(side));
+  if (regionWidth < 8 || regionHeight < 8) return null;
+
+  const zoom = clamp(640 / Math.max(regionWidth, regionHeight), 1, 4);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(regionWidth * zoom);
+  canvas.height = Math.round(regionHeight * zoom);
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, left, top, regionWidth, regionHeight, 0, 0, canvas.width, canvas.height);
+
+  const meshes = state.detector.detect(canvas).faceLandmarks || [];
+  const region = {
+    x: left / sourceWidth,
+    y: top / sourceHeight,
+    width: regionWidth / sourceWidth,
+    height: regionHeight / sourceHeight
+  };
+  return meshes
+    .map((landmarks) => faceFromLandmarks(mapLandmarksFromRegion(landmarks, region), sourceWidth, sourceHeight))
+    .filter((face) => face && rectIoU(face, box) > 0.2)
+    .sort((a, b) => rectIoU(b, box) - rectIoU(a, box))[0] || null;
+}
+
+async function detectFaces(image) {
   if (!state.detector) throw new Error("Yüz algılama motoru henüz hazır değil.");
-  const result = state.detector.detect(image);
-  return (result.faceLandmarks || [])
-    .map((landmarks) => getLandmarkBounds(landmarks))
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const faces = (state.detector.detect(image).faceLandmarks || [])
+    .map((landmarks) => faceFromLandmarks(landmarks, sourceWidth, sourceHeight))
     .filter(Boolean);
+
+  // Second pass: small, distant, turned or partly covered faces.
+  for (const range of ["full", "short"]) {
+    try {
+      const detector = await getReferenceFaceDetector(range);
+      const candidates = (detector.detect(image).detections || [])
+        .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
+        .filter((item) => item && item.confidence >= 0.5);
+      for (const candidate of candidates) {
+        if (faces.some((face) => rectIoU(face, candidate.bounds) > 0.25)) continue;
+        const refined = refineFaceInRegion(image, candidate.bounds, sourceWidth, sourceHeight);
+        if (refined && faces.some((face) => rectIoU(face, refined) > 0.25)) continue;
+        faces.push(refined || { ...candidate.bounds, shapeRatio: null });
+      }
+    } catch (error) {
+      console.info(`Ek yüz taraması (${range}) kullanılamadı.`, error);
+    }
+  }
+  return faces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 }
 
 function drawTargetPreview() {
@@ -413,7 +486,7 @@ async function setTargetPhoto(file) {
     let detectionMessage = "Yüz algılama yapılamadı.";
     if (state.detector) {
       try {
-        faces = detectFaces(loaded.image);
+        faces = await detectFaces(loaded.image);
         detectionMessage = faces.length === 0
           ? "Fotoğrafta yüz bulunamadı."
           : faces.length + " yüz algılandı.";
@@ -801,11 +874,9 @@ async function clearReferenceData() {
     : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-downscale-v4";
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-headfit-v5";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
-const FACEFUSION_TARGET_WIDTH = 784;
-const FACEFUSION_TARGET_HEIGHT = 1024;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1015,6 +1086,10 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
   return {
     canvas,
     alignedCanvas,
+    // Only the full mesh carries real forehead/chin/cheek points.
+    shapeRatio: detectionMethod === "FaceLandmarker"
+      ? measureFaceShapeRatio(detected.landmarks, sourceWidth, sourceHeight)
+      : null,
     profilePixels: quality.imageData.data,
     weight,
     quality,
@@ -1129,13 +1204,17 @@ async function buildLocalFaceFusionInputs() {
     face
   );
 
+  // Typical crops are sent pixel-for-pixel so the photo around the face is not
+  // softened by a resize round trip.
+  const targetSize = getTargetRenderSize(crop.width, crop.height);
   const targetCanvas = document.createElement("canvas");
-  targetCanvas.width = FACEFUSION_TARGET_WIDTH;
-  targetCanvas.height = FACEFUSION_TARGET_HEIGHT;
+  targetCanvas.width = targetSize.width;
+  targetCanvas.height = targetSize.height;
   const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
   if (!targetContext) throw new Error("Hedef yüz görseli oluşturulamadı.");
   targetContext.fillStyle = "#10151d";
   targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  targetContext.imageSmoothingQuality = "high";
   targetContext.drawImage(
     state.target.image,
     crop.x, crop.y, crop.width, crop.height,
@@ -1169,7 +1248,8 @@ async function buildLocalFaceFusionInputs() {
         weights: cached.weights,
         appearanceProfileBlob: cached.appearanceProfileBlob,
         validCount: cached.validCount,
-        totalWeight: cached.totalWeight
+        totalWeight: cached.totalWeight,
+        shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null
       };
       state.profileIsBuilding = false;
       updateProfileIndicator({
@@ -1239,6 +1319,11 @@ async function buildLocalFaceFusionInputs() {
         appearanceProfileBlob,
         validCount: appearance.validCount,
         totalWeight: appearance.totalWeight,
+        shapeRatio: summarizeReferenceShape(candidates.map((candidate) => ({
+          value: candidate.shapeRatio,
+          // Near-frontal, sharp references describe the face shape best.
+          weight: candidate.quality.frontalness * candidate.weight
+        }))),
         referenceDiagnostics
       };
       state.identityProfile = {
@@ -1265,12 +1350,19 @@ async function buildLocalFaceFusionInputs() {
   const profile = state.identityProfile;
   state.referenceFaceCropCount = profile.validCount;
   state.selectedReferenceCount = profile.validCount;
+  const scaleX = targetCanvas.width / crop.width;
+  const scaleY = targetCanvas.height / crop.height;
+  const faceX = clamp(crop.face.x * scaleX, 0, targetCanvas.width - 1);
+  const faceY = clamp(crop.face.y * scaleY, 0, targetCanvas.height - 1);
   const faceBounds = {
-    x: crop.face.x * FACEFUSION_TARGET_WIDTH / crop.width,
-    y: crop.face.y * FACEFUSION_TARGET_HEIGHT / crop.height,
-    width: crop.face.width * FACEFUSION_TARGET_WIDTH / crop.width,
-    height: crop.face.height * FACEFUSION_TARGET_HEIGHT / crop.height
+    x: faceX,
+    y: faceY,
+    width: Math.min(crop.face.width * scaleX, targetCanvas.width - faceX),
+    height: Math.min(crop.face.height * scaleY, targetCanvas.height - faceY)
   };
+  // Lengthen/shorten/widen/narrow the head so the reference person's face
+  // proportions sit naturally on it.
+  const headFit = estimateHeadFit(profile.shapeRatio, face.shapeRatio);
 
   return {
     targetCanvas,
@@ -1280,6 +1372,8 @@ async function buildLocalFaceFusionInputs() {
     profileCount: profile.validCount,
     totalProfileWeight: profile.totalWeight,
     faceBounds,
+    targetSize: { width: targetCanvas.width, height: targetCanvas.height },
+    headFit,
     crop
   };
 }
@@ -1351,6 +1445,52 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
   return canvasToBlob(fullCanvas);
 }
 
+const stones = { hero: null, wait: null, timer: null };
+
+function stoneColors() {
+  const style = getComputedStyle(document.documentElement);
+  const light = document.documentElement.dataset.theme === "light";
+  return { accent: style.getPropertyValue("--lime").trim(), stone: light ? "#4a4e44" : "#2c302a" };
+}
+
+function initializeStones() {
+  const heroCanvas = $("#heroStone");
+  stones.hero = createStone(heroCanvas, stoneColors());
+  if (stones.hero) {
+    heroCanvas.closest(".hero-visual")?.classList.add("has-stone");
+    stones.hero.start();
+  }
+}
+
+// While the local engine works, the stone moves into the result panel so the
+// wait is something to play with rather than a frozen screen.
+function showWaitStage(title) {
+  elements.waitTitle.textContent = title;
+  elements.waitTimer.textContent = "00:00";
+  elements.waitStage.hidden = false;
+  elements.outputStage.classList.add("is-waiting");
+  if (!stones.wait) stones.wait = createStone($("#waitStone"), stoneColors());
+  stones.wait?.setEnergy(1);
+  stones.wait?.start();
+  stones.hero?.setEnergy(1);
+  const startedAt = Date.now();
+  window.clearInterval(stones.timer);
+  stones.timer = window.setInterval(() => {
+    const seconds = Math.floor((Date.now() - startedAt) / 1000);
+    elements.waitTimer.textContent =
+      String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
+  }, 500);
+}
+
+function hideWaitStage() {
+  window.clearInterval(stones.timer);
+  stones.timer = null;
+  elements.waitStage.hidden = true;
+  elements.outputStage.classList.remove("is-waiting");
+  stones.wait?.stop();
+  stones.hero?.setEnergy(0);
+}
+
 async function runFaceFusionEdit() {
   if (state.isSwapping) return;
   if (!state.faceFusionStatus.configured) {
@@ -1384,6 +1524,8 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
+  showWaitStage(state.result ? "Yeni görünüm hazırlanıyor" : "Yüzün bilgisayarında işleniyor");
+
   let generatedUrl = null;
   try {
     const base = localFaceFusionBase();
@@ -1393,6 +1535,8 @@ async function runFaceFusionEdit() {
       referenceWeights,
       appearanceProfileBlob,
       faceBounds,
+      targetSize,
+      headFit,
       crop
     } = await buildLocalFaceFusionInputs();
     const targetBlob = await canvasToBlob(targetCanvas);
@@ -1403,7 +1547,7 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, variation }));
+    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, targetSize, headFit, variation }));
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
@@ -1440,8 +1584,8 @@ async function runFaceFusionEdit() {
     elements.outputTitle.textContent = "Son görünüm";
     elements.outputStatus.textContent = FACE_VARIATION_LABELS[variationIndex];
     elements.downloadButton.disabled = false;
-    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
-    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]} yüz oranı.`);
+    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
+    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}.`);
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;
@@ -1470,6 +1614,7 @@ async function runFaceFusionEdit() {
     setRuntimeStatus("FaceFusion · hata");
   } finally {
     if (generatedUrl) URL.revokeObjectURL(generatedUrl);
+    hideWaitStage();
     state.isSwapping = false;
     updateSwapAvailability();
   }
@@ -1512,7 +1657,7 @@ async function initializeDetector() {
     elements.engineDescription.textContent =
       "MediaPipe yüzleri tarayıcıda algılar. Kimlik aktarımı, bilgisayarındaki CUDA destekli FaceFusion modeliyle yapılır.";
     if (state.target) {
-      state.target.faces = detectFaces(state.target.image);
+      state.target.faces = await detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
       clearResult();
       elements.targetMeta.textContent =
@@ -1566,6 +1711,8 @@ function toggleTheme() {
     // Theme still changes for this session.
   }
   updateThemeButton();
+  stones.hero?.setColors(stoneColors());
+  stones.wait?.setColors(stoneColors());
 }
 
 function initializeInteractions() {
@@ -1666,6 +1813,7 @@ function initializeInteractions() {
 async function initializeApp() {
   initializeTheme();
   initializeInteractions();
+  initializeStones();
 
   await Promise.allSettled([
     loadLocalReferences(),

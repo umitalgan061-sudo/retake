@@ -51,6 +51,7 @@
         </div>
         <div class="hero-visual" aria-hidden="true">
           <div class="sculpture-scene">
+            <canvas id="heroStone" class="stone-canvas"></canvas>
             <span class="sculpture-halo sculpture-halo-one"></span>
             <span class="sculpture-halo sculpture-halo-two"></span>
             <span class="liquid-stone stone-large"></span>
@@ -60,7 +61,7 @@
             <span class="sculpture-glint glint-one"></span>
             <span class="sculpture-glint glint-two"></span>
           </div>
-          <div class="hero-visual-caption"><span>FORM / 01</span><span>AKIŞTAKİ FORM</span></div>
+          <div class="hero-visual-caption"><span>FORM / 01</span><span>SÜRÜKLE · DÖNDÜR</span></div>
         </div>
       </section>
 
@@ -112,6 +113,14 @@
             <div class="output-stage">
               <div class="result-grid-texture" aria-hidden="true"></div>
               <div class="output-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 8c-9.5 0-17.2 7.7-17.2 17.2S22.5 42.4 32 42.4s17.2-7.7 17.2-17.2S41.5 8 32 8Z"/><path d="M8.5 56c3.8-8.5 12.4-13.6 23.5-13.6S51.7 47.5 55.5 56"/><path d="m43 12 3.5-5M52 23h5"/></svg></div>
+              <div id="waitStage" class="wait-stage" hidden>
+                <canvas id="waitStone" class="stone-canvas" aria-hidden="true"></canvas>
+                <div class="wait-copy" role="status" aria-live="polite">
+                  <strong id="waitTitle">Yüzün bilgisayarında işleniyor</strong>
+                  <span id="waitTimer" class="wait-timer">00:00</span>
+                  <p>Doğal bir sonuç için işlem birkaç dakika sürebilir. Beklerken taşı sürükleyip döndürebilirsin.</p>
+                </div>
+              </div>
               <img id="resultImage" class="result-image" alt="Retake ile düzenlenmiş sonuç fotoğrafı" hidden>
               <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p><span class="stage-caption">YEREL SONUÇ</span></span>
             </div>
@@ -124,7 +133,7 @@
               <span class="button-copy">Yüzümü uygula</span><span class="button-state">Hazırlanıyor</span>
             </button>
             <button id="downloadButton" class="download-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg> Sonucu indir</button>
-            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.</p>
+            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.</p>
           </section>
 
           <details class="profile-details">

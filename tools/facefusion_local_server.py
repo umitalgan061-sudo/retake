@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import math
+import secrets
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 from email.parser import BytesParser
 from email import policy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +27,16 @@ MAX_FILE_BYTES = 25 * 1024 * 1024
 MAX_REQUEST_BYTES = 180 * 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 INFERENCE_LOCK = threading.Lock()
+JOBS_LOCK = threading.Lock()
+JOBS: dict[str, dict[str, Any]] = {}
+MAX_KEPT_JOBS = 3
+JOB_STAGES = (
+    "25 referans ArcFace ile karşılaştırılıyor",
+    "Kimlik geçişi (AlphaFace)",
+    "Görünüm ve sakal geçişi (UniFace)",
+    "Dikişsiz birleştirme ve kafa oranı",
+)
+PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v6"
@@ -557,6 +570,207 @@ def blend_lower_face(
         raise RuntimeError("Hibrit yüz sonucu ve semantik alfa maskesi diske yazılamadı.")
 
 
+def process_swap(
+    facefusion_dir: Path,
+    pixel_boost: str,
+    enhancer_enabled: bool,
+    parsed: tuple,
+    progress
+) -> tuple[bytes, dict[str, str]]:
+    """Run the full hybrid pipeline for one parsed request."""
+    (
+        target_bytes, reference_bytes, target_ext, reference_exts,
+        appearance_bytes, appearance_ext, metadata
+    ) = parsed
+    with tempfile.TemporaryDirectory(prefix="retake-hybrid-profile-") as temp_name:
+        temp_dir = Path(temp_name)
+        target_path = temp_dir / ("target" + target_ext)
+        target_path.write_bytes(target_bytes)
+        appearance_path = temp_dir / ("appearance-profile" + appearance_ext)
+        appearance_path.write_bytes(appearance_bytes)
+
+        reference_paths: list[Path] = []
+        for index, (payload, extension) in enumerate(zip(reference_bytes, reference_exts), start=1):
+            source_path = temp_dir / f"reference-{index:02d}{extension}"
+            source_path.write_bytes(payload)
+            reference_paths.append(source_path)
+
+        progress(0)
+        identity_report = verify_reference_identity(facefusion_dir, reference_paths)
+        outlier_indices = [int(index) for index in identity_report.get("outlier_indices", [])]
+        weights: list[int] = list(metadata["referenceWeights"])
+        for outlier_index in outlier_indices:
+            if 0 <= outlier_index < len(weights):
+                weights[outlier_index] = 1
+        outlier_names = identity_report.get("outlier_files", [])
+        print(
+            "ArcFace 25 referans kontrolü: "
+            f"medyan cosine={identity_report.get('median_similarity')}; "
+            f"inceleme gerektiren fotoğraf={outlier_names or 'yok'}. "
+            "Aykırı referanslar çıkarılmadı; kimlik ağırlıkları 1 oya indirildi.",
+            flush=True
+        )
+        # Repeating paths makes FaceFusion's source-face embedding mean
+        # quality-weighted. Every reference remains in the profile and
+        # every accepted reference receives at least one identity vote.
+        weighted_identity_paths = [
+            path
+            for path, weight in zip(reference_paths, weights)
+            for _ in range(weight)
+        ]
+        identity_output = temp_dir / "retake-identity-alpha.png"
+        appearance_output = temp_dir / "retake-appearance-uniface.png"
+        hybrid_output = temp_dir / "retake-hybrid-profile.png"
+        enhanced_output = temp_dir / "retake-gfpgan.png"
+        final_output = temp_dir / "retake-final.png"
+        preferred_boost = pixel_boost
+        variation = metadata["variation"]
+        face_swapper_weight, detail_transfer_strength, head_fit_strength = (
+            FACE_SWAP_VARIATIONS[variation]
+        )
+        head_fit = metadata["headFit"]
+        face_width_scale = min(HEAD_FIT_MAX, max(
+            HEAD_FIT_MIN, 1.0 + (head_fit["scaleX"] - 1.0) * head_fit_strength
+        ))
+        face_height_scale = min(HEAD_FIT_MAX, max(
+            HEAD_FIT_MIN, 1.0 + (head_fit["scaleY"] - 1.0) * head_fit_strength
+        ))
+
+        print(
+            f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
+            f"görünüm profili={len(reference_paths)} hizalanmış fotoğraf.",
+            flush=True
+        )
+        print(
+            f"1/2 kimlik geçişi: {IDENTITY_MODEL}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
+            f"hedef=1 fotoğraf; tercih edilen pixel boost={preferred_boost}.",
+            flush=True
+        )
+
+        progress(1)
+        identity_boost = run_with_memory_fallback(
+            facefusion_dir,
+            target_path,
+            weighted_identity_paths,
+            identity_output,
+            IDENTITY_MODEL,
+            preferred_boost,
+            face_swapper_weight
+        )
+        print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
+
+        progress(2)
+        appearance_boost = run_with_memory_fallback(
+            facefusion_dir,
+            target_path,
+            [appearance_path],
+            appearance_output,
+            APPEARANCE_MODEL,
+            preferred_boost,
+            face_swapper_weight
+        )
+        print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
+
+        progress(3)
+        blend_lower_face(
+            target_path,
+            identity_output,
+            appearance_output,
+            hybrid_output,
+            metadata["faceBounds"],
+            detail_transfer_strength,
+            metadata["targetSize"]
+        )
+        used_enhancer = bool(enhancer_enabled)
+        if used_enhancer:
+            print(
+                f"İsteğe bağlı son aşama: {FACE_ENHANCER_MODEL}, blend={FACE_ENHANCER_BLEND}%.",
+                flush=True
+            )
+            run_face_enhancer(facefusion_dir, hybrid_output, reference_paths, enhanced_output)
+            blend_enhanced_hybrid_output(hybrid_output, enhanced_output, final_output)
+        else:
+            final_output = hybrid_output
+
+        fit_head_to_face(
+            final_output,
+            final_output,
+            metadata["faceBounds"],
+            face_width_scale,
+            face_height_scale
+        )
+        result = final_output.read_bytes()
+        headers = {
+            "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
+            "X-Retake-Identity-Outliers": ",".join(str(index + 1) for index in outlier_indices),
+            "X-Retake-Pixel-Boost": f"{identity_boost},{appearance_boost}",
+            "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
+            "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
+            "X-Retake-Variation": str(variation)
+        }
+        print(
+            "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
+            f"katmanı; dikişsiz ton/çok bantlı birleştirme; "
+            f"kafa oranı x{face_width_scale:.3f}/y{face_height_scale:.3f}; "
+            f"pixel boost={identity_boost}/{appearance_boost}; "
+            f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
+            flush=True
+        )
+        return result, headers
+
+
+def _swap_error(error: Exception) -> tuple[int, str]:
+    if isinstance(error, IdentityConflictError):
+        print(f"[Retake ArcFace] Referans kimlik tutarsızlığı: {error}", flush=True)
+        return 422, str(error)
+    if isinstance(error, IdentityVerificationError):
+        print(f"[Retake ArcFace] Ön kontrol başarısız: {error}", flush=True)
+        return 503, f"ArcFace kimlik kontrolü yapılamadı: {error}"
+    if isinstance(error, NoOpSwapError):
+        return 422, str(error)
+    if isinstance(error, ValueError):
+        return 400, str(error)
+    return 500, f"Yerel Retake hibrit profil işlemi başarısız: {error}"
+
+
+def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
+    """Worker thread: long swaps must not depend on one open HTTP response
+    (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
+    def progress(step: int) -> None:
+        job["step"] = step
+        job["stage"] = JOB_STAGES[step]
+
+    try:
+        job["status"] = "running"
+        result, headers = process_swap(
+            server.facefusion_dir, server.face_swapper_pixel_boost,
+            server.face_enhancer_enabled, parsed, progress
+        )
+        job["result"] = result
+        job["headers"] = headers
+        job["step"] = len(JOB_STAGES)
+        job["stage"] = "Tamamlandı"
+        job["status"] = "done"
+    except Exception as error:  # reported to the client through the job
+        job["http_status"], job["error"] = _swap_error(error)
+        job["status"] = "error"
+    finally:
+        job["finished"] = time.time()
+        INFERENCE_LOCK.release()
+
+
+def create_job() -> dict[str, Any]:
+    job: dict[str, Any] = {
+        "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
+        "stage": JOB_STAGES[0], "created": time.time()
+    }
+    with JOBS_LOCK:
+        JOBS[job["id"]] = job
+        for stale in sorted(JOBS.values(), key=lambda item: item["created"])[:-MAX_KEPT_JOBS]:
+            JOBS.pop(stale["id"], None)
+    return job
+
+
 class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
     server_version = "RetakeFaceFusion/2.0"
 
@@ -571,10 +785,27 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
     def facefusion_dir(self) -> Path:
         return self.server.facefusion_dir  # type: ignore[attr-defined]
 
-    def _host_allowed(self) -> bool:
+    def _is_loopback_host(self) -> bool:
         host = (self.headers.get("Host") or "").lower()
         port = self.server.server_port
         return host in {f"127.0.0.1:{port}", f"localhost:{port}"}
+
+    def _host_allowed(self) -> bool:
+        # Without pairing the service only answers requests addressed to
+        # loopback. With pairing (phone / PWA through an HTTPS tunnel that
+        # connects to loopback) any Host is accepted, but every request must
+        # then carry the pairing code — see _paired().
+        return self._is_loopback_host() or bool(self.server.pairing_token)  # type: ignore[attr-defined]
+
+    def _paired(self) -> bool:
+        token = self.server.pairing_token  # type: ignore[attr-defined]
+        if not token:
+            return True
+        supplied = self.headers.get(PAIRING_HEADER) or ""
+        if hmac.compare_digest(supplied.encode("utf-8"), token.encode("utf-8")):
+            return True
+        time.sleep(0.5)  # slow down guessing
+        return False
 
     def _origin_allowed(self, required: bool = False) -> bool:
         origin = self.headers.get("Origin")
@@ -588,7 +819,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             self.send_header("Access-Control-Allow-Origin", origin)
             self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", f"Content-Type, {PAIRING_HEADER}")
+        self.send_header("Access-Control-Max-Age", "600")
         self.send_header(
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
@@ -619,6 +851,15 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         if not self._host_allowed() or not self._origin_allowed():
             self._send_json(403, {"ok": False, "error": "Origin veya Host izinli değil."})
+            return
+        if not self._paired():
+            self._send_json(401, {
+                "ok": False, "pairing_required": True,
+                "error": "Eşleştirme kodu gerekli veya hatalı."
+            })
+            return
+        if self.path.startswith("/api/jobs/"):
+            self._send_job(self.path[len("/api/jobs/"):])
             return
         if self.path != "/health":
             self._send_json(404, {"ok": False, "error": "Uç nokta bulunamadı."})
@@ -651,15 +892,55 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "face_occluder_model": FACE_OCCLUDER_MODEL,
             "face_mask_regions": list(FACE_MASK_REGIONS),
             "profile_references": MAX_REFERENCES,
+            "async_jobs": True,
+            "paired": bool(self.server.pairing_token),  # type: ignore[attr-defined]
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
             "provider_error": provider_error,
             "error": None if script.is_file() else f"FaceFusion dosyası bulunamadı: {script}"
         })
 
+    def _send_job(self, tail_path: str) -> None:
+        job_id, _, action = tail_path.partition("/")
+        with JOBS_LOCK:
+            job = JOBS.get(job_id)
+        if job is None or action not in {"", "result"}:
+            self._send_json(404, {"ok": False, "error": "İş bulunamadı veya süresi doldu."})
+            return
+        if action == "":
+            self._send_json(200, {
+                "ok": job["status"] != "error",
+                "status": job["status"],
+                "step": job["step"],
+                "total": len(JOB_STAGES),
+                "stage": job["stage"],
+                "elapsed": round((job.get("finished") or time.time()) - job["created"], 1),
+                "error": job.get("error"),
+                "http_status": job.get("http_status")
+            })
+            return
+        if job["status"] != "done":
+            self._send_json(409, {"ok": False, "error": "Sonuç henüz hazır değil."})
+            return
+        result = job["result"]
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(result)))
+        for name, value in job["headers"].items():
+            self.send_header(name, value)
+        self._cors_headers()
+        self.end_headers()
+        self.wfile.write(result)
+
     def do_POST(self) -> None:
         if not self._host_allowed() or not self._origin_allowed(required=True):
             self._send_json(403, {"ok": False, "error": "Bu web kaynağından gelen isteğe izin verilmiyor."})
+            return
+        if not self._paired():
+            self._send_json(401, {
+                "ok": False, "pairing_required": True,
+                "error": "Eşleştirme kodu gerekli veya hatalı."
+            })
             return
         if self.path != "/api/face-swap":
             self._send_json(404, {"ok": False, "error": "Uç nokta bulunamadı."})
@@ -668,6 +949,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             self._send_json(409, {"ok": False, "error": "Retake şu anda başka bir fotoğrafı işliyor."})
             return
 
+        started = False
         try:
             length_header = self.headers.get("Content-Length")
             if not length_header or not length_header.isdigit():
@@ -682,176 +964,27 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self._send_json(415, {"ok": False, "error": "multipart/form-data gerekli."})
                 return
 
-            body = self.rfile.read(content_length)
-            (
-                target_bytes,
-                reference_bytes,
-                target_ext,
-                reference_exts,
-                appearance_bytes,
-                appearance_ext,
-                metadata
-            ) = parse_multipart(content_type, body)
+            parsed = parse_multipart(content_type, self.rfile.read(content_length))
             if not (self.facefusion_dir / "facefusion.py").is_file():
                 self._send_json(503, {"ok": False, "error": "FaceFusion kurulumu bulunamadı. Kurulum betiğini çalıştır."})
                 return
 
-            with tempfile.TemporaryDirectory(prefix="retake-hybrid-profile-") as temp_name:
-                temp_dir = Path(temp_name)
-                target_path = temp_dir / ("target" + target_ext)
-                target_path.write_bytes(target_bytes)
-                appearance_path = temp_dir / ("appearance-profile" + appearance_ext)
-                appearance_path.write_bytes(appearance_bytes)
-
-                reference_paths: list[Path] = []
-                for index, (payload, extension) in enumerate(zip(reference_bytes, reference_exts), start=1):
-                    source_path = temp_dir / f"reference-{index:02d}{extension}"
-                    source_path.write_bytes(payload)
-                    reference_paths.append(source_path)
-
-                identity_report = verify_reference_identity(self.facefusion_dir, reference_paths)
-                outlier_indices = [int(index) for index in identity_report.get("outlier_indices", [])]
-                weights: list[int] = list(metadata["referenceWeights"])
-                for outlier_index in outlier_indices:
-                    if 0 <= outlier_index < len(weights):
-                        weights[outlier_index] = 1
-                outlier_names = identity_report.get("outlier_files", [])
-                print(
-                    "ArcFace 25 referans kontrolü: "
-                    f"medyan cosine={identity_report.get('median_similarity')}; "
-                    f"inceleme gerektiren fotoğraf={outlier_names or 'yok'}. "
-                    "Aykırı referanslar çıkarılmadı; kimlik ağırlıkları 1 oya indirildi.",
-                    flush=True
-                )
-                # Repeating paths makes FaceFusion's source-face embedding mean
-                # quality-weighted. Every reference remains in the profile and
-                # every accepted reference receives at least one identity vote.
-                weighted_identity_paths = [
-                    path
-                    for path, weight in zip(reference_paths, weights)
-                    for _ in range(weight)
-                ]
-                identity_output = temp_dir / "retake-identity-alpha.png"
-                appearance_output = temp_dir / "retake-appearance-uniface.png"
-                hybrid_output = temp_dir / "retake-hybrid-profile.png"
-                enhanced_output = temp_dir / "retake-gfpgan.png"
-                final_output = temp_dir / "retake-final.png"
-                preferred_boost = self.server.face_swapper_pixel_boost  # type: ignore[attr-defined]
-                variation = metadata["variation"]
-                face_swapper_weight, detail_transfer_strength, head_fit_strength = (
-                    FACE_SWAP_VARIATIONS[variation]
-                )
-                head_fit = metadata["headFit"]
-                face_width_scale = min(HEAD_FIT_MAX, max(
-                    HEAD_FIT_MIN, 1.0 + (head_fit["scaleX"] - 1.0) * head_fit_strength
-                ))
-                face_height_scale = min(HEAD_FIT_MAX, max(
-                    HEAD_FIT_MIN, 1.0 + (head_fit["scaleY"] - 1.0) * head_fit_strength
-                ))
-
-                print(
-                    f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
-                    f"görünüm profili={len(reference_paths)} hizalanmış fotoğraf.",
-                    flush=True
-                )
-                print(
-                    f"1/2 kimlik geçişi: {IDENTITY_MODEL}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
-                    f"hedef=1 fotoğraf; tercih edilen pixel boost={preferred_boost}.",
-                    flush=True
-                )
-
-                identity_boost = run_with_memory_fallback(
-                    self.facefusion_dir,
-                    target_path,
-                    weighted_identity_paths,
-                    identity_output,
-                    IDENTITY_MODEL,
-                    preferred_boost,
-                    face_swapper_weight
-                )
-                print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
-
-                appearance_boost = run_with_memory_fallback(
-                    self.facefusion_dir,
-                    target_path,
-                    [appearance_path],
-                    appearance_output,
-                    APPEARANCE_MODEL,
-                    preferred_boost,
-                    face_swapper_weight
-                )
-                print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
-
-                blend_lower_face(
-                    target_path,
-                    identity_output,
-                    appearance_output,
-                    hybrid_output,
-                    metadata["faceBounds"],
-                    detail_transfer_strength,
-                    metadata["targetSize"]
-                )
-                used_enhancer = bool(self.server.face_enhancer_enabled)  # type: ignore[attr-defined]
-                if used_enhancer:
-                    print(
-                        f"İsteğe bağlı son aşama: {FACE_ENHANCER_MODEL}, blend={FACE_ENHANCER_BLEND}%.",
-                        flush=True
-                    )
-                    run_face_enhancer(self.facefusion_dir, hybrid_output, reference_paths, enhanced_output)
-                    blend_enhanced_hybrid_output(hybrid_output, enhanced_output, final_output)
-                else:
-                    final_output = hybrid_output
-
-                fit_head_to_face(
-                    final_output,
-                    final_output,
-                    metadata["faceBounds"],
-                    face_width_scale,
-                    face_height_scale
-                )
-                result = final_output.read_bytes()
-                self.send_response(200)
-                self.send_header("Content-Type", "image/png")
-                self.send_header("Content-Length", str(len(result)))
-                self.send_header(
-                    "X-Retake-Identity-Median-Similarity",
-                    str(identity_report.get("median_similarity", ""))
-                )
-                self.send_header(
-                    "X-Retake-Identity-Outliers",
-                    ",".join(str(index + 1) for index in outlier_indices)
-                )
-                self.send_header("X-Retake-Pixel-Boost", f"{identity_boost},{appearance_boost}")
-                self.send_header("X-Retake-Face-Enhancer", FACE_ENHANCER_MODEL if used_enhancer else "off")
-                self.send_header("X-Retake-Identity-Weighted-Votes", str(len(weighted_identity_paths)))
-                self.send_header("X-Retake-Variation", str(variation))
-                self._cors_headers()
-                self.end_headers()
-                self.wfile.write(result)
-                print(
-                    "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
-                    f"katmanı; dikişsiz ton/çok bantlı birleştirme; "
-                    f"kafa oranı x{face_width_scale:.3f}/y{face_height_scale:.3f}; "
-                    f"pixel boost={identity_boost}/{appearance_boost}; "
-                    f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
-                    flush=True
-                )
-        except IdentityConflictError as error:
-            print(f"[Retake ArcFace] Referans kimlik tutarsızlığı: {error}", flush=True)
-            self._send_json(422, {"ok": False, "error": str(error)})
-        except IdentityVerificationError as error:
-            print(f"[Retake ArcFace] Ön kontrol başarısız: {error}", flush=True)
-            self._send_json(503, {"ok": False, "error": f"ArcFace kimlik kontrolü yapılamadı: {error}"})
-        except NoOpSwapError as error:
-            self._send_json(422, {"ok": False, "error": str(error)})
+            job = create_job()
+            threading.Thread(
+                target=run_job, args=(job, self.server, parsed), daemon=True,
+                name=f"retake-job-{job['id'][:6]}"
+            ).start()
+            started = True  # the worker thread now owns INFERENCE_LOCK
+            self._send_json(202, {"ok": True, "job_id": job["id"], "total": len(JOB_STAGES)})
         except ValueError as error:
             self._send_json(400, {"ok": False, "error": str(error)})
         except (BrokenPipeError, ConnectionResetError):
             print("İstemci bağlantıyı kapattı.", flush=True)
         except Exception as error:
-            self._send_json(500, {"ok": False, "error": f"Yerel Retake hibrit profil işlemi başarısız: {error}"})
+            self._send_json(500, {"ok": False, "error": f"Yerel Retake isteği işlenemedi: {error}"})
         finally:
-            INFERENCE_LOCK.release()
+            if not started:
+                INFERENCE_LOCK.release()
 
 
 def parse_args() -> argparse.Namespace:
@@ -870,8 +1003,34 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="İsteğe bağlı GFPGAN 1.4 son aşamasını %25 karışımla etkinleştir."
     )
+    parser.add_argument(
+        "--enable-pairing",
+        action="store_true",
+        help="Telefon/PWA erişimi için eşleştirme kodunu zorunlu kıl (HTTPS tünel ile kullanılır)."
+    )
+    parser.add_argument(
+        "--pairing-token-file", type=Path, default=Path.home() / ".retake" / "pairing-token",
+        help="Eşleştirme kodunun saklandığı dosya; yoksa oluşturulur."
+    )
     parser.add_argument("--origin", action="append", default=[], help="İzin verilen web origin'i; birden çok kez verilebilir.")
     return parser.parse_args()
+
+
+def load_pairing_token(path: Path) -> str:
+    """Read the pairing code, creating a random one on first use."""
+    path = path.expanduser()
+    if path.is_file():
+        token = path.read_text(encoding="utf-8").strip()
+        if len(token) >= 16:
+            return token
+    token = secrets.token_urlsafe(18)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    return token
 
 
 def main() -> int:
@@ -894,13 +1053,23 @@ def main() -> int:
     server.facefusion_dir = facefusion_dir  # type: ignore[attr-defined]
     server.face_swapper_pixel_boost = args.face_swapper_pixel_boost  # type: ignore[attr-defined]
     server.face_enhancer_enabled = args.enable_face_enhancer  # type: ignore[attr-defined]
+    server.pairing_token = load_pairing_token(args.pairing_token_file) if args.enable_pairing else ""  # type: ignore[attr-defined]
     print(
         f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
         f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "
         f"GFPGAN={'on' if args.enable_face_enhancer else 'off'})",
         flush=True
     )
-    print("Yalnızca loopback; dış ağ erişimi kapalı.", flush=True)
+    print("Servis yalnızca loopback adresini dinler.", flush=True)
+    if server.pairing_token:  # type: ignore[attr-defined]
+        print(
+            "Telefon/PWA eşleştirmesi AÇIK. Bu bilgisayara bir HTTPS tünel aç "
+            f"(ör. cloudflared tunnel --url http://127.0.0.1:{args.port}) ve Retake'te "
+            "'Motor bağlantısı' bölümüne tünel adresi ile şu kodu gir:",
+            flush=True
+        )
+        print(f"    EŞLEŞTİRME KODU: {server.pairing_token}", flush=True)  # type: ignore[attr-defined]
+        print("Kodu bilen herkes bu motoru kullanabilir; paylaşma.", flush=True)
     print("İzinli web origin'leri: " + ", ".join(sorted(origins)), flush=True)
     try:
         server.serve_forever()

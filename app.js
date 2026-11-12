@@ -29,6 +29,14 @@ import {
 } from "./src/head-geometry.js";
 import { createStone } from "./src/stone.js";
 import {
+  DEFAULT_ENGINE_ORIGIN,
+  engineHeaders,
+  formatElapsed,
+  loadEngineSettings,
+  resolveEngineSettings,
+  saveEngineSettings
+} from "./src/engine.js";
+import {
   createReferenceSetKey,
   deleteCachedProfile,
   getCachedProfile,
@@ -69,6 +77,25 @@ const elements = {
   swapButton: $("#swapButton"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
+  resultView: $("#resultView"),
+  originalImage: $("#originalImage"),
+  resultTools: $("#resultTools"),
+  compareRange: $("#compareRange"),
+  strengthRange: $("#strengthRange"),
+  strengthValue: $("#strengthValue"),
+  historyStrip: $("#historyStrip"),
+  historyCount: $("#historyCount"),
+  exportFormat: $("#exportFormat"),
+  shareButton: $("#shareButton"),
+  waitProgress: $("#waitProgress"),
+  waitStep: $("#waitStep"),
+  engineDetails: $("#engineDetails"),
+  engineSummary: $("#engineSummary"),
+  engineForm: $("#engineForm"),
+  engineAddress: $("#engineAddress"),
+  engineToken: $("#engineToken"),
+  engineReset: $("#engineResetButton"),
+  engineFormStatus: $("#engineFormStatus"),
   outputPlaceholder: $("#outputPlaceholder"),
   outputMessage: $("#outputMessage"),
   outputStage: $(".output-stage"),
@@ -123,6 +150,8 @@ const state = {
   isSwapping: false,
   nextVariation: 0,
   result: null,
+  results: [],
+  engine: { origin: DEFAULT_ENGINE_ORIGIN, remote: false, token: "" },
   toastTimer: null,
   dialogResolve: null,
   installPrompt: null
@@ -170,16 +199,15 @@ function updateProfileIndicator({ title, detail, progress, status = "loading" } 
 }
 
 function localFaceFusionBase() {
-  const configured = document.querySelector('meta[name="retake-facefusion-base"]')?.content?.trim();
-  const value = configured || "http://127.0.0.1:8765";
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname)
-      ? parsed.origin.replace(/\/+$/, "")
-      : "";
-  } catch {
-    return "";
-  }
+  return state.engine.origin;
+}
+
+function engineFetch(path, options = {}) {
+  return fetch(state.engine.origin + path, {
+    cache: "no-store",
+    ...options,
+    headers: engineHeaders(state.engine, options.headers || {})
+  });
 }
 
 function updateSwapAvailability() {
@@ -191,6 +219,7 @@ function updateSwapAvailability() {
     !state.targetLoading && !state.referencesLoading && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
+  elements.shareButton.disabled = !state.result || state.isSwapping;
   const copy = elements.swapButton.querySelector(".button-copy");
   if (copy) copy.textContent = state.result ? "Yeniden oluştur" : "Yüzümü uygula";
   const tag = elements.swapButton.querySelector(".button-state");
@@ -222,12 +251,11 @@ async function checkFaceFusionStatus() {
     state.faceFusionStatus = { checked: true, configured: false, message: "Yerel FaceFusion adresi geçersiz." };
   } else {
     try {
-      const response = await fetch(base + "/health", {
-        method: "GET",
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
+      const response = await engineFetch("/health", { headers: { Accept: "application/json" } });
       const health = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        throw new Error("Eşleştirme kodu gerekli veya hatalı. Motor bağlantısı bölümünden kodu gir.");
+      }
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       state.faceFusionStatus = {
@@ -242,7 +270,11 @@ async function checkFaceFusionStatus() {
       state.faceFusionStatus = {
         checked: true,
         configured: false,
-        message: detail.includes("Failed to fetch") || detail.includes("NetworkError")
+        message: (detail.includes("Failed to fetch") || detail.includes("NetworkError") || detail.includes("Load failed")) && state.engine.remote
+          ? "Eşleştirilen motora ulaşılamadı. Bilgisayardaki motorun ve tünelin açık olduğunu, adresin güncel olduğunu kontrol et."
+          : (detail.includes("Failed to fetch") || detail.includes("NetworkError") || detail.includes("Load failed")) && isLikelyMobile()
+          ? "Bu cihazda motor yok. Telefondan kullanmak için aşağıdaki Motor bağlantısı bölümünden bilgisayarındaki motoru eşleştir."
+          : detail.includes("Failed to fetch") || detail.includes("NetworkError")
           ? "127.0.0.1:8765 bağlantısı kurulamadı. tools\\start_facefusion_retake.ps1 dosyasını çalıştır; tarayıcı yerel ağ izni sorarsa izin ver."
           : detail
       };
@@ -250,10 +282,19 @@ async function checkFaceFusionStatus() {
   }
 
   const connectionLabel = $("#topConnectionText");
-  if (connectionLabel) connectionLabel.textContent = state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI";
+  if (connectionLabel) {
+    connectionLabel.textContent = state.engine.remote
+      ? (state.faceFusionStatus.configured ? "EŞLEŞEN MOTOR HAZIR" : "EŞLEŞEN MOTOR ÇEVRİMDIŞI")
+      : (state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI");
+  }
+  elements.engineSummary.textContent = state.engine.remote
+    ? (state.faceFusionStatus.configured ? "Eşleşti" : "Bağlanamadı")
+    : "Bu bilgisayar";
   if (state.faceFusionStatus.configured) {
     elements.engineTitle.textContent = "Yerel düzenleme hazır";
-    elements.engineDescription.textContent = "Yüz dönüşümü bu cihazdaki FaceFusion motorunda çalışır.";
+    elements.engineDescription.textContent = state.engine.remote
+      ? "Yüz dönüşümü, şifreli tünelle eşleştirdiğin bilgisayarındaki FaceFusion motorunda çalışır."
+      : "Yüz dönüşümü bu cihazdaki FaceFusion motorunda çalışır.";
   } else {
     elements.engineTitle.textContent = "Yerel düzenleme motoru çevrimdışı";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
@@ -432,10 +473,14 @@ function renderFaceChips() {
 }
 
 function clearResult() {
-  if (state.result?.url) URL.revokeObjectURL(state.result.url);
+  state.results.forEach((item) => URL.revokeObjectURL(item.url));
+  state.results = [];
   state.result = null;
-  elements.resultImage.hidden = true;
+  elements.resultView.hidden = true;
+  elements.resultTools.hidden = true;
   elements.resultImage.removeAttribute("src");
+  elements.originalImage.removeAttribute("src");
+  elements.historyStrip.replaceChildren();
   elements.outputPlaceholder.hidden = false;
   elements.outputStage.classList.remove("has-result");
   elements.outputSymbol.hidden = false;
@@ -443,6 +488,106 @@ function clearResult() {
   elements.outputStatus.textContent = "Beklemede";
   elements.outputMessage.textContent = "Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.";
   updateSwapAvailability();
+}
+
+const MAX_RESULT_HISTORY = 6;
+
+function resultStrength() {
+  return Number(elements.strengthRange.value) / 100;
+}
+
+function updateResultView() {
+  const split = Number(elements.compareRange.value);
+  elements.resultView.style.setProperty("--split", split + "%");
+  elements.resultView.style.setProperty("--strength", String(resultStrength()));
+  elements.resultView.classList.toggle("is-comparing", split > 0);
+  elements.strengthValue.textContent = "%" + elements.strengthRange.value;
+}
+
+function renderResultHistory() {
+  elements.historyStrip.replaceChildren();
+  elements.historyCount.textContent = state.results.length + " / " + MAX_RESULT_HISTORY;
+  state.results.forEach((item, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.setAttribute("aria-pressed", String(item === state.result));
+    button.title = item.label;
+    const image = document.createElement("img");
+    image.src = item.url;
+    image.alt = "";
+    image.loading = "lazy";
+    const caption = document.createElement("span");
+    caption.textContent = String(index + 1);
+    button.append(image, caption);
+    button.addEventListener("click", () => selectResult(index));
+    elements.historyStrip.append(button);
+  });
+}
+
+function selectResult(index) {
+  const item = state.results[index];
+  if (!item || !state.target) return;
+  state.result = item;
+  elements.originalImage.src = state.target.url;
+  elements.resultImage.src = item.url;
+  elements.resultView.hidden = false;
+  elements.resultTools.hidden = false;
+  elements.outputPlaceholder.hidden = true;
+  elements.outputStage.classList.add("has-result");
+  elements.outputSymbol.hidden = true;
+  elements.outputTitle.textContent = "Görünüm " + (index + 1);
+  elements.outputStatus.textContent = item.label;
+  updateResultView();
+  renderResultHistory();
+  updateSwapAvailability();
+}
+
+function addResult(blob, label) {
+  const item = { blob, url: createObjectURL(blob), label };
+  state.results.push(item);
+  while (state.results.length > MAX_RESULT_HISTORY) {
+    URL.revokeObjectURL(state.results.shift().url);
+  }
+  elements.compareRange.value = "0";
+  elements.strengthRange.value = "100";
+  selectResult(state.results.length - 1);
+}
+
+// The file that is saved or shared: the selected look at the chosen strength
+// and format. At full strength as PNG it is the untouched lossless result.
+async function buildExportFile() {
+  const format = elements.exportFormat.value === "jpeg" ? "jpeg" : "png";
+  const strength = resultStrength();
+  let blob = state.result.blob;
+  if (format === "jpeg" || strength < 1) {
+    const [original, result] = await Promise.all([loadImage(state.target.file), loadImage(state.result.blob)]);
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = original.image.naturalWidth;
+      canvas.height = original.image.naturalHeight;
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("Dışa aktarma alanı oluşturulamadı.");
+      context.drawImage(original.image, 0, 0);
+      context.globalAlpha = strength;
+      context.drawImage(result.image, 0, 0, canvas.width, canvas.height);
+      blob = await new Promise((resolve, reject) => canvas.toBlob(
+        (value) => (value ? resolve(value) : reject(new Error("Görsel dışa aktarılamadı."))),
+        "image/" + format,
+        0.95
+      ));
+    } finally {
+      URL.revokeObjectURL(original.url);
+      URL.revokeObjectURL(result.url);
+    }
+  }
+  const extension = format === "jpeg" ? "jpg" : "png";
+  return new File([blob], "retake-" + Date.now() + "." + extension, { type: "image/" + format });
+}
+
+function isLikelyMobile() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 }
 
 function selectTargetFace(index) {
@@ -1464,9 +1609,15 @@ function initializeStones() {
 
 // While the local engine works, the stone moves into the result panel so the
 // wait is something to play with rather than a frozen screen.
+function setWaitProgress(step, total, text) {
+  elements.waitProgress.style.width = Math.round(100 * step / Math.max(total, 1)) + "%";
+  elements.waitStep.textContent = text;
+}
+
 function showWaitStage(title) {
   elements.waitTitle.textContent = title;
   elements.waitTimer.textContent = "00:00";
+  setWaitProgress(0, 1, "Yüz profili hazırlanıyor…");
   elements.waitStage.hidden = false;
   elements.outputStage.classList.add("is-waiting");
   if (!stones.wait) stones.wait = createStone($("#waitStone"), stoneColors());
@@ -1476,9 +1627,7 @@ function showWaitStage(title) {
   const startedAt = Date.now();
   window.clearInterval(stones.timer);
   stones.timer = window.setInterval(() => {
-    const seconds = Math.floor((Date.now() - startedAt) / 1000);
-    elements.waitTimer.textContent =
-      String(Math.floor(seconds / 60)).padStart(2, "0") + ":" + String(seconds % 60).padStart(2, "0");
+    elements.waitTimer.textContent = formatElapsed((Date.now() - startedAt) / 1000);
   }, 500);
 }
 
@@ -1489,6 +1638,36 @@ function hideWaitStage() {
   elements.outputStage.classList.remove("is-waiting");
   stones.wait?.stop();
   stones.hero?.setEnergy(0);
+}
+
+const JOB_POLL_INTERVAL_MS = 1500;
+const JOB_TIMEOUT_MS = 20 * 60 * 1000;
+
+// The engine works on the swap as a background job and reports its real stage,
+// so a long run never depends on a single open connection.
+async function waitForEngineJob(jobId, total) {
+  const deadline = Date.now() + JOB_TIMEOUT_MS;
+  let failures = 0;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    let job;
+    try {
+      const response = await engineFetch("/api/jobs/" + encodeURIComponent(jobId), {
+        headers: { Accept: "application/json" }
+      });
+      job = await response.json();
+      if (response.status === 404) throw Object.assign(new Error(job.error || "İş bulunamadı."), { fatal: true });
+      failures = 0;
+    } catch (error) {
+      failures += 1;
+      if (error.fatal || failures >= 8) throw error.fatal ? error : new Error("Motorla bağlantı koptu; işlem durumu alınamıyor.");
+      continue;
+    }
+    if (job.status === "error") throw new Error(job.error || "FaceFusion işlemi başarısız.");
+    setWaitProgress(job.step, job.total || total, `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}`);
+    if (job.status === "done") return;
+  }
+  throw new Error("İşlem 20 dakika içinde tamamlanmadı.");
 }
 
 async function runFaceFusionEdit() {
@@ -1508,8 +1687,10 @@ async function runFaceFusionEdit() {
 
   const consent = await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
-    message: "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
-    confirmLabel: "Yerel olarak devam et"
+    message: state.engine.remote
+      ? "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+    confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
 
@@ -1528,7 +1709,6 @@ async function runFaceFusionEdit() {
 
   let generatedUrl = null;
   try {
-    const base = localFaceFusionBase();
     const {
       targetCanvas,
       referenceBlobs,
@@ -1551,14 +1731,20 @@ async function runFaceFusionEdit() {
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
-    const response = await fetch(base + "/api/face-swap", {
-      method: "POST",
-      body: form,
-      cache: "no-store"
-    });
+    setWaitProgress(0, 1, "Yüz kırpımları motora gönderiliyor…");
+    let response = await engineFetch("/api/face-swap", { method: "POST", body: form });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
+    }
+    if (response.status === 202) {
+      const accepted = await response.json();
+      await waitForEngineJob(accepted.job_id, accepted.total || 4);
+      response = await engineFetch("/api/jobs/" + encodeURIComponent(accepted.job_id) + "/result");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Sonuç alınamadı (HTTP ${response.status}).`);
+      }
     }
     const appliedVariation = Number(response.headers.get("X-Retake-Variation"));
     const variationIndex = Number.isInteger(appliedVariation) &&
@@ -1572,18 +1758,8 @@ async function runFaceFusionEdit() {
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
-    const resultUrl = createObjectURL(resultBlob);
-    if (state.result?.url) URL.revokeObjectURL(state.result.url);
-    state.result = { blob: resultBlob, url: resultUrl };
     state.nextVariation = (variation + 1) % 4;
-    elements.resultImage.src = resultUrl;
-    elements.resultImage.hidden = false;
-    elements.outputPlaceholder.hidden = true;
-    elements.outputStage.classList.add("has-result");
-    elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "Son görünüm";
-    elements.outputStatus.textContent = FACE_VARIATION_LABELS[variationIndex];
-    elements.downloadButton.disabled = false;
+    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex]);
     elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
     showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}.`);
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
@@ -1620,14 +1796,90 @@ async function runFaceFusionEdit() {
   }
 }
 
-function downloadResult() {
-  if (!state.result?.url) return;
-  const link = document.createElement("a");
-  link.href = state.result.url;
-  link.download = "retake-facefusion-" + Date.now() + ".png";
-  document.body.append(link);
-  link.click();
-  link.remove();
+async function downloadResult() {
+  if (!state.result || !state.target) return;
+  try {
+    const file = await buildExportFile();
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    showToast(error.message || "Sonuç kaydedilemedi.");
+  }
+}
+
+async function shareResult() {
+  if (!state.result || !state.target) return;
+  try {
+    const file = await buildExportFile();
+    if (!navigator.canShare?.({ files: [file] })) {
+      showToast("Bu cihaz dosya paylaşımını desteklemiyor; Sonucu indir düğmesini kullan.");
+      return;
+    }
+    await navigator.share({ files: [file], title: "Retake" });
+  } catch (error) {
+    if (error?.name !== "AbortError") showToast(error.message || "Paylaşım başlatılamadı.");
+  }
+}
+
+function applyEngineSettings(settings) {
+  state.engine = { origin: settings.origin, remote: settings.remote, token: settings.token };
+  elements.engineAddress.value = settings.remote ? settings.origin : "";
+  elements.engineToken.value = settings.token;
+}
+
+async function saveEngineForm(event) {
+  event.preventDefault();
+  if (state.isSwapping) return;
+  const settings = resolveEngineSettings(elements.engineAddress.value, elements.engineToken.value);
+  if (!settings.ok) {
+    elements.engineFormStatus.textContent = settings.reason;
+    return;
+  }
+  applyEngineSettings(settings);
+  const stored = saveEngineSettings(window.localStorage, settings);
+  elements.engineFormStatus.textContent = "Bağlanılıyor…";
+  await checkFaceFusionStatus();
+  elements.engineFormStatus.textContent = state.faceFusionStatus.configured
+    ? "Motor hazır." + (stored ? "" : " Ayar bu oturum için geçerli; tarayıcı kalıcı saklamaya izin vermedi.")
+    : state.faceFusionStatus.message;
+}
+
+async function resetEngineForm() {
+  if (state.isSwapping) return;
+  elements.engineAddress.value = "";
+  elements.engineToken.value = "";
+  const settings = resolveEngineSettings("", "");
+  applyEngineSettings(settings);
+  saveEngineSettings(window.localStorage, settings);
+  await checkFaceFusionStatus();
+  elements.engineFormStatus.textContent = "Bu bilgisayardaki motor kullanılacak.";
+}
+
+function initializeEngineSettings() {
+  let storage = null;
+  try {
+    storage = window.localStorage;
+  } catch {
+    // Private mode: pairing still works for this session.
+  }
+  applyEngineSettings(loadEngineSettings(storage));
+  elements.engineForm.addEventListener("submit", saveEngineForm);
+  elements.engineReset.addEventListener("click", resetEngineForm);
+  elements.compareRange.addEventListener("input", updateResultView);
+  elements.strengthRange.addEventListener("input", updateResultView);
+  elements.shareButton.addEventListener("click", shareResult);
+  elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
+  // When the app comes back to the foreground (phone unlocked, tab restored)
+  // re-check the engine instead of showing a stale status.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !state.isSwapping) checkFaceFusionStatus();
+  });
 }
 
 async function initializeDetector() {
@@ -1800,7 +2052,7 @@ function initializeInteractions() {
   window.addEventListener("pagehide", (event) => {
     if (event.persisted) return;
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
-    if (state.result?.url) URL.revokeObjectURL(state.result.url);
+    state.results.forEach((item) => URL.revokeObjectURL(item.url));
     state.references.forEach((item) => {
       if (item.url) URL.revokeObjectURL(item.url);
     });
@@ -1814,6 +2066,7 @@ async function initializeApp() {
   initializeTheme();
   initializeInteractions();
   initializeStones();
+  initializeEngineSettings();
 
   await Promise.allSettled([
     loadLocalReferences(),

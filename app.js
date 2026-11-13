@@ -20,6 +20,23 @@ import {
 import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
+  estimateHeadFit,
+  getTargetRenderSize,
+  mapLandmarksFromRegion,
+  measureFaceShapeRatio,
+  rectIoU,
+  summarizeReferenceShape
+} from "./src/head-geometry.js";
+import { createStone } from "./src/stone.js";
+import {
+  DEFAULT_ENGINE_ORIGIN,
+  engineHeaders,
+  formatElapsed,
+  loadEngineSettings,
+  resolveEngineSettings,
+  saveEngineSettings
+} from "./src/engine.js";
+import {
   createReferenceSetKey,
   deleteCachedProfile,
   getCachedProfile,
@@ -29,10 +46,10 @@ import {
 const MAX_PREVIEW_EDGE = 2048;
 const MAX_REFERENCE_EDGE = 2048;
 const FACE_VARIATION_LABELS = [
-  "Biraz daha uzun",
-  "Doğal oran",
-  "Uzun ve dar",
-  "Hafif uzun"
+  "Otomatik oturtma",
+  "Fotoğraftaki kafa oranı",
+  "Güçlü oturtma",
+  "Hafif oturtma"
 ];
 const MODEL_URL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
 const FACE_DETECTOR_MODEL_URLS = {
@@ -60,9 +77,31 @@ const elements = {
   swapButton: $("#swapButton"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
+  resultView: $("#resultView"),
+  originalImage: $("#originalImage"),
+  resultTools: $("#resultTools"),
+  compareRange: $("#compareRange"),
+  strengthRange: $("#strengthRange"),
+  strengthValue: $("#strengthValue"),
+  historyStrip: $("#historyStrip"),
+  historyCount: $("#historyCount"),
+  exportFormat: $("#exportFormat"),
+  shareButton: $("#shareButton"),
+  waitProgress: $("#waitProgress"),
+  waitStep: $("#waitStep"),
+  engineDetails: $("#engineDetails"),
+  engineSummary: $("#engineSummary"),
+  engineForm: $("#engineForm"),
+  engineAddress: $("#engineAddress"),
+  engineToken: $("#engineToken"),
+  engineReset: $("#engineResetButton"),
+  engineFormStatus: $("#engineFormStatus"),
   outputPlaceholder: $("#outputPlaceholder"),
   outputMessage: $("#outputMessage"),
   outputStage: $(".output-stage"),
+  waitStage: $("#waitStage"),
+  waitTitle: $("#waitTitle"),
+  waitTimer: $("#waitTimer"),
   outputSymbol: $(".output-symbol"),
   outputTitle: $("#outputTitle"),
   outputStatus: $("#outputStatus"),
@@ -111,6 +150,8 @@ const state = {
   isSwapping: false,
   nextVariation: 0,
   result: null,
+  results: [],
+  engine: { origin: DEFAULT_ENGINE_ORIGIN, remote: false, token: "" },
   toastTimer: null,
   dialogResolve: null,
   installPrompt: null
@@ -158,16 +199,15 @@ function updateProfileIndicator({ title, detail, progress, status = "loading" } 
 }
 
 function localFaceFusionBase() {
-  const configured = document.querySelector('meta[name="retake-facefusion-base"]')?.content?.trim();
-  const value = configured || "http://127.0.0.1:8765";
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" && ["127.0.0.1", "localhost"].includes(parsed.hostname)
-      ? parsed.origin.replace(/\/+$/, "")
-      : "";
-  } catch {
-    return "";
-  }
+  return state.engine.origin;
+}
+
+function engineFetch(path, options = {}) {
+  return fetch(state.engine.origin + path, {
+    cache: "no-store",
+    ...options,
+    headers: engineHeaders(state.engine, options.headers || {})
+  });
 }
 
 function updateSwapAvailability() {
@@ -179,6 +219,7 @@ function updateSwapAvailability() {
     !state.targetLoading && !state.referencesLoading && !state.isSwapping;
   elements.swapButton.disabled = !enabled;
   elements.downloadButton.disabled = !state.result || state.isSwapping;
+  elements.shareButton.disabled = !state.result || state.isSwapping;
   const copy = elements.swapButton.querySelector(".button-copy");
   if (copy) copy.textContent = state.result ? "Yeniden oluştur" : "Yüzümü uygula";
   const tag = elements.swapButton.querySelector(".button-state");
@@ -194,7 +235,7 @@ function updateSwapAvailability() {
           ? "Düzenleme için bu cihazda yerel FaceFusion servisini başlat."
           : !hasTarget
             ? "Başlamak için bir fotoğraf yükle ve değiştirilecek yüzü seç."
-            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
+            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
   }
   elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
@@ -210,12 +251,11 @@ async function checkFaceFusionStatus() {
     state.faceFusionStatus = { checked: true, configured: false, message: "Yerel FaceFusion adresi geçersiz." };
   } else {
     try {
-      const response = await fetch(base + "/health", {
-        method: "GET",
-        cache: "no-store",
-        headers: { Accept: "application/json" }
-      });
+      const response = await engineFetch("/health", { headers: { Accept: "application/json" } });
       const health = await response.json().catch(() => ({}));
+      if (response.status === 401) {
+        throw new Error("Eşleştirme kodu gerekli veya hatalı. Motor bağlantısı bölümünden kodu gir.");
+      }
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       state.faceFusionStatus = {
@@ -230,7 +270,11 @@ async function checkFaceFusionStatus() {
       state.faceFusionStatus = {
         checked: true,
         configured: false,
-        message: detail.includes("Failed to fetch") || detail.includes("NetworkError")
+        message: (detail.includes("Failed to fetch") || detail.includes("NetworkError") || detail.includes("Load failed")) && state.engine.remote
+          ? "Eşleştirilen motora ulaşılamadı. Bilgisayardaki motorun ve tünelin açık olduğunu, adresin güncel olduğunu kontrol et."
+          : (detail.includes("Failed to fetch") || detail.includes("NetworkError") || detail.includes("Load failed")) && isLikelyMobile()
+          ? "Bu cihazda motor yok. Telefondan kullanmak için aşağıdaki Motor bağlantısı bölümünden bilgisayarındaki motoru eşleştir."
+          : detail.includes("Failed to fetch") || detail.includes("NetworkError")
           ? "127.0.0.1:8765 bağlantısı kurulamadı. tools\\start_facefusion_retake.ps1 dosyasını çalıştır; tarayıcı yerel ağ izni sorarsa izin ver."
           : detail
       };
@@ -238,10 +282,19 @@ async function checkFaceFusionStatus() {
   }
 
   const connectionLabel = $("#topConnectionText");
-  if (connectionLabel) connectionLabel.textContent = state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI";
+  if (connectionLabel) {
+    connectionLabel.textContent = state.engine.remote
+      ? (state.faceFusionStatus.configured ? "EŞLEŞEN MOTOR HAZIR" : "EŞLEŞEN MOTOR ÇEVRİMDIŞI")
+      : (state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI");
+  }
+  elements.engineSummary.textContent = state.engine.remote
+    ? (state.faceFusionStatus.configured ? "Eşleşti" : "Bağlanamadı")
+    : "Bu bilgisayar";
   if (state.faceFusionStatus.configured) {
     elements.engineTitle.textContent = "Yerel düzenleme hazır";
-    elements.engineDescription.textContent = "Yüz dönüşümü bu cihazdaki FaceFusion motorunda çalışır.";
+    elements.engineDescription.textContent = state.engine.remote
+      ? "Yüz dönüşümü, şifreli tünelle eşleştirdiğin bilgisayarındaki FaceFusion motorunda çalışır."
+      : "Yüz dönüşümü bu cihazdaki FaceFusion motorunda çalışır.";
   } else {
     elements.engineTitle.textContent = "Yerel düzenleme motoru çevrimdışı";
     elements.engineDescription.textContent = state.faceFusionStatus.message;
@@ -295,12 +348,73 @@ async function loadReferenceImage(blob) {
   }
 }
 
-function detectFaces(image) {
+function faceFromLandmarks(landmarks, sourceWidth, sourceHeight) {
+  const bounds = getLandmarkBounds(landmarks);
+  if (!bounds) return null;
+  return { ...bounds, shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight) };
+}
+
+// FaceLandmarker's built-in detector is tuned for faces that fill the frame.
+// For a face the first pass missed, zoom into the region BlazeFace found and
+// run the 478-point mesh there, then map the mesh back to the full photo.
+function refineFaceInRegion(image, box, sourceWidth, sourceHeight) {
+  const centerX = (box.x + box.width / 2) * sourceWidth;
+  const centerY = (box.y + box.height / 2) * sourceHeight;
+  const side = Math.max(box.width * sourceWidth, box.height * sourceHeight) * 2.2;
+  const left = clamp(Math.round(centerX - side / 2), 0, sourceWidth - 1);
+  const top = clamp(Math.round(centerY - side / 2), 0, sourceHeight - 1);
+  const regionWidth = Math.min(sourceWidth - left, Math.round(side));
+  const regionHeight = Math.min(sourceHeight - top, Math.round(side));
+  if (regionWidth < 8 || regionHeight < 8) return null;
+
+  const zoom = clamp(640 / Math.max(regionWidth, regionHeight), 1, 4);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(regionWidth * zoom);
+  canvas.height = Math.round(regionHeight * zoom);
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, left, top, regionWidth, regionHeight, 0, 0, canvas.width, canvas.height);
+
+  const meshes = state.detector.detect(canvas).faceLandmarks || [];
+  const region = {
+    x: left / sourceWidth,
+    y: top / sourceHeight,
+    width: regionWidth / sourceWidth,
+    height: regionHeight / sourceHeight
+  };
+  return meshes
+    .map((landmarks) => faceFromLandmarks(mapLandmarksFromRegion(landmarks, region), sourceWidth, sourceHeight))
+    .filter((face) => face && rectIoU(face, box) > 0.2)
+    .sort((a, b) => rectIoU(b, box) - rectIoU(a, box))[0] || null;
+}
+
+async function detectFaces(image) {
   if (!state.detector) throw new Error("Yüz algılama motoru henüz hazır değil.");
-  const result = state.detector.detect(image);
-  return (result.faceLandmarks || [])
-    .map((landmarks) => getLandmarkBounds(landmarks))
+  const sourceWidth = image.naturalWidth || image.width;
+  const sourceHeight = image.naturalHeight || image.height;
+  const faces = (state.detector.detect(image).faceLandmarks || [])
+    .map((landmarks) => faceFromLandmarks(landmarks, sourceWidth, sourceHeight))
     .filter(Boolean);
+
+  // Second pass: small, distant, turned or partly covered faces.
+  for (const range of ["full", "short"]) {
+    try {
+      const detector = await getReferenceFaceDetector(range);
+      const candidates = (detector.detect(image).detections || [])
+        .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
+        .filter((item) => item && item.confidence >= 0.5);
+      for (const candidate of candidates) {
+        if (faces.some((face) => rectIoU(face, candidate.bounds) > 0.25)) continue;
+        const refined = refineFaceInRegion(image, candidate.bounds, sourceWidth, sourceHeight);
+        if (refined && faces.some((face) => rectIoU(face, refined) > 0.25)) continue;
+        faces.push(refined || { ...candidate.bounds, shapeRatio: null });
+      }
+    } catch (error) {
+      console.info(`Ek yüz taraması (${range}) kullanılamadı.`, error);
+    }
+  }
+  return faces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
 }
 
 function drawTargetPreview() {
@@ -359,10 +473,14 @@ function renderFaceChips() {
 }
 
 function clearResult() {
-  if (state.result?.url) URL.revokeObjectURL(state.result.url);
+  state.results.forEach((item) => URL.revokeObjectURL(item.url));
+  state.results = [];
   state.result = null;
-  elements.resultImage.hidden = true;
+  elements.resultView.hidden = true;
+  elements.resultTools.hidden = true;
   elements.resultImage.removeAttribute("src");
+  elements.originalImage.removeAttribute("src");
+  elements.historyStrip.replaceChildren();
   elements.outputPlaceholder.hidden = false;
   elements.outputStage.classList.remove("has-result");
   elements.outputSymbol.hidden = false;
@@ -370,6 +488,106 @@ function clearResult() {
   elements.outputStatus.textContent = "Beklemede";
   elements.outputMessage.textContent = "Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.";
   updateSwapAvailability();
+}
+
+const MAX_RESULT_HISTORY = 6;
+
+function resultStrength() {
+  return Number(elements.strengthRange.value) / 100;
+}
+
+function updateResultView() {
+  const split = Number(elements.compareRange.value);
+  elements.resultView.style.setProperty("--split", split + "%");
+  elements.resultView.style.setProperty("--strength", String(resultStrength()));
+  elements.resultView.classList.toggle("is-comparing", split > 0);
+  elements.strengthValue.textContent = "%" + elements.strengthRange.value;
+}
+
+function renderResultHistory() {
+  elements.historyStrip.replaceChildren();
+  elements.historyCount.textContent = state.results.length + " / " + MAX_RESULT_HISTORY;
+  state.results.forEach((item, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "history-item";
+    button.setAttribute("aria-pressed", String(item === state.result));
+    button.title = item.label;
+    const image = document.createElement("img");
+    image.src = item.url;
+    image.alt = "";
+    image.loading = "lazy";
+    const caption = document.createElement("span");
+    caption.textContent = String(index + 1);
+    button.append(image, caption);
+    button.addEventListener("click", () => selectResult(index));
+    elements.historyStrip.append(button);
+  });
+}
+
+function selectResult(index) {
+  const item = state.results[index];
+  if (!item || !state.target) return;
+  state.result = item;
+  elements.originalImage.src = state.target.url;
+  elements.resultImage.src = item.url;
+  elements.resultView.hidden = false;
+  elements.resultTools.hidden = false;
+  elements.outputPlaceholder.hidden = true;
+  elements.outputStage.classList.add("has-result");
+  elements.outputSymbol.hidden = true;
+  elements.outputTitle.textContent = "Görünüm " + (index + 1);
+  elements.outputStatus.textContent = item.label;
+  updateResultView();
+  renderResultHistory();
+  updateSwapAvailability();
+}
+
+function addResult(blob, label) {
+  const item = { blob, url: createObjectURL(blob), label };
+  state.results.push(item);
+  while (state.results.length > MAX_RESULT_HISTORY) {
+    URL.revokeObjectURL(state.results.shift().url);
+  }
+  elements.compareRange.value = "0";
+  elements.strengthRange.value = "100";
+  selectResult(state.results.length - 1);
+}
+
+// The file that is saved or shared: the selected look at the chosen strength
+// and format. At full strength as PNG it is the untouched lossless result.
+async function buildExportFile() {
+  const format = elements.exportFormat.value === "jpeg" ? "jpeg" : "png";
+  const strength = resultStrength();
+  let blob = state.result.blob;
+  if (format === "jpeg" || strength < 1) {
+    const [original, result] = await Promise.all([loadImage(state.target.file), loadImage(state.result.blob)]);
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = original.image.naturalWidth;
+      canvas.height = original.image.naturalHeight;
+      const context = canvas.getContext("2d", { alpha: false });
+      if (!context) throw new Error("Dışa aktarma alanı oluşturulamadı.");
+      context.drawImage(original.image, 0, 0);
+      context.globalAlpha = strength;
+      context.drawImage(result.image, 0, 0, canvas.width, canvas.height);
+      blob = await new Promise((resolve, reject) => canvas.toBlob(
+        (value) => (value ? resolve(value) : reject(new Error("Görsel dışa aktarılamadı."))),
+        "image/" + format,
+        0.95
+      ));
+    } finally {
+      URL.revokeObjectURL(original.url);
+      URL.revokeObjectURL(result.url);
+    }
+  }
+  const extension = format === "jpeg" ? "jpg" : "png";
+  return new File([blob], "retake-" + Date.now() + "." + extension, { type: "image/" + format });
+}
+
+function isLikelyMobile() {
+  return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
 }
 
 function selectTargetFace(index) {
@@ -413,7 +631,7 @@ async function setTargetPhoto(file) {
     let detectionMessage = "Yüz algılama yapılamadı.";
     if (state.detector) {
       try {
-        faces = detectFaces(loaded.image);
+        faces = await detectFaces(loaded.image);
         detectionMessage = faces.length === 0
           ? "Fotoğrafta yüz bulunamadı."
           : faces.length + " yüz algılandı.";
@@ -801,11 +1019,9 @@ async function clearReferenceData() {
     : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-downscale-v4";
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-headfit-v5";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
-const FACEFUSION_TARGET_WIDTH = 784;
-const FACEFUSION_TARGET_HEIGHT = 1024;
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1015,6 +1231,10 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
   return {
     canvas,
     alignedCanvas,
+    // Only the full mesh carries real forehead/chin/cheek points.
+    shapeRatio: detectionMethod === "FaceLandmarker"
+      ? measureFaceShapeRatio(detected.landmarks, sourceWidth, sourceHeight)
+      : null,
     profilePixels: quality.imageData.data,
     weight,
     quality,
@@ -1129,13 +1349,17 @@ async function buildLocalFaceFusionInputs() {
     face
   );
 
+  // Typical crops are sent pixel-for-pixel so the photo around the face is not
+  // softened by a resize round trip.
+  const targetSize = getTargetRenderSize(crop.width, crop.height);
   const targetCanvas = document.createElement("canvas");
-  targetCanvas.width = FACEFUSION_TARGET_WIDTH;
-  targetCanvas.height = FACEFUSION_TARGET_HEIGHT;
+  targetCanvas.width = targetSize.width;
+  targetCanvas.height = targetSize.height;
   const targetContext = targetCanvas.getContext("2d", { willReadFrequently: true });
   if (!targetContext) throw new Error("Hedef yüz görseli oluşturulamadı.");
   targetContext.fillStyle = "#10151d";
   targetContext.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  targetContext.imageSmoothingQuality = "high";
   targetContext.drawImage(
     state.target.image,
     crop.x, crop.y, crop.width, crop.height,
@@ -1169,7 +1393,8 @@ async function buildLocalFaceFusionInputs() {
         weights: cached.weights,
         appearanceProfileBlob: cached.appearanceProfileBlob,
         validCount: cached.validCount,
-        totalWeight: cached.totalWeight
+        totalWeight: cached.totalWeight,
+        shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null
       };
       state.profileIsBuilding = false;
       updateProfileIndicator({
@@ -1239,6 +1464,11 @@ async function buildLocalFaceFusionInputs() {
         appearanceProfileBlob,
         validCount: appearance.validCount,
         totalWeight: appearance.totalWeight,
+        shapeRatio: summarizeReferenceShape(candidates.map((candidate) => ({
+          value: candidate.shapeRatio,
+          // Near-frontal, sharp references describe the face shape best.
+          weight: candidate.quality.frontalness * candidate.weight
+        }))),
         referenceDiagnostics
       };
       state.identityProfile = {
@@ -1265,12 +1495,19 @@ async function buildLocalFaceFusionInputs() {
   const profile = state.identityProfile;
   state.referenceFaceCropCount = profile.validCount;
   state.selectedReferenceCount = profile.validCount;
+  const scaleX = targetCanvas.width / crop.width;
+  const scaleY = targetCanvas.height / crop.height;
+  const faceX = clamp(crop.face.x * scaleX, 0, targetCanvas.width - 1);
+  const faceY = clamp(crop.face.y * scaleY, 0, targetCanvas.height - 1);
   const faceBounds = {
-    x: crop.face.x * FACEFUSION_TARGET_WIDTH / crop.width,
-    y: crop.face.y * FACEFUSION_TARGET_HEIGHT / crop.height,
-    width: crop.face.width * FACEFUSION_TARGET_WIDTH / crop.width,
-    height: crop.face.height * FACEFUSION_TARGET_HEIGHT / crop.height
+    x: faceX,
+    y: faceY,
+    width: Math.min(crop.face.width * scaleX, targetCanvas.width - faceX),
+    height: Math.min(crop.face.height * scaleY, targetCanvas.height - faceY)
   };
+  // Lengthen/shorten/widen/narrow the head so the reference person's face
+  // proportions sit naturally on it.
+  const headFit = estimateHeadFit(profile.shapeRatio, face.shapeRatio);
 
   return {
     targetCanvas,
@@ -1280,6 +1517,8 @@ async function buildLocalFaceFusionInputs() {
     profileCount: profile.validCount,
     totalProfileWeight: profile.totalWeight,
     faceBounds,
+    targetSize: { width: targetCanvas.width, height: targetCanvas.height },
+    headFit,
     crop
   };
 }
@@ -1351,6 +1590,86 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
   return canvasToBlob(fullCanvas);
 }
 
+const stones = { hero: null, wait: null, timer: null };
+
+function stoneColors() {
+  const style = getComputedStyle(document.documentElement);
+  const light = document.documentElement.dataset.theme === "light";
+  return { accent: style.getPropertyValue("--lime").trim(), stone: light ? "#4a4e44" : "#2c302a" };
+}
+
+function initializeStones() {
+  const heroCanvas = $("#heroStone");
+  stones.hero = createStone(heroCanvas, stoneColors());
+  if (stones.hero) {
+    heroCanvas.closest(".hero-visual")?.classList.add("has-stone");
+    stones.hero.start();
+  }
+}
+
+// While the local engine works, the stone moves into the result panel so the
+// wait is something to play with rather than a frozen screen.
+function setWaitProgress(step, total, text) {
+  elements.waitProgress.style.width = Math.round(100 * step / Math.max(total, 1)) + "%";
+  elements.waitStep.textContent = text;
+}
+
+function showWaitStage(title) {
+  elements.waitTitle.textContent = title;
+  elements.waitTimer.textContent = "00:00";
+  setWaitProgress(0, 1, "Yüz profili hazırlanıyor…");
+  elements.waitStage.hidden = false;
+  elements.outputStage.classList.add("is-waiting");
+  if (!stones.wait) stones.wait = createStone($("#waitStone"), stoneColors());
+  stones.wait?.setEnergy(1);
+  stones.wait?.start();
+  stones.hero?.setEnergy(1);
+  const startedAt = Date.now();
+  window.clearInterval(stones.timer);
+  stones.timer = window.setInterval(() => {
+    elements.waitTimer.textContent = formatElapsed((Date.now() - startedAt) / 1000);
+  }, 500);
+}
+
+function hideWaitStage() {
+  window.clearInterval(stones.timer);
+  stones.timer = null;
+  elements.waitStage.hidden = true;
+  elements.outputStage.classList.remove("is-waiting");
+  stones.wait?.stop();
+  stones.hero?.setEnergy(0);
+}
+
+const JOB_POLL_INTERVAL_MS = 1500;
+const JOB_TIMEOUT_MS = 20 * 60 * 1000;
+
+// The engine works on the swap as a background job and reports its real stage,
+// so a long run never depends on a single open connection.
+async function waitForEngineJob(jobId, total) {
+  const deadline = Date.now() + JOB_TIMEOUT_MS;
+  let failures = 0;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_INTERVAL_MS));
+    let job;
+    try {
+      const response = await engineFetch("/api/jobs/" + encodeURIComponent(jobId), {
+        headers: { Accept: "application/json" }
+      });
+      job = await response.json();
+      if (response.status === 404) throw Object.assign(new Error(job.error || "İş bulunamadı."), { fatal: true });
+      failures = 0;
+    } catch (error) {
+      failures += 1;
+      if (error.fatal || failures >= 8) throw error.fatal ? error : new Error("Motorla bağlantı koptu; işlem durumu alınamıyor.");
+      continue;
+    }
+    if (job.status === "error") throw new Error(job.error || "FaceFusion işlemi başarısız.");
+    setWaitProgress(job.step, job.total || total, `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}`);
+    if (job.status === "done") return;
+  }
+  throw new Error("İşlem 20 dakika içinde tamamlanmadı.");
+}
+
 async function runFaceFusionEdit() {
   if (state.isSwapping) return;
   if (!state.faceFusionStatus.configured) {
@@ -1368,8 +1687,10 @@ async function runFaceFusionEdit() {
 
   const consent = await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
-    message: "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
-    confirmLabel: "Yerel olarak devam et"
+    message: state.engine.remote
+      ? "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+    confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
 
@@ -1384,15 +1705,18 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
+  showWaitStage(state.result ? "Yeni görünüm hazırlanıyor" : "Yüzün bilgisayarında işleniyor");
+
   let generatedUrl = null;
   try {
-    const base = localFaceFusionBase();
     const {
       targetCanvas,
       referenceBlobs,
       referenceWeights,
       appearanceProfileBlob,
       faceBounds,
+      targetSize,
+      headFit,
       crop
     } = await buildLocalFaceFusionInputs();
     const targetBlob = await canvasToBlob(targetCanvas);
@@ -1403,18 +1727,24 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, variation }));
+    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, targetSize, headFit, variation }));
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
-    const response = await fetch(base + "/api/face-swap", {
-      method: "POST",
-      body: form,
-      cache: "no-store"
-    });
+    setWaitProgress(0, 1, "Yüz kırpımları motora gönderiliyor…");
+    let response = await engineFetch("/api/face-swap", { method: "POST", body: form });
     if (!response.ok) {
       const payload = await response.json().catch(() => ({}));
       throw new Error(payload.error || `FaceFusion işlemi başarısız (HTTP ${response.status}).`);
+    }
+    if (response.status === 202) {
+      const accepted = await response.json();
+      await waitForEngineJob(accepted.job_id, accepted.total || 4);
+      response = await engineFetch("/api/jobs/" + encodeURIComponent(accepted.job_id) + "/result");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || `Sonuç alınamadı (HTTP ${response.status}).`);
+      }
     }
     const appliedVariation = Number(response.headers.get("X-Retake-Variation"));
     const variationIndex = Number.isInteger(appliedVariation) &&
@@ -1428,20 +1758,10 @@ async function runFaceFusionEdit() {
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
-    const resultUrl = createObjectURL(resultBlob);
-    if (state.result?.url) URL.revokeObjectURL(state.result.url);
-    state.result = { blob: resultBlob, url: resultUrl };
     state.nextVariation = (variation + 1) % 4;
-    elements.resultImage.src = resultUrl;
-    elements.resultImage.hidden = false;
-    elements.outputPlaceholder.hidden = true;
-    elements.outputStage.classList.add("has-result");
-    elements.outputSymbol.hidden = true;
-    elements.outputTitle.textContent = "Son görünüm";
-    elements.outputStatus.textContent = FACE_VARIATION_LABELS[variationIndex];
-    elements.downloadButton.disabled = false;
-    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.";
-    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]} yüz oranı.`);
+    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex]);
+    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
+    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}.`);
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;
@@ -1470,19 +1790,96 @@ async function runFaceFusionEdit() {
     setRuntimeStatus("FaceFusion · hata");
   } finally {
     if (generatedUrl) URL.revokeObjectURL(generatedUrl);
+    hideWaitStage();
     state.isSwapping = false;
     updateSwapAvailability();
   }
 }
 
-function downloadResult() {
-  if (!state.result?.url) return;
-  const link = document.createElement("a");
-  link.href = state.result.url;
-  link.download = "retake-facefusion-" + Date.now() + ".png";
-  document.body.append(link);
-  link.click();
-  link.remove();
+async function downloadResult() {
+  if (!state.result || !state.target) return;
+  try {
+    const file = await buildExportFile();
+    const url = URL.createObjectURL(file);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = file.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+  } catch (error) {
+    showToast(error.message || "Sonuç kaydedilemedi.");
+  }
+}
+
+async function shareResult() {
+  if (!state.result || !state.target) return;
+  try {
+    const file = await buildExportFile();
+    if (!navigator.canShare?.({ files: [file] })) {
+      showToast("Bu cihaz dosya paylaşımını desteklemiyor; Sonucu indir düğmesini kullan.");
+      return;
+    }
+    await navigator.share({ files: [file], title: "Retake" });
+  } catch (error) {
+    if (error?.name !== "AbortError") showToast(error.message || "Paylaşım başlatılamadı.");
+  }
+}
+
+function applyEngineSettings(settings) {
+  state.engine = { origin: settings.origin, remote: settings.remote, token: settings.token };
+  elements.engineAddress.value = settings.remote ? settings.origin : "";
+  elements.engineToken.value = settings.token;
+}
+
+async function saveEngineForm(event) {
+  event.preventDefault();
+  if (state.isSwapping) return;
+  const settings = resolveEngineSettings(elements.engineAddress.value, elements.engineToken.value);
+  if (!settings.ok) {
+    elements.engineFormStatus.textContent = settings.reason;
+    return;
+  }
+  applyEngineSettings(settings);
+  const stored = saveEngineSettings(window.localStorage, settings);
+  elements.engineFormStatus.textContent = "Bağlanılıyor…";
+  await checkFaceFusionStatus();
+  elements.engineFormStatus.textContent = state.faceFusionStatus.configured
+    ? "Motor hazır." + (stored ? "" : " Ayar bu oturum için geçerli; tarayıcı kalıcı saklamaya izin vermedi.")
+    : state.faceFusionStatus.message;
+}
+
+async function resetEngineForm() {
+  if (state.isSwapping) return;
+  elements.engineAddress.value = "";
+  elements.engineToken.value = "";
+  const settings = resolveEngineSettings("", "");
+  applyEngineSettings(settings);
+  saveEngineSettings(window.localStorage, settings);
+  await checkFaceFusionStatus();
+  elements.engineFormStatus.textContent = "Bu bilgisayardaki motor kullanılacak.";
+}
+
+function initializeEngineSettings() {
+  let storage = null;
+  try {
+    storage = window.localStorage;
+  } catch {
+    // Private mode: pairing still works for this session.
+  }
+  applyEngineSettings(loadEngineSettings(storage));
+  elements.engineForm.addEventListener("submit", saveEngineForm);
+  elements.engineReset.addEventListener("click", resetEngineForm);
+  elements.compareRange.addEventListener("input", updateResultView);
+  elements.strengthRange.addEventListener("input", updateResultView);
+  elements.shareButton.addEventListener("click", shareResult);
+  elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
+  // When the app comes back to the foreground (phone unlocked, tab restored)
+  // re-check the engine instead of showing a stale status.
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !state.isSwapping) checkFaceFusionStatus();
+  });
 }
 
 async function initializeDetector() {
@@ -1512,7 +1909,7 @@ async function initializeDetector() {
     elements.engineDescription.textContent =
       "MediaPipe yüzleri tarayıcıda algılar. Kimlik aktarımı, bilgisayarındaki CUDA destekli FaceFusion modeliyle yapılır.";
     if (state.target) {
-      state.target.faces = detectFaces(state.target.image);
+      state.target.faces = await detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
       clearResult();
       elements.targetMeta.textContent =
@@ -1566,6 +1963,8 @@ function toggleTheme() {
     // Theme still changes for this session.
   }
   updateThemeButton();
+  stones.hero?.setColors(stoneColors());
+  stones.wait?.setColors(stoneColors());
 }
 
 function initializeInteractions() {
@@ -1653,7 +2052,7 @@ function initializeInteractions() {
   window.addEventListener("pagehide", (event) => {
     if (event.persisted) return;
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
-    if (state.result?.url) URL.revokeObjectURL(state.result.url);
+    state.results.forEach((item) => URL.revokeObjectURL(item.url));
     state.references.forEach((item) => {
       if (item.url) URL.revokeObjectURL(item.url);
     });
@@ -1666,6 +2065,8 @@ function initializeInteractions() {
 async function initializeApp() {
   initializeTheme();
   initializeInteractions();
+  initializeStones();
+  initializeEngineSettings();
 
   await Promise.allSettled([
     loadLocalReferences(),

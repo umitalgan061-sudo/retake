@@ -7,7 +7,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 ## Değişmez şartlar
 
 0. Kamera API'si, canlı video, kamera önizlemesi veya kamera izni kesinlikle eklenmez. Yalnızca fotoğraf seçici kullanılır.
-0.1. Değişiklik yalnızca seçilen yüz crop'u ve yüz maskesi içinde yapılır; yüz dışı pikseller orijinalle aynı kalır.
+0.1. Değişiklik yalnızca seçilen yüz crop'u ve alfa matı içinde yapılır; mat dışı pikseller orijinalle aynı kalır. Kullanıcı isteğiyle (12 Kasım 2026) mat, yüzün kafaya oturması için kafayı yumuşakça uzatan/kısaltan/genişleten/daraltan çarpıtma bölgesini de kapsar; bu bölge yüz crop'unun kenarına varmadan biter.
 0.2. En çok 20 referans fotoğrafı aynı kimliğe ait olmalıdır; farklı kişiler bir identity bank içinde karıştırılmaz.
 0.3. Göz/ifade retarget yalnızca ihtiyaç varsa ve yalnızca hedef yüz crop'unda çalışır. Kapalı göz doğal açılabilir, fakat saç/arka plan/diğer kişiler değiştirilmez.
 

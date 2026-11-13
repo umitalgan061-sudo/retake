@@ -1,7 +1,9 @@
 param(
     [ValidateSet("512x512", "768x768", "1024x1024")]
     [string]$FaceSwapperPixelBoost = "1024x1024",
-    [switch]$EnableFaceEnhancer
+    [switch]$EnableFaceEnhancer,
+    # Telefon / tablet / PWA'dan kullanmak için: eşleştirme kodunu zorunlu kılar.
+    [switch]$EnablePairing
 )
 
 $ErrorActionPreference = "Stop"
@@ -30,6 +32,13 @@ $ServerArgs = @(
 if ($EnableFaceEnhancer) {
     $ServerArgs += "--enable-face-enhancer"
     Write-Host "GFPGAN 1.4 son aşaması açık (%25 karışım)." -ForegroundColor Yellow
+}
+
+if ($EnablePairing) {
+    $ServerArgs += "--enable-pairing"
+    Write-Host "Telefon/PWA eşleştirmesi açık. Ayrı bir pencerede şifreli tüneli başlat:" -ForegroundColor Yellow
+    Write-Host "    cloudflared tunnel --url http://127.0.0.1:8765" -ForegroundColor Green
+    Write-Host "Tünelin verdiği https adresini ve aşağıda yazacak eşleştirme kodunu Retake > Motor bağlantısı bölümüne gir." -ForegroundColor Yellow
 }
 
 conda run --no-capture-output -n facefusion python $ServerScript @ServerArgs

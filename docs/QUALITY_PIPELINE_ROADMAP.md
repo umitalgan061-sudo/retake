@@ -9,6 +9,9 @@
 - UniFace alt yüz high-frequency detay aktarımı düşük güçlü; AlphaFace kimlik geometrisi baskın.
 - Near-no-op koruması: neredeyse değişmeyen çıktı yüz değişimi gibi sunulmaz.
 - GFPGAN 1.4 opsiyonel, %25 blend, varsayılan kapalı.
+- Dikişsiz birleştirme: kenar ton farkının harmonik (Poisson benzeri) düzeltmesi, Laplacian çok bantlı harmanlama, netlik/gren eşitleme (`tools/retake_compositing.py`).
+- Kafa oranı oturtma: 25 referansın yüz oranına göre kafayı yumuşak sönümlü çarpıtmayla uzatma/kısaltma/genişletme/daraltma.
+- Hedef kırpımın yeniden örneklemesiz gönderimi (1024–2048 px) ve iki aşamalı hedef yüz algılama.
 
 ## Henüz entegre edilmeyenler
 
@@ -17,6 +20,8 @@
 - Native iOS Core ML inference: mevcut web akışı Windows CUDA yerel servisine bağlı; native iOS ayrı model dönüştürme, tensor adapter, compositing ve cihaz testi gerektirir.
 
 ## Kalibrasyon notları
+
+Dikişsiz birleştirme ve kafa oturtma sentetik görüntülerle birim testinden ve sahte motorla uçtan uca tarayıcı testinden geçti; gerçek FaceFusion/CUDA çıktısıyla ton düzeltme gücü (`HARMONIZE_STRENGTH`), kenar payı (`RIM_INSET_RATIO`) ve kafa oturtma sönümü (`estimateHeadFit` damping) aynı hedeflerde A/B incelenmelidir. Ton düzeltmesi yüzün genel ten rengini hedef fotoğrafa yaklaştırır; referans kişinin teni belirgin farklıysa bu bilinçli bir tercihtir.
 
 ArcFace çıktısı grup içi tutarlılık taramasıdır; biyometrik kimlik kanıtı değildir. 0.75 gibi sabit bir eşik kullanılmamıştır; poz, ışık ve açı çeşitliliği gerçek 25 fotoğrafta incelenmelidir.
 

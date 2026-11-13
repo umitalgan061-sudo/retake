@@ -1,14 +1,46 @@
 {
   "id": "./",
-  "name": "Retake — Personal Photo Studio",
+  "name": "Retake — Kişisel Fotoğraf Stüdyosu",
   "short_name": "Retake",
-  "description": "Kişisel fotoğraf stüdyosu. Yerel fotoğraf ve referans yüz yönetimi.",
+  "description": "Kişisel fotoğraf stüdyosu. Kendi bilgisayarındaki motorla yüz düzenleme; telefondan eşleştirerek kullanılabilir.",
   "lang": "tr",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#0b0d12",
-  "theme_color": "#0b0d12",
-  "icons": [{ "src": "./icons/retake.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "background_color": "#10120f",
+  "theme_color": "#10120f",
+  "icons": [
+    {
+      "src": "./icons/retake.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/retake-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/retake-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/retake-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "display_override": [
+    "standalone",
+    "minimal-ui"
+  ],
+  "categories": [
+    "photo"
+  ]
 }

@@ -18,11 +18,14 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde dinler.
 - FaceFusion XSeg occlusion + BiSeNet region parser maskeleri iki üretim geçişinde de aktiftir; gözlük sınıfı değiştirme maskesinin dışında tutulur.
 - FaceFusion 3.9.2'nin desteklediği yüz parser bölgeleri arasında saç sınıfı bulunmadığından saç stili kaynak fotoğraftan korunur; saç transferi bu motorda yapılmaz.
-- İlk sonuç ve sonraki alternatifler, alfa matını taşıyan yüz crop'una sınırlı affine oran düzeltmesi uygular: ilk denemede genişlik %2 daraltılır ve yükseklik %5 uzatılır; diğer üç alternatif doğal ya da daha uzun oranları dener. Efekt yüz merkezi çevresinde uygulanır, final fotoğrafın maske dışı pikselleri korunur.
-- Değişen yüzün alfa sınırı, yüz genişliğine göre 3–9 px Gaussian sigma ile yumuşatılır; yalnızca matın iç kısmına çok hafif keskinlik eklenir. Bu, keskin bir yapıştırma çizgisini azaltırken saç/arka plan ve maskenin dışındaki fotoğrafı korur.
-- "Yeniden oluştur" düğmesi dört sınırlı yüz/sakal/geometri dengesini sırayla dener; bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir. Fazla geometrik değişikliklerin gerçekçiliği bozabileceği için oran düzeltmesi en fazla %8 ile sınırlandırılmıştır.
+- **Dikişsiz birleştirme (`tools/retake_compositing.py`, üretken model değil, klasik görüntü işleme):** FaceFusion çıktısı fotoğrafa üç adımda yeniden oturtulur. (1) Değişen bölgenin iç kenarında ölçülen ton/ışık farkı yüzün içine harmonik olarak yayılıp çıkarılır (Poisson benzeri gradyan alanı düzeltmesi); yeni yüz çevresindeki cildin tonunu ve sahne ışığını alır, kendi hatlarını korur. (2) Laplacian piramidiyle çok bantlı harmanlama: renk farkı geniş bir kuşakta, ince ayrıntı dar bir kuşakta geçiş yapar; kesilmiş gibi görünen sınır çizgisi oluşmaz. (3) Yüzün netliği ve sensör greni fotoğrafın geri kalanına eşitlenir (yumuşaksa mikro kontrast + fotoğrafın kendi greni, fazla keskinse hafif yumuşatma).
+- **Kafa oranı oturtma:** Tarayıcı 25 referansın 478 noktalı ağından kişinin yüz uzunluğu/genişliği oranını (3B ölçüm, baş dönüklüğüne dayanıklı ağırlıklı medyan) ve hedef fotoğraftaki kafanın oranını ölçer. Fark %2'den büyükse kafa, yüz merkezinden dışa doğru yumuşakça sönen bir çarpıtmayla uzatılır/kısaltılır/genişletilir/daraltılır (eksen başına en çok %8, güçlü alternatifte %12). Yüz, saç çizgisi, çene ve hemen çevresi birlikte hareket ettiği için yüz kenarında boşluk veya çift kenar oluşmaz; çarpıtma kırpım kenarına varmadan sıfırlanır.
+- Hedef kırpım yerel motora mümkün olduğunda piksel piksel (1024–2048 px yükseklik aralığında yeniden örneklemesiz) gönderilir; yüz çevresi küçült-büyüt bulanıklığına uğramaz.
+- Hedef fotoğrafta yüz iki aşamada aranır: FaceLandmarker, ardından BlazeFace tam/kısa menzil. İlk geçişin kaçırdığı küçük, uzak veya dönük yüzlerde bölgeye yakınlaşılıp 478 noktalı ağ yeniden çıkarılır.
+- "Yeniden oluştur" düğmesi dört alternatifi sırayla dener: otomatik kafa oturtma, fotoğraftaki kafa oranı (çarpıtma yok), güçlü oturtma, hafif oturtma; her biri farklı yüz/sakal dengesi kullanır. Bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir.
+- İşlem sürerken sonuç panelinde ve sayfanın en üstünde sürüklenip döndürülebilen 3B taş animasyonu (`src/stone.js`, bağımlılıksız WebGL) ve geçen süre gösterilir.
 - Arayüz buzlu cam yüzeyleri ve temaya uyumlu uyarı/onay pencereleriyle hem açık hem koyu modda çalışır.
-- Son hibrit PNG, gerçek değişen piksellerden türetilmiş, yüz sınırında yumuşatılmış alfa matı taşır. Tarayıcı bu maskeyi kullanarak yalnızca değişen pikselleri orijinal fotoğrafa uygular.
+- Son PNG, birleştirmenin ve kafa oturtmanın dokunduğu alanı kapsayan alfa matı taşır. Tarayıcı bu matı kullanarak yalnızca o alanı orijinal fotoğrafa uygular; alfa 0 olan her piksel bayt bayt korunur.
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
 
@@ -62,6 +65,39 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - İlk kez açarken tarayıcı `retake06.web.app` için yerel ağ erişimi isterse izin verilmelidir.
 - Seçilen kişisel fotoğraflar tarayıcıda açılır ve yüz crop'ları çıkarılır. Yalnızca kullanıcı düzenlemeyi başlatıp açık onay verdikten sonra hedef yüz crop'u ve referans crop'ları bu bilgisayardaki `127.0.0.1:8765` servisine gönderilir; üçüncü taraf çıkarım API'si kullanılmaz.
 - Referans fotoğrafları sırayla açılıp küçültülür; profil hazırlama ilerlemesi görünür. **Fotoğrafları ve profili temizle** seçili fotoğrafları oturum belleğinden ve önbelleğe alınmış kırpılmış profili IndexedDB'den siler. Kaynak fotoğrafları cihazdaki dosyalarından silmez.
+
+## Telefon, tablet ve PWA ile kullanım
+
+Yüz dönüşümü NVIDIA ekran kartlı bilgisayarda çalışır; telefon bu bilgisayardaki motoru şifreli bir tünel ve eşleştirme koduyla kullanır. Fotoğraflar bir AI servisine yüklenmez, yalnızca tünel sağlayıcısının (Cloudflare veya Tailscale) şifreli bağlantısından geçer.
+
+1. Bilgisayarda motoru eşleştirme moduyla başlat:
+
+   ```powershell
+   .\tools\start_facefusion_retake.ps1 -EnablePairing
+   ```
+
+   Pencerede bir **EŞLEŞTİRME KODU** yazar (`%USERPROFILE%\.retake\pairing-token` dosyasında saklanır, her açılışta aynıdır).
+2. Ayrı bir pencerede tüneli aç ([cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalı):
+
+   ```powershell
+   cloudflared tunnel --url http://127.0.0.1:8765
+   ```
+
+   Çıktıdaki `https://….trycloudflare.com` adresini not et. Tailscale kullanıyorsan `tailscale serve` ile verilen `https://….ts.net` adresi de çalışır.
+3. Telefonda https://retake06.web.app adresini aç → **Motor bağlantısı** → adresi ve kodu gir → **Bağlan**.
+4. Safari'de **Paylaş → Ana Ekrana Ekle** (Android Chrome'da **Uygulamayı yükle**) ile Retake'i uygulama olarak kurabilirsin. Adres ve kod yalnızca o cihazın tarayıcısında saklanır.
+
+Notlar:
+- Eşleştirme açıkken motora gelen her istek kodu taşımak zorundadır; kodu bilen herkes motoru kullanabilir, paylaşma. Kodu yenilemek için `pairing-token` dosyasını silip motoru yeniden başlat.
+- Ücretsiz `trycloudflare.com` adresi tünel her açıldığında değişir; telefonda adresi güncellemek gerekir.
+- Uzun işlemler arka plan işi olarak çalışır; telefon ekranı kapansa bile işlem bilgisayarda sürer, uygulama yeniden açıldığında durum tekrar sorgulanır.
+
+## Sonuç stüdyosu
+
+- **Önce / Sonra** kaydırıcısı orijinal ile sonucu aynı karede karşılaştırır.
+- **Dönüşüm gücü** (%30–100) sonucu orijinalle harmanlar; indirme ve paylaşım bu ayarı kullanır.
+- Son altı görünüm küçük resim olarak tutulur; aralarında geçiş yapılabilir.
+- PNG (kayıpsız) veya JPG olarak indirilebilir; destekleyen telefonlarda **Paylaş** ile doğrudan Fotoğraflar'a kaydedilebilir.
 
 ## Firebase Hosting
 

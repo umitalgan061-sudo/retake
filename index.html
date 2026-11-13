@@ -7,10 +7,15 @@
   <meta name="description" content="Retake Studio ile fotoğraflarını buzlu cam arayüzde, cihazında ve mahremiyetini koruyarak düzenle.">
   <meta name="color-scheme" content="dark light">
   <meta name="retake-facefusion-base" content="http://127.0.0.1:8765">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com http://127.0.0.1:8765 http://localhost:8765; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval'; style-src 'self'; img-src 'self' blob: data:; connect-src 'self' https://cdn.jsdelivr.net https://storage.googleapis.com http://127.0.0.1:8765 http://localhost:8765 https://*.trycloudflare.com https://*.ts.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>Retake Studio — Kendini yeniden gör</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/retake.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icons/retake-180.png">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Retake">
   <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
@@ -51,6 +56,7 @@
         </div>
         <div class="hero-visual" aria-hidden="true">
           <div class="sculpture-scene">
+            <canvas id="heroStone" class="stone-canvas"></canvas>
             <span class="sculpture-halo sculpture-halo-one"></span>
             <span class="sculpture-halo sculpture-halo-two"></span>
             <span class="liquid-stone stone-large"></span>
@@ -60,7 +66,7 @@
             <span class="sculpture-glint glint-one"></span>
             <span class="sculpture-glint glint-two"></span>
           </div>
-          <div class="hero-visual-caption"><span>FORM / 01</span><span>AKIŞTAKİ FORM</span></div>
+          <div class="hero-visual-caption"><span>FORM / 01</span><span>SÜRÜKLE · DÖNDÜR</span></div>
         </div>
       </section>
 
@@ -112,8 +118,32 @@
             <div class="output-stage">
               <div class="result-grid-texture" aria-hidden="true"></div>
               <div class="output-symbol" aria-hidden="true"><svg viewBox="0 0 64 64"><path d="M32 8c-9.5 0-17.2 7.7-17.2 17.2S22.5 42.4 32 42.4s17.2-7.7 17.2-17.2S41.5 8 32 8Z"/><path d="M8.5 56c3.8-8.5 12.4-13.6 23.5-13.6S51.7 47.5 55.5 56"/><path d="m43 12 3.5-5M52 23h5"/></svg></div>
-              <img id="resultImage" class="result-image" alt="Retake ile düzenlenmiş sonuç fotoğrafı" hidden>
+              <div id="waitStage" class="wait-stage" hidden>
+                <canvas id="waitStone" class="stone-canvas" aria-hidden="true"></canvas>
+                <div class="wait-copy" role="status" aria-live="polite">
+                  <strong id="waitTitle">Yüzün bilgisayarında işleniyor</strong>
+                  <span id="waitTimer" class="wait-timer">00:00</span>
+                  <div class="wait-progress" aria-hidden="true"><span id="waitProgress"></span></div>
+                  <p id="waitStep">Hazırlanıyor…</p>
+                  <p>Doğal bir sonuç için işlem birkaç dakika sürebilir. Beklerken taşı sürükleyip döndürebilirsin.</p>
+                </div>
+              </div>
+              <div id="resultView" class="result-view" hidden>
+                <img id="originalImage" class="result-original" alt="Orijinal fotoğraf">
+                <img id="resultImage" class="result-image" alt="Retake ile düzenlenmiş sonuç fotoğrafı">
+                <span class="compare-line" aria-hidden="true"></span>
+                <span class="compare-tag compare-tag-before" aria-hidden="true">ÖNCE</span>
+                <span class="compare-tag compare-tag-after" aria-hidden="true">SONRA</span>
+              </div>
               <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p><span class="stage-caption">YEREL SONUÇ</span></span>
+            </div>
+            <div id="resultTools" class="result-tools" hidden>
+              <label class="tool-row" for="compareRange"><span>Önce / Sonra</span><span class="tool-hint">kaydır</span></label>
+              <input id="compareRange" class="tool-range" type="range" min="0" max="100" value="0" aria-label="Önce ve sonra karşılaştırma">
+              <label class="tool-row" for="strengthRange"><span>Dönüşüm gücü</span><b id="strengthValue">%100</b></label>
+              <input id="strengthRange" class="tool-range" type="range" min="30" max="100" value="100" aria-label="Dönüşüm gücü">
+              <div class="tool-row"><span>Görünümler</span><span id="historyCount" class="tool-hint"></span></div>
+              <div id="historyStrip" class="history-strip" role="group" aria-label="Oluşturulan görünümler"></div>
             </div>
             <div class="engine-status">
               <span class="engine-status-mark"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></svg></span>
@@ -123,9 +153,35 @@
               <span class="button-sparkle"><svg viewBox="0 0 24 24"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span>
               <span class="button-copy">Yüzümü uygula</span><span class="button-state">Hazırlanıyor</span>
             </button>
-            <button id="downloadButton" class="download-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg> Sonucu indir</button>
-            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı yüz ve sakal harmanları dener.</p>
+            <div class="export-row">
+              <button id="downloadButton" class="download-button" type="button" disabled><svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg> Sonucu indir</button>
+              <select id="exportFormat" class="export-format" aria-label="Dosya biçimi">
+                <option value="png">PNG</option>
+                <option value="jpeg">JPG</option>
+              </select>
+              <button id="shareButton" class="download-button share-button" type="button" hidden disabled><svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg> Paylaş</button>
+            </div>
+            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.</p>
           </section>
+
+          <details id="engineDetails" class="profile-details">
+            <summary><span>Motor bağlantısı</span><span id="engineSummary" class="profile-summary-note">Bu bilgisayar</span></summary>
+            <section class="control-card" aria-labelledby="engineSettingsTitle">
+              <div class="profile-head"><div><div class="card-overline">TELEFON · TABLET · PWA</div><h2 id="engineSettingsTitle">Motoru eşleştir</h2></div></div>
+              <p class="profile-copy">Yüz dönüşümü bilgisayarındaki ekran kartında çalışır. Telefondan kullanmak için bilgisayarda motoru eşleştirme moduyla başlat, şifreli tünel adresini ve penceredeki kodu buraya yaz.</p>
+              <form id="engineForm" class="engine-form">
+                <label for="engineAddress">Motor adresi <span class="tool-hint">· boş bırakırsan bu bilgisayar</span></label>
+                <input id="engineAddress" type="url" inputmode="url" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="https://….trycloudflare.com">
+                <label for="engineToken">Eşleştirme kodu</label>
+                <input id="engineToken" type="password" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="Motor penceresinde yazan kod">
+                <div class="profile-actions">
+                  <button id="engineSaveButton" class="choose-file-button" type="submit"><span>Bağlan</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                  <div class="profile-reference-links"><button id="engineResetButton" class="text-button" type="button">Bu bilgisayardaki motora dön</button></div>
+                  <p id="engineFormStatus" class="state-detail" aria-live="polite">Adres ve kod yalnızca bu cihazın tarayıcısında saklanır.</p>
+                </div>
+              </form>
+            </section>
+          </details>
 
           <details class="profile-details">
             <summary><span>Yüz profili ayarları</span><span class="profile-summary-note">İsteğe bağlı</span></summary>

@@ -1,6 +1,8 @@
-const SHELL_CACHE = "retake-shell-v19";
+const SHELL_CACHE = "retake-shell-v20";
 const AI_CACHE = "retake-ai-assets-v2";
-const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./src/identity-profile.js", "./src/profile-storage.js", "./src/head-geometry.js", "./src/stone.js", "./src/engine.js", "./manifest.webmanifest", "./icons/retake.svg", "./icons/retake-180.png", "./icons/retake-192.png", "./icons/retake-512.png", "./icons/retake-maskable-512.png"];
+// Written by src/reference-cache.js; must survive service-worker updates.
+const REFERENCE_CACHE = "retake-reference-photos-v1";
+const APP_SHELL = ["./", "./index.html", "./styles.css", "./app.js", "./src/core.js", "./src/reference-catalog.js", "./src/nvidia-pipeline.js", "./src/face-only.js", "./src/identity-profile.js", "./src/profile-storage.js", "./src/head-geometry.js", "./src/stone.js", "./src/engine.js", "./src/reference-cache.js", "./manifest.webmanifest", "./icons/retake.svg", "./icons/retake-180.png", "./icons/retake-192.png", "./icons/retake-512.png", "./icons/retake-maskable-512.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(caches.open(SHELL_CACHE).then((cache) => cache.addAll(APP_SHELL)).then(() => self.skipWaiting()));
@@ -9,7 +11,7 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) => Promise.all(
-      keys.filter((key) => ![SHELL_CACHE, AI_CACHE].includes(key)).map((key) => caches.delete(key))
+      keys.filter((key) => ![SHELL_CACHE, AI_CACHE, REFERENCE_CACHE].includes(key)).map((key) => caches.delete(key))
     )).then(() => self.clients.claim())
   );
 });
@@ -38,16 +40,31 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
 
   if (url.origin === self.location.origin) {
-    // Keep private reference photos and their manifest out of Cache Storage.
-    if (url.pathname.startsWith("/api/images/") || url.pathname.startsWith("/reference-faces/")) {
+    if (url.pathname.startsWith("/api/images/")) {
+      event.respondWith(fetch(request));
+      return;
+    }
+    // Reference photos: the page keeps them in REFERENCE_CACHE; serve any
+    // other request for them from there too, and only go to the network on a miss.
+    if (url.pathname.startsWith("/reference-faces/") && !url.pathname.endsWith("/manifest.json")) {
+      event.respondWith(
+        caches.open(REFERENCE_CACHE).then(async (cache) => (await cache.match(request)) || fetch(request))
+      );
+      return;
+    }
+    if (url.pathname.startsWith("/reference-faces/")) {
       event.respondWith(fetch(request));
       return;
     }
     if (request.mode === "navigate") {
       event.respondWith(
-        fetch(request).then((response) => {
-          if (response.ok) caches.open(SHELL_CACHE).then((cache) => cache.put("./index.html", response.clone()));
-          return response;
+        fetch(request).then(async (response) => {
+          if (response.ok) {
+            caches.open(SHELL_CACHE).then((cache) => cache.put("./index.html", response.clone()));
+            return response;
+          }
+          // Hosting errors (e.g. 509 bandwidth quota) fall back to the installed app.
+          return (await caches.match("./index.html")) || response;
         }).catch(async () => (await caches.match("./index.html")) || Response.error())
       );
     } else {

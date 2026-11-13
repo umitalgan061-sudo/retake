@@ -41,7 +41,7 @@ Detaylı işlem hattı: `docs/FACE_ONLY_PIPELINE.md`.
 - Fotoğraf algılama tarayıcıda çalışır; görsel içeriği üçüncü tarafa yüklenmez.
 - Hedef fotoğraf oturum belleğinde tutulur; hedef fotoğraf IndexedDB'ye kaydedilmez.
 - Kullanıcının eklediği en fazla 20 referans fotoğrafı IndexedDB'de saklanır; tek yüz doğrulaması yapılır.
-- Servis çalışanı yalnızca uygulama kabuğunu ve izin verilen MediaPipe/WASM/model varlıklarını önbelleğe alır.
+- Servis çalışanı uygulama kabuğunu ve izin verilen MediaPipe/WASM/model varlıklarını önbelleğe alır. Kullanıcı isteğiyle (13 Kasım 2026) varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcının Cache Storage alanında (`retake-reference-photos-v1`) kalıcı olarak saklanır; sonraki açılışlarda ve PWA'da yeniden indirilmez.
 - Web uygulamasında gerçek Face Swap modeli yoktur; swap ve indirme eylemleri kapalı kalır.
 
 Web değişikliklerinde \`npm test\`, \`npm run validate\`, JavaScript sözdizimi ve GitHub Actions sonucu kontrol edilir.

@@ -29,6 +29,12 @@ import {
 } from "./src/head-geometry.js";
 import { createStone } from "./src/stone.js";
 import {
+  fetchCachedReference,
+  fetchReferenceManifest,
+  pruneReferenceCache,
+  requestPersistentStorage
+} from "./src/reference-cache.js";
+import {
   DEFAULT_ENGINE_ORIGIN,
   engineHeaders,
   formatElapsed,
@@ -806,9 +812,8 @@ async function loadLocalReferences({ force = false } = {}) {
   renderReferences();
 
   try {
-    const manifestResponse = await fetch(REFERENCE_MANIFEST_URL, {
-      cache: force ? "reload" : "no-store"
-    });
+    const manifestUrl = new URL(REFERENCE_MANIFEST_URL, window.location.href).href;
+    const { response: manifestResponse } = await fetchReferenceManifest(manifestUrl, { force });
     if (!manifestResponse.ok) {
       throw new Error("reference-faces/manifest.json bulunamadı.");
     }
@@ -819,12 +824,17 @@ async function loadLocalReferences({ force = false } = {}) {
     renderReferences();
 
     const imageBaseUrl = new URL("./reference-faces/", window.location.href).href;
-    const results = await Promise.allSettled(references.map(async (reference) => {
-      const endpoint = getReferenceImageUrl(reference.file, imageBaseUrl);
-      const response = await fetch(endpoint, {
-        cache: force ? "reload" : "no-store",
-        headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" }
+    const photoUrls = references.map((reference) => getReferenceImageUrl(reference.file, imageBaseUrl));
+    // Photos are downloaded once and then read from this device's cache.
+    requestPersistentStorage();
+    let downloaded = 0;
+    const results = await Promise.allSettled(references.map(async (reference, index) => {
+      const endpoint = photoUrls[index];
+      const { response, fromCache } = await fetchCachedReference(endpoint, {
+        force,
+        init: { headers: { Accept: "image/avif,image/webp,image/png,image/jpeg" } }
       });
+      if (!fromCache && response.ok) downloaded += 1;
       if (!response.ok) throw new Error(`${reference.file}: HTTP ${response.status}`);
 
       const blob = await response.blob();
@@ -843,6 +853,10 @@ async function loadLocalReferences({ force = false } = {}) {
       return 0;
     }
 
+    if (results.every((result) => result.status === "fulfilled")) {
+      pruneReferenceCache(photoUrls, manifestUrl).catch(() => {});
+    }
+    console.info(`Referans fotoğrafları: ${MAX_REFERENCE_FACES - downloaded} önbellekten, ${downloaded} indirildi.`);
     state.references = results.map((result, index) => result.status === "fulfilled"
       ? result.value
       : ({ ...references[index], status: "error", error: result.reason?.message || "Görsel açılamadı." }));

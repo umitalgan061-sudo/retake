@@ -64,6 +64,7 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - AlphaFace ve UniFace sonuçları tek hibrit yüze birleştirilir; alt yüz bölgesinde sakal/bıyık görünümü desteklenir. Sonuç hedefe maske ile uygulanır ve maske dışı piksel bütünlüğü kontrol edilir.
 - İlk kez açarken tarayıcı `retake06.web.app` için yerel ağ erişimi isterse izin verilmelidir.
 - Seçilen kişisel fotoğraflar tarayıcıda açılır ve yüz crop'ları çıkarılır. Yalnızca kullanıcı düzenlemeyi başlatıp açık onay verdikten sonra hedef yüz crop'u ve referans crop'ları bu bilgisayardaki `127.0.0.1:8765` servisine gönderilir; üçüncü taraf çıkarım API'si kullanılmaz.
+- Varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcı önbelleğinde (Cache Storage) kalıcı olarak saklanır; sonraki açılışlarda ve ana ekrana eklenen uygulamada yeniden indirilmez. Yalnızca birkaç KB'lık liste dosyası kontrol edilir. **Varsayılan havuza dön** fotoğrafları yeniden indirir. Tarayıcı verileri silinirse fotoğraflar bir kez daha iner.
 - Referans fotoğrafları sırayla açılıp küçültülür; profil hazırlama ilerlemesi görünür. **Fotoğrafları ve profili temizle** seçili fotoğrafları oturum belleğinden ve önbelleğe alınmış kırpılmış profili IndexedDB'den siler. Kaynak fotoğrafları cihazdaki dosyalarından silmez.
 
 ## Telefon, tablet ve PWA ile kullanım

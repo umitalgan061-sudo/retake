@@ -76,6 +76,13 @@ class EngineServerTest(unittest.TestCase):
         connection.close()
         return response, payload
 
+    def assert_engine_freed(self):
+        # The handler answers first and releases the lock in its finally block.
+        deadline = time.time() + 2
+        while srv.INFERENCE_LOCK.locked() and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertFalse(srv.INFERENCE_LOCK.locked())
+
     def wait_for_job(self, job_id, headers=None):
         for _ in range(200):
             response, payload = self.request("GET", f"/api/jobs/{job_id}", headers=headers)
@@ -135,17 +142,14 @@ class LocalEngineTest(EngineServerTest):
         self.assertIn("yüz değişmedi", job["error"])
         response, _ = self.request("GET", f"/api/jobs/{json.loads(payload)['job_id']}/result")
         self.assertEqual(response.status, 409)
-        deadline = time.time() + 2
-        while srv.INFERENCE_LOCK.locked() and time.time() < deadline:
-            time.sleep(0.01)
-        self.assertFalse(srv.INFERENCE_LOCK.locked())
+        self.assert_engine_freed()
 
     def test_invalid_upload_is_rejected_immediately_and_frees_the_engine(self):
         response, payload = self.request(
             "POST", "/api/face-swap", b"--x--\r\n", {"Content-Type": "multipart/form-data; boundary=x"}
         )
         self.assertEqual(response.status, 400)
-        self.assertFalse(srv.INFERENCE_LOCK.locked())
+        self.assert_engine_freed()
 
     def test_unknown_job_is_not_found(self):
         response, _ = self.request("GET", "/api/jobs/does-not-exist")
@@ -169,7 +173,7 @@ class PairedEngineTest(EngineServerTest):
         body, content_type = multipart_body()
         response, _ = self.request("POST", "/api/face-swap", body, {"Content-Type": content_type})
         self.assertEqual(response.status, 401)
-        self.assertFalse(srv.INFERENCE_LOCK.locked())
+        self.assert_engine_freed()
         response, _ = self.request("GET", "/api/jobs/anything")
         self.assertEqual(response.status, 401)
 

@@ -23,7 +23,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - Hedef kırpım yerel motora mümkün olduğunda piksel piksel (1024–2048 px yükseklik aralığında yeniden örneklemesiz) gönderilir; yüz çevresi küçült-büyüt bulanıklığına uğramaz.
 - Hedef fotoğrafta yüz iki aşamada aranır: FaceLandmarker, ardından BlazeFace tam/kısa menzil. İlk geçişin kaçırdığı küçük, uzak veya dönük yüzlerde bölgeye yakınlaşılıp 478 noktalı ağ yeniden çıkarılır.
 - "Yeniden oluştur" düğmesi dört alternatifi sırayla dener: otomatik kafa oturtma, fotoğraftaki kafa oranı (çarpıtma yok), güçlü oturtma, hafif oturtma; her biri farklı yüz/sakal dengesi kullanır. Bu, yeni bir model eğitimi veya kimlik benzerliği garantisi değildir.
-- İşlem sürerken sonuç panelinde ve sayfanın en üstünde sürüklenip döndürülebilen 3B taş animasyonu (`src/stone.js`, bağımlılıksız WebGL) ve geçen süre gösterilir.
+- Sayfanın en üstünde ve işlem sürerken sonuç panelinde, dokununca sıvı gibi dağılıp yeniden toplanan parçacık heykel animasyonu (`src/forma-sculpture.js`, WebGL2) ve geçen süre gösterilir. Motor ve görseller, Guglielmo Giannattasio'nun "Forma — Liquid Sculpture" 21st.dev bileşeninden alınmıştır (https://guglielmogiannattasio.it); görseller `assets/forma/` altında barındırılır ve servis çalışanı tarafından önbelleğe alınır.
 - Arayüz buzlu cam yüzeyleri ve temaya uyumlu uyarı/onay pencereleriyle hem açık hem koyu modda çalışır.
 - Son PNG, birleştirmenin ve kafa oturtmanın dokunduğu alanı kapsayan alfa matı taşır. Tarayıcı bu matı kullanarak yalnızca o alanı orijinal fotoğrafa uygular; alfa 0 olan her piksel bayt bayt korunur.
 

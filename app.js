@@ -27,7 +27,7 @@ import {
   rectIoU,
   summarizeReferenceShape
 } from "./src/head-geometry.js";
-import { createStone } from "./src/stone.js";
+import { mountSculpture } from "./src/forma-sculpture.js";
 import {
   fetchCachedReference,
   fetchReferenceManifest,
@@ -1606,19 +1606,8 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
 
 const stones = { hero: null, wait: null, timer: null };
 
-function stoneColors() {
-  const style = getComputedStyle(document.documentElement);
-  const light = document.documentElement.dataset.theme === "light";
-  return { accent: style.getPropertyValue("--lime").trim(), stone: light ? "#4a4e44" : "#2c302a" };
-}
-
 function initializeStones() {
-  const heroCanvas = $("#heroStone");
-  stones.hero = createStone(heroCanvas, stoneColors());
-  if (stones.hero) {
-    heroCanvas.closest(".hero-visual")?.classList.add("has-stone");
-    stones.hero.start();
-  }
+  stones.hero = mountSculpture($("#heroSculpture"), { scale: 0.98 });
 }
 
 // While the local engine works, the stone moves into the result panel so the
@@ -1634,10 +1623,16 @@ function showWaitStage(title) {
   setWaitProgress(0, 1, "Yüz profili hazırlanıyor…");
   elements.waitStage.hidden = false;
   elements.outputStage.classList.add("is-waiting");
-  if (!stones.wait) stones.wait = createStone($("#waitStone"), stoneColors());
-  stones.wait?.setEnergy(1);
-  stones.wait?.start();
-  stones.hero?.setEnergy(1);
+  if (!stones.wait) {
+    stones.wait = mountSculpture($("#waitSculpture"), {
+      scale: 0.96,
+      autopilot: true,
+      options: { ambientIntensity: 1.2, intro: true }
+    });
+  } else {
+    stones.wait.refreshTheme();
+    stones.wait.setAutopilot(true);
+  }
   const startedAt = Date.now();
   window.clearInterval(stones.timer);
   stones.timer = window.setInterval(() => {
@@ -1650,8 +1645,7 @@ function hideWaitStage() {
   stones.timer = null;
   elements.waitStage.hidden = true;
   elements.outputStage.classList.remove("is-waiting");
-  stones.wait?.stop();
-  stones.hero?.setEnergy(0);
+  stones.wait?.setAutopilot(false);
 }
 
 const JOB_POLL_INTERVAL_MS = 1500;
@@ -1977,8 +1971,8 @@ function toggleTheme() {
     // Theme still changes for this session.
   }
   updateThemeButton();
-  stones.hero?.setColors(stoneColors());
-  stones.wait?.setColors(stoneColors());
+  stones.hero?.refreshTheme();
+  stones.wait?.refreshTheme();
 }
 
 function initializeInteractions() {

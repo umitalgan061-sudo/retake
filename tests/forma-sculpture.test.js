@@ -37,25 +37,26 @@ test("CSS colours are parsed for the particle tint", () => {
   assert.deepEqual(parseCssColor("nonsense", [0.5, 0.5, 0.5]), [0.5, 0.5, 0.5]);
 });
 
-test("the original author is credited on the page", () => {
-  const html = readFileSync(new URL("../index.html", import.meta.url), "utf8");
-  assert.match(html, /guglielmogiannattasio\.it/);
+test("the original author stays credited in the source and the README", () => {
+  for (const file of ["../src/forma-sculpture.js", "../README.md"]) {
+    assert.match(readFileSync(new URL(file, import.meta.url), "utf8"), /guglielmogiannattasio\.it/, file);
+  }
 });
 
 test("particle count follows the drawn size", () => {
-  assert.equal(densityForWidth(1250), 1);
+  assert.equal(densityForWidth(1250), 0.8);
   assert.ok(Math.abs(densityForWidth(500) - 0.16) < 1e-9);
   assert.equal(densityForWidth(100), 0.15);
   assert.ok(densityForWidth(800) > densityForWidth(500));
 });
 
 test("wide hero spans the full width above the text", () => {
-  const rect = placeWideSculpture(1900, 1000, 2.5, 800);
-  assert.ok(Math.abs(rect.w - 1938) < 1e-9);
+  const rect = placeWideSculpture(1900, 1400, 2.5, 1200);
+  assert.ok(Math.abs(rect.w - 1900 * 1.12) < 1e-9);
   assert.ok(rect.x < 0, "slightly past both edges");
-  assert.ok(Math.abs(rect.y + rect.h / 2 - 400) < 1e-9, "centered in the free area");
+  assert.ok(Math.abs(rect.y + rect.h / 2 - 600) < 1e-9, "centered in the free area");
   const short = placeWideSculpture(1900, 500, 2.5, 300);
-  assert.ok(Math.abs(short.h - 330) < 1e-9, "never taller than 1.1x the area");
+  assert.ok(Math.abs(short.h - 300 * 1.25) < 1e-9, "never taller than 1.25x the area");
   const below = placeWideSculpture(1900, 1000, 2.5, 800, 64);
   assert.ok(Math.abs(below.y + below.h / 2 - 432) < 1e-9, "centered between the top margin and the text");
 });

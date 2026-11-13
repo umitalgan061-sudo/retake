@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#10120f">
+  <meta name="theme-color" content="#0e0d0c">
   <meta name="description" content="Retake Studio ile fotoğraflarını buzlu cam arayüzde, cihazında ve mahremiyetini koruyarak düzenle.">
   <meta name="color-scheme" content="dark light">
   <meta name="retake-facefusion-base" content="http://127.0.0.1:8765">
@@ -11,6 +11,8 @@
   <title>Retake Studio — Kendini yeniden gör</title>
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icons/retake.svg" type="image/svg+xml">
+  <link rel="preload" href="./assets/fonts/geist-latin.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="./assets/fonts/instrument-serif-latin.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="apple-touch-icon" href="./icons/retake-180.png">
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
@@ -25,12 +27,12 @@
     <header class="topbar">
       <a class="brand" href="./" aria-label="Retake ana sayfa">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 38 38"><path d="M9 29V9h10.2c5 0 7.8 2.4 7.8 6.4 0 3.5-2.2 5.7-6.1 6.2L29 29h-6.8l-7.3-7.2h-.9V29H9Zm5-11.5h5c2.2 0 3.4-.8 3.4-2.2S21.2 13 19 13h-5v4.5Z" fill="currentColor"/></svg>
+          <svg viewBox="0 0 64 64" fill="none"><defs><linearGradient id="brandGold" x1="10" y1="8" x2="54" y2="58" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F6E7C8"/><stop offset=".45" stop-color="#D2AE72"/><stop offset="1" stop-color="#8E6A3A"/></linearGradient></defs><path d="M21 52V15.5c0-1.4 1.1-2.5 2.5-2.5H33c8.3 0 14 4.6 14 11.6 0 6.9-5.6 11.4-13.6 11.4H27.5c-3.6 0-6.5-2.6-6.5-6s2.9-6 6.5-6c6.4 0 11.6 4.4 15.6 10.2L52 52" stroke="url(#brandGold)" stroke-width="4.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="52.5" cy="12.5" r="2.6" fill="url(#brandGold)"/></svg>
         </span>
-        <span class="brand-copy"><strong>RETAKE</strong><small>FOTOĞRAF STÜDYOSU</small></span>
+        <span class="brand-copy"><strong>Retake</strong></span>
       </a>
       <div class="topbar-right">
-        <div class="connection-chip"><span class="connection-dot"></span><span id="topConnectionText">YEREL MOTOR KONTROL EDİLİYOR</span></div>
+        <div class="connection-chip"><span class="connection-dot"></span><span id="topConnectionText">Motor kontrol ediliyor</span></div>
         <span class="topbar-divider"></span>
         <button class="icon-button" id="installButton" type="button" hidden aria-label="Uygulamayı yükle" title="Uygulamayı yükle">
           <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 4-4m-4 4-4-4M5 17v3h14v-3"/></svg>
@@ -45,7 +47,7 @@
     <main class="main-content">
       <section class="hero">
         <div class="hero-copy">
-          <div class="overline"><span class="overline-mark"></span> RETAKE STUDIO <span class="overline-index">KİŞİSEL FOTOĞRAF ATÖLYESİ</span></div>
+          <div class="overline"><span class="overline-mark"></span> Kişisel portre stüdyosu</div>
           <h1>Her karede<br><em>kendin ol.</em></h1>
           <p class="hero-description">Fotoğrafını seç. Yüzünü kendi tarzında yeniden yorumla. Her şey bu cihazda, kontrol tamamen sende.</p>
           <div class="hero-steps" aria-label="Düzenleme adımları">
@@ -67,27 +69,25 @@
             <span class="sculpture-glint glint-one"></span>
             <span class="sculpture-glint glint-two"></span>
           </div>
-          <div class="hero-visual-caption"><span aria-hidden="true">DOKUN · DAĞIT</span><a class="sculpture-credit" href="https://guglielmogiannattasio.it" target="_blank" rel="noopener">Heykel: guglielmogiannattasio.it</a></div>
         </div>
       </section>
 
       <div class="studio-grid">
         <section class="source-column" aria-labelledby="targetTitle">
-          <div class="section-kicker"><span>01</span><span class="kicker-rule"></span><span>FOTOĞRAF</span><span class="kicker-note">KAYNAK</span></div>
+          <div class="section-kicker"><span>01</span><span class="kicker-rule"></span><span>Fotoğraf</span></div>
           <div class="canvas-card">
             <div class="canvas-topline">
               <div class="canvas-title"><span class="live-indicator"></span><span id="targetTitle">Çalışma alanı</span></div>
-              <div class="canvas-tools"><span class="format-pill">JPG · PNG · WEBP</span><span class="format-pill">25 MB</span></div>
+              
             </div>
             <input id="targetInput" class="visually-hidden" type="file" accept="image/jpeg,image/png,image/webp">
             <div id="targetDropzone" class="dropzone" tabindex="0" role="button" aria-label="Hedef fotoğraf seç veya bu alana sürükle">
               <div id="targetEmpty" class="empty-state">
                 <div class="empty-orbit" aria-hidden="true"><div class="upload-icon"><svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M4 15.5v3A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5v-3"/></svg></div></div>
-                <div class="empty-overline">BAŞLAMAK İÇİN</div>
                 <strong>Fotoğrafını bırak.</strong>
                 <span>veya cihazından bir kare seç</span>
                 <button id="choosePhotoButton" class="choose-file-button" type="button"><span>Fotoğraf seç</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
-                <small>Görsel yalnızca bu cihazdaki yerel işlem hattında kullanılır.</small>
+                <small>JPG, PNG veya WebP · en fazla 25 MB</small>
               </div>
               <div id="targetPreview" class="target-preview" hidden>
                 <canvas id="targetCanvas" aria-label="Hedef fotoğraf ve algılanan yüzler"></canvas>
@@ -103,10 +103,6 @@
               <div class="face-selection-head"><strong>Hedef yüz</strong><span id="faceCount" class="count-label">0 yüz</span></div>
               <div id="faceChips" class="face-chips" role="group" aria-label="Hedef yüzü seç"></div>
             </div>
-          </div>
-
-          <div class="under-canvas-row">
-            <div class="micro-note"><span class="micro-icon">✳</span><span>Sonuçta yüz dışındaki pikseller korunur.</span></div>
           </div>
         </section>
 
@@ -136,7 +132,7 @@
                 <span class="compare-tag compare-tag-before" aria-hidden="true">ÖNCE</span>
                 <span class="compare-tag compare-tag-after" aria-hidden="true">SONRA</span>
               </div>
-              <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p><span class="stage-caption">YEREL SONUÇ</span></span>
+              <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p></span>
             </div>
             <div id="resultTools" class="result-tools" hidden>
               <label class="tool-row" for="compareRange"><span>Önce / Sonra</span><span class="tool-hint">kaydır</span></label>
@@ -148,7 +144,7 @@
             </div>
             <div class="engine-status">
               <span class="engine-status-mark"><svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4m6-4v4M9 19v4m6-4v4M1 9h4m-4 6h4m14-6h4m-4 6h4"/></svg></span>
-              <div><strong id="engineTitle">Yerel motor kontrol ediliyor</strong><p id="engineDescription">Fotoğrafın bu cihazdaki FaceFusion motoruyla düzenlenir.</p></div>
+              <div><strong id="engineTitle">Yerel motor kontrol ediliyor</strong><p id="engineDescription">Yüz dönüşümü bilgisayarındaki FaceFusion motorunda yapılır.</p></div>
             </div>
             <button id="swapButton" class="primary-button" type="button" disabled>
               <span class="button-sparkle"><svg viewBox="0 0 24 24"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span>
@@ -162,7 +158,7 @@
               </select>
               <button id="shareButton" class="download-button share-button" type="button" hidden disabled><svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg> Paylaş</button>
             </div>
-            <p id="disabledNote" class="disabled-note">Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.</p>
+            <p id="disabledNote" class="disabled-note">Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.</p>
           </section>
 
           <details id="engineDetails" class="profile-details">
@@ -216,11 +212,7 @@
         </aside>
       </div>
 
-      <section class="bottom-strip">
-        <div class="privacy-lock"><span class="lock-icon"><svg viewBox="0 0 24 24"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 1 1 8 0v3m-4 4v3"/></svg></span><div><strong>Düzenleme cihazında yapılır.</strong><span>Açık onayınla gerekli yüz kırpımları bu bilgisayardaki yerel motora gönderilir.</span></div></div>
-      </section>
-
-      <footer class="app-footer"><span>© RETAKE STUDIO <span class="footer-divider">/</span> YEREL FOTOĞRAF DÜZENLEME</span><span id="runtimeStatus">Yüz algılama motoru hazırlanıyor…</span></footer>
+      <footer class="app-footer"><span>© Retake</span><span id="runtimeStatus">Yüz algılama motoru hazırlanıyor…</span></footer>
     </main>
   </div>
 

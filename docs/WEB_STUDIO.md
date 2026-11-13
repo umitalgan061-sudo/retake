@@ -13,7 +13,7 @@ Web ve iOS uygulamalarında kamera açılmaz. `getUserMedia`, WebRTC canlı vide
 3. MediaPipe Face Landmarker birden fazla yüzü cihazda algılar.
 4. Kullanıcı yüz kutusuna veya yüz seçim düğmesine basarak hedef yüzü seçer.
 5. Uygulama `reference-faces/manifest.json` içindeki 25 dosya adını okur ve görselleri aynı klasörden yükler.
-6. Referanslar salt okunur gösterilir; kullanıcıdan yeniden yükleme istenmez. Fotoğraflar IndexedDB'ye yazılmaz ve Service Worker Cache Storage'a alınmaz.
+6. Referanslar salt okunur gösterilir; kullanıcıdan yeniden yükleme istenmez. Kullanıcı isteğiyle (13 Kasım 2026) varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcının Cache Storage alanında (`retake-reference-photos-v1`) kalıcı olarak saklanır; sonraki açılışlarda ve PWA'da yeniden indirilmez.
 
 ## Modüller
 
@@ -39,9 +39,9 @@ Görsel, ara bir Image/ImageData sarmalayıcısına çevrilmeden doğrudan \`Fac
 - Hedef fotoğraf IndexedDB'ye yazılmaz; sayfa oturumu sona erdiğinde bellek referansı serbest bırakılır.
 - Referans fotoğrafları `reference-faces/manifest.json` ile yerel statik dosyalardan okunur; uygulama bunları IndexedDB'ye yazmaz.
 - Onaylanan 25 referans fotoğrafı `reference-faces/**` ile Firebase Hosting'de yayımlanır. Bu URL'lere erişebilen herkes görselleri indirebilir; gizli depolama gerekiyorsa kimlik doğrulamalı özel depolama kullanılmalıdır.
-- Service Worker `/reference-faces/` yanıtlarını önbelleğe almaz; yüz görselleri Cache Storage'a kaydedilmez.
+- Sayfa, varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcının Cache Storage alanında (`retake-reference-photos-v1`) kalıcı olarak saklanır; sonraki açılışlarda ve PWA'da yeniden indirilmez. Manifest her açılışta ağdan kontrol edilir (yaklaşık 1 KB); listeden çıkan fotoğraflar önbellekten silinir. **Varsayılan havuza dön** fotoğrafları yeniden indirir.
 - Tarayıcı depolamasının temizlenmesi veya özel gezinme modu referans fotoğraflarını silebilir. Önemli dosyaların ayrıca yedeklenmesi kullanıcı sorumluluğundadır.
-- Service Worker uygulama kabuğunu ve MediaPipe varlıklarını önbelleğe alır; `/reference-faces/` altındaki fotoğraflar ve manifest cache'e yazılmaz.
+- Service Worker uygulama kabuğunu ve MediaPipe varlıklarını önbelleğe alır; referans fotoğraf önbelleğini sürüm güncellemelerinde silmez. Barındırma hata verirse (ör. 509 kota aşımı) kurulu uygulama önbellekten açılır.
 
 ## PWA ve çevrimdışı davranış
 

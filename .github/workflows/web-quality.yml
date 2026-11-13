@@ -75,6 +75,8 @@ jobs:
           node --check src/nvidia-pipeline.js
           node --check src/head-geometry.js
           node --check src/stone.js
+          node --check src/engine.js
+          node --check src/reference-cache.js
           node --check worker/index.js
           node --check tools/deploy-worker.mjs
           node --check functions/index.js

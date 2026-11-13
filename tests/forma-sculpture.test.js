@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
-import { densityForWidth, fitSculptureRect, parseCssColor, pickSculptureImage } from "../src/forma-sculpture.js";
+import { densityForWidth, fitSculptureRect, placeWideSculpture, parseCssColor, pickSculptureImage } from "../src/forma-sculpture.js";
 
 test("theme and box shape choose the sculpture image", () => {
   assert.match(pickSculptureImage("dark", 500, 300), /dark-wide/);
@@ -47,4 +47,15 @@ test("particle count follows the drawn size", () => {
   assert.ok(Math.abs(densityForWidth(500) - 0.16) < 1e-9);
   assert.equal(densityForWidth(100), 0.15);
   assert.ok(densityForWidth(800) > densityForWidth(500));
+});
+
+test("wide hero spans the full width above the text", () => {
+  const rect = placeWideSculpture(1900, 1000, 2.5, 800);
+  assert.ok(Math.abs(rect.w - 1938) < 1e-9);
+  assert.ok(rect.x < 0, "slightly past both edges");
+  assert.ok(Math.abs(rect.y + rect.h / 2 - 400) < 1e-9, "centered in the free area");
+  const short = placeWideSculpture(1900, 500, 2.5, 300);
+  assert.ok(Math.abs(short.h - 330) < 1e-9, "never taller than 1.1x the area");
+  const below = placeWideSculpture(1900, 1000, 2.5, 800, 64);
+  assert.ok(Math.abs(below.y + below.h / 2 - 432) < 1e-9, "centered between the top margin and the text");
 });

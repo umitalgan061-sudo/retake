@@ -27,7 +27,7 @@ import {
   rectIoU,
   summarizeReferenceShape
 } from "./src/head-geometry.js";
-import { mountSculpture } from "./src/forma-sculpture.js";
+import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
 import {
   fetchCachedReference,
   fetchReferenceManifest,
@@ -1607,7 +1607,19 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
 const stones = { hero: null, wait: null, timer: null };
 
 function initializeStones() {
-  stones.hero = mountSculpture($("#heroSculpture"), { scale: 0.98 });
+  const wide = window.matchMedia("(min-width: 851px)");
+  const copy = $(".hero-copy");
+  stones.hero = mountSculpture($("#heroSculpture"), {
+    scale: 0.98,
+    // Desktop: full-width sculpture above the headline, like the Forma page.
+    place: (width, height, aspect) => {
+      if (!wide.matches) return null;
+      const host = $("#heroSculpture").getBoundingClientRect();
+      const textTop = (copy?.getBoundingClientRect().top ?? host.top + height * 0.7) - host.top;
+      // Keep clear of the sticky top bar (the host starts under it).
+      return placeWideSculpture(width, height, aspect, Math.max(height * 0.45, textTop - 12), 64);
+    }
+  });
 }
 
 // While the local engine works, the stone moves into the result panel so the

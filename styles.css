@@ -501,6 +501,41 @@ html[data-theme="light"] .theme-icon-moon { display: block; }
   .section-kicker { font-size: 8px; }
   .engine-status p, .disabled-note { font-size: 8px; }
 }
+.hero-backdrop { display: none; }
+
+/* Desktop: Forma-style full-width hero. The sculpture spans the whole
+   window above the headline; headline left, description right. */
+@media (min-width: 851px) {
+  .app-shell { overflow-x: clip; }
+  .hero {
+    position: relative; min-height: clamp(600px, calc(100svh - 128px), 940px);
+    grid-template-columns: minmax(0, 1.55fr) minmax(280px, 1fr); grid-template-rows: 1fr auto auto;
+    align-items: end; column-gap: clamp(32px, 6vw, 110px); row-gap: 0; padding: 0 0 clamp(30px, 4vh, 54px);
+  }
+  .hero-copy { display: contents; max-width: none; }
+  .hero-copy > * { position: relative; z-index: 2; pointer-events: none; }
+  .hero-copy .overline { grid-column: 1; grid-row: 1; align-self: end; }
+  .hero h1 { grid-column: 1; grid-row: 2 / span 2; margin-bottom: 0; font-size: clamp(64px, 7.4vw, 124px); line-height: .92; }
+  .hero-description { grid-column: 2; grid-row: 2; justify-self: end; max-width: 420px; margin-bottom: 22px; font-size: 15px; line-height: 1.65; }
+  .hero-steps { grid-column: 2; grid-row: 3; justify-self: end; margin: 0 0 .6em; }
+  .hero-visual {
+    position: absolute; z-index: 0; top: -46px; bottom: 0; left: 50%; width: 100vw; min-height: 0; transform: translateX(-50%);
+    border: 0; border-radius: 0; background: none; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; overflow: visible;
+  }
+  .sculpture-scene { inset: 0; overflow: hidden; perspective: none; }
+  .sculpture-scene::before { display: none; }
+  .hero-backdrop {
+    position: absolute; top: 34%; left: 50%; z-index: 0; display: block; transform: translate(-50%, -50%); white-space: nowrap; pointer-events: none; user-select: none;
+    color: color-mix(in srgb, var(--ink) 4.5%, transparent); font-size: clamp(160px, 24vw, 420px); font-weight: 700; letter-spacing: -.07em; line-height: .8;
+  }
+  .hero-visual-caption {
+    top: 58px; bottom: auto; left: max(40px, calc((100% - 1440px) / 2)); right: max(40px, calc((100% - 1440px) / 2));
+  }
+}
+@media (min-width: 851px) and (max-width: 1120px) {
+  .hero-visual-caption { left: 28px; right: 28px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .liquid-stone, .sculpture-glint { animation: none; }
 }

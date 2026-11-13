@@ -900,6 +900,19 @@ export function fitSculptureRect(boxWidth, boxHeight, aspect, scale = 1) {
 }
 
 /**
+ * Wide-hero placement, as on the original Forma page: the sculpture spans
+ * the full width (slightly past both edges) and is centered in the free area
+ * above the text, never taller than 1.1x that area.
+ */
+export function placeWideSculpture(width, height, aspect, areaBottom = height * 0.7, areaTop = 0) {
+  const area = Math.max(1, areaBottom - areaTop);
+  let w = width * 1.02;
+  if (w / aspect > area * 1.1) w = area * 1.1 * aspect;
+  const h = w / aspect;
+  return { x: (width - w) / 2, y: areaTop + area / 2 - h / 2, w, h };
+}
+
+/**
  * Particle density for a sculpture drawn `width` CSS px wide. The engine's
  * grid is 1000 particles across at density 1 — sized for a full-screen hero
  * about 1300 px wide (~0.77 particles per px). Smaller boxes get the same
@@ -918,6 +931,7 @@ export function mountSculpture(host, {
   theme = () => document.documentElement.dataset.theme === "light" ? "light" : "dark",
   background = () => getComputedStyle(document.documentElement).getPropertyValue("--bg"),
   scale = 1,
+  place = null,
   autopilot = false,
   options = {}
 } = {}) {
@@ -959,7 +973,7 @@ export function mountSculpture(host, {
     const width = host.clientWidth;
     const height = host.clientHeight;
     if (width < 2 || height < 2) return;
-    const rect = fitSculptureRect(width, height, aspect, scale);
+    const rect = (place && place(width, height, aspect)) || fitSculptureRect(width, height, aspect, scale);
     const wanted = densityForWidth(rect.w);
     // Rebuilding the particles is costly: only for real size changes.
     if (Math.abs(wanted - density) / density > 0.25) {

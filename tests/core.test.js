@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  settleWithLimit,
   ACCEPTED_IMAGE_TYPES,
   getContainedRect,
   getLandmarkBounds,
@@ -70,4 +71,20 @@ test("formats byte counts for Turkish UI", () => {
   assert.equal(formatBytes(0), "0 B");
   assert.match(formatBytes(1024), /1 KB/);
   assert.match(formatBytes(1024 * 1024), /1 MB/);
+});
+test("settleWithLimit keeps order, reports failures and never exceeds the limit", async () => {
+  let running = 0;
+  let peak = 0;
+  const results = await settleWithLimit([30, 5, 20, 1, 10], 2, async (delay, index) => {
+    running += 1;
+    peak = Math.max(peak, running);
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    running -= 1;
+    if (index === 3) throw new Error("bad");
+    return index;
+  });
+  assert.equal(peak, 2);
+  assert.deepEqual(results.map((item) => item.status), ["fulfilled", "fulfilled", "fulfilled", "rejected", "fulfilled"]);
+  assert.deepEqual(results.filter((item) => item.value !== undefined).map((item) => item.value), [0, 1, 2, 4]);
+  assert.deepEqual(await settleWithLimit([], 3, async () => 1), []);
 });

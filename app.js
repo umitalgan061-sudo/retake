@@ -2,6 +2,7 @@ import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdel
 import {
   formatBytes,
   getLandmarkBounds,
+  settleWithLimit,
   MAX_IMAGE_BYTES,
   MAX_REFERENCE_FACES,
   validateImageDimensions,
@@ -238,10 +239,12 @@ function updateSwapAvailability() {
       : referenceCount !== MAX_REFERENCE_FACES
         ? "Varsayılan profil yüklenemedi. Yüz profili ayarlarından 25 fotoğraf seçebilir veya havuzu yeniden yükleyebilirsin."
         : !state.faceFusionStatus.configured
-          ? "Düzenleme için bu cihazda yerel FaceFusion servisini başlat."
+          ? (isLikelyMobile()
+            ? "Telefondan kullanmak için Motor bağlantısı bölümünden bilgisayarını eşleştir."
+            : "Düzenleme için bilgisayarında FaceFusion motorunu başlat.")
           : !hasTarget
             ? "Başlamak için bir fotoğraf yükle ve değiştirilecek yüzü seç."
-            : "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
+            : "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
   }
   elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
@@ -289,9 +292,8 @@ async function checkFaceFusionStatus() {
 
   const connectionLabel = $("#topConnectionText");
   if (connectionLabel) {
-    connectionLabel.textContent = state.engine.remote
-      ? (state.faceFusionStatus.configured ? "EŞLEŞEN MOTOR HAZIR" : "EŞLEŞEN MOTOR ÇEVRİMDIŞI")
-      : (state.faceFusionStatus.configured ? "YEREL MOTOR HAZIR" : "YEREL MOTOR ÇEVRİMDIŞI");
+    connectionLabel.textContent = state.faceFusionStatus.configured ? "Motor hazır" : "Motor çevrimdışı";
+    connectionLabel.closest(".connection-chip")?.classList.toggle("is-ready", Boolean(state.faceFusionStatus.configured));
   }
   elements.engineSummary.textContent = state.engine.remote
     ? (state.faceFusionStatus.configured ? "Eşleşti" : "Bağlanamadı")
@@ -828,7 +830,9 @@ async function loadLocalReferences({ force = false } = {}) {
     // Photos are downloaded once and then read from this device's cache.
     requestPersistentStorage();
     let downloaded = 0;
-    const results = await Promise.allSettled(references.map(async (reference, index) => {
+    // Two at a time: 25 multi-megapixel photos decoded together stall the page
+    // (and can exhaust a phone's memory).
+    const results = await settleWithLimit(references, 2, async (reference, index) => {
       const endpoint = photoUrls[index];
       const { response, fromCache } = await fetchCachedReference(endpoint, {
         force,
@@ -844,7 +848,7 @@ async function loadLocalReferences({ force = false } = {}) {
 
       const loaded = await loadReferenceImage(blob);
       return { ...reference, status: "ready", url: loaded.url, image: loaded.image, blob, size: blob.size };
-    }));
+    });
 
     if (token !== state.referenceLoadToken) {
       results.forEach((result) => {
@@ -1605,20 +1609,21 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
 }
 
 const stones = { hero: null, wait: null, timer: null };
+// Share of the hero (from the top) the sculpture is centred in on desktop,
+// and the clearance kept under the sticky top bar.
+const HERO_SCULPTURE_AREA = 0.6;
+const HERO_SCULPTURE_TOP = 40;
 
 function initializeStones() {
   const wide = window.matchMedia("(min-width: 851px)");
-  const copy = $(".hero-copy");
   stones.hero = mountSculpture($("#heroSculpture"), {
-    scale: 0.98,
+    scale: 1,
     // Desktop: full-width sculpture above the headline, like the Forma page.
-    place: (width, height, aspect) => {
-      if (!wide.matches) return null;
-      const host = $("#heroSculpture").getBoundingClientRect();
-      const textTop = (copy?.getBoundingClientRect().top ?? host.top + height * 0.7) - host.top;
-      // Keep clear of the sticky top bar (the host starts under it).
-      return placeWideSculpture(width, height, aspect, Math.max(height * 0.45, textTop - 12), 64);
-    }
+    // Placement depends only on the hero box (not on where the text happens
+    // to be once fonts load), so it is identical in both themes and on reload.
+    place: (width, height, aspect) => wide.matches
+      ? placeWideSculpture(width, height, aspect, height * HERO_SCULPTURE_AREA, HERO_SCULPTURE_TOP)
+      : null
   });
 }
 
@@ -1780,7 +1785,7 @@ async function runFaceFusionEdit() {
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
     state.nextVariation = (variation + 1) % 4;
     addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex]);
-    elements.disabledNote.textContent = "Saç stili kaynak fotoğraftan korunur. Yeniden oluşturma farklı kafa oranı ve sakal harmanları dener.";
+    elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
     showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}.`);
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
@@ -1926,8 +1931,6 @@ async function initializeDetector() {
       state.detector = await FaceLandmarker.createFromOptions(vision, options);
     }
 
-    elements.engineDescription.textContent =
-      "MediaPipe yüzleri tarayıcıda algılar. Kimlik aktarımı, bilgisayarındaki CUDA destekli FaceFusion modeliyle yapılır.";
     if (state.target) {
       state.target.faces = await detectFaces(state.target.image);
       state.selectedFaceIndex = state.target.faces.length > 0 ? 0 : null;
@@ -1971,7 +1974,7 @@ function updateThemeButton() {
   elements.themeButton.setAttribute("aria-label", light ? "Koyu temaya geç" : "Açık temaya geç");
   elements.themeButton.title = light ? "Koyu tema" : "Açık tema";
   const themeColor = document.querySelector('meta[name="theme-color"]');
-  if (themeColor) themeColor.content = light ? "#f1f2e9" : "#10120f";
+  if (themeColor) themeColor.content = light ? "#ebe8e2" : "#0e0d0c";
 }
 
 function toggleTheme() {
@@ -2082,16 +2085,53 @@ function initializeInteractions() {
   });
 }
 
+const HEAVY_INIT_DELAY_MS = 2600;
+
+function whenPageSettled(delayMs) {
+  return new Promise((resolve) => {
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      document.removeEventListener("pointerdown", onIntent, true);
+      document.removeEventListener("keydown", onIntent, true);
+      document.removeEventListener("dragenter", onIntent, true);
+      resolve();
+    };
+    const onIntent = (event) => {
+      // Playing with the sculpture is not a reason to start loading.
+      if (event.target?.closest?.(".sculpture-host")) return;
+      go();
+    };
+    const timer = window.setTimeout(() => {
+      if ("requestIdleCallback" in window) window.requestIdleCallback(go, { timeout: 1500 });
+      else go();
+    }, delayMs);
+    document.addEventListener("pointerdown", onIntent, true);
+    document.addEventListener("keydown", onIntent, true);
+    document.addEventListener("dragenter", onIntent, true);
+  });
+}
+
 async function initializeApp() {
   initializeTheme();
   initializeInteractions();
   initializeStones();
   initializeEngineSettings();
 
+  // The sculpture's opening animation gets the first seconds to itself; the
+  // heavy work (face model, 25 reference photos) starts once the page is
+  // idle, or straight away when the user reaches for a photo.
+  state.referencesLoading = true;
+  updateSwapAvailability();
+  const engineCheck = checkFaceFusionStatus();
+  await whenPageSettled(HEAVY_INIT_DELAY_MS);
   await Promise.allSettled([
-    loadLocalReferences(),
+    // Skip the default pool if the user already started loading their own.
+    state.referenceLoadToken === 0 ? loadLocalReferences() : Promise.resolve(0),
     initializeDetector(),
-    checkFaceFusionStatus()
+    engineCheck
   ]);
 
   const loaded = state.references.filter((reference) => reference.status === "ready").length;

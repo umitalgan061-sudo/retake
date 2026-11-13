@@ -385,8 +385,10 @@ class SculptureEngine {
             this.draw(), this.firstFrame(), this.stop();
             return;
           }
-          if (((this.raf = requestAnimationFrame(this.frame)), this.skip++ % 2)) return;
-          (this.time += (N * 2 * K.speed) / 60), this.draw(), this.firstFrame();
+          // Retake: draw every frame (the original skipped every other one
+          // while drifting, which made the idle motion look choppy).
+          this.raf = requestAnimationFrame(this.frame);
+          (this.time += (N * K.speed) / 60), this.draw(), this.firstFrame();
           return;
         }
         (this.raf = requestAnimationFrame(this.frame)),
@@ -899,6 +901,10 @@ export function fitSculptureRect(boxWidth, boxHeight, aspect, scale = 1) {
   return { x: (boxWidth - width) / 2, y: (boxHeight - height) / 2, w: width, h: height };
 }
 
+// The sculpture overflows the window on both sides, as on the Forma page.
+export const WIDE_SPAN = 1.12;
+export const WIDE_MAX_HEIGHT = 1.25;
+
 /**
  * Wide-hero placement, as on the original Forma page: the sculpture spans
  * the full width (slightly past both edges) and is centered in the free area
@@ -906,8 +912,8 @@ export function fitSculptureRect(boxWidth, boxHeight, aspect, scale = 1) {
  */
 export function placeWideSculpture(width, height, aspect, areaBottom = height * 0.7, areaTop = 0) {
   const area = Math.max(1, areaBottom - areaTop);
-  let w = width * 1.02;
-  if (w / aspect > area * 1.1) w = area * 1.1 * aspect;
+  let w = width * WIDE_SPAN;
+  if (w / aspect > area * WIDE_MAX_HEIGHT) w = area * WIDE_MAX_HEIGHT * aspect;
   const h = w / aspect;
   return { x: (width - w) / 2, y: areaTop + area / 2 - h / 2, w, h };
 }
@@ -920,8 +926,12 @@ export function placeWideSculpture(width, height, aspect, areaBottom = height * 
  */
 export function densityForWidth(width, particlesPerPx = 0.8) {
   const grid = Math.max(1, width) * particlesPerPx;
-  return Math.min(1, Math.max(0.15, (grid / 1000) ** 2));
+  return Math.min(MAX_DENSITY, Math.max(0.15, (grid / 1000) ** 2));
 }
+
+// ~20% fewer particles than the original full-screen build: visually the same,
+// noticeably lighter on laptop and phone GPUs.
+export const MAX_DENSITY = 0.8;
 
 /**
  * Mount the sculpture into `host` (a positioned element). Returns a controller,
@@ -990,7 +1000,14 @@ export function mountSculpture(host, {
     const token = ++imageToken;
     const image = new Image();
     image.decoding = "async";
-    image.onload = () => {
+    image.onload = async () => {
+      // Decode off the main thread before the texture upload, so building the
+      // particles does not stall a frame.
+      try {
+        await image.decode?.();
+      } catch {
+        // decode() can reject for already-decoded images; onload means usable.
+      }
       if (token !== imageToken || failed) return;
       aspect = image.naturalWidth / image.naturalHeight || aspect;
       layout();

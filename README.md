@@ -67,6 +67,13 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - Varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcı önbelleğinde (Cache Storage) kalıcı olarak saklanır; sonraki açılışlarda ve ana ekrana eklenen uygulamada yeniden indirilmez. Yalnızca birkaç KB'lık liste dosyası kontrol edilir. **Varsayılan havuza dön** fotoğrafları yeniden indirir. Tarayıcı verileri silinirse fotoğraflar bir kez daha iner.
 - Referans fotoğrafları sırayla açılıp küçültülür; profil hazırlama ilerlemesi görünür. **Fotoğrafları ve profili temizle** seçili fotoğrafları oturum belleğinden ve önbelleğe alınmış kırpılmış profili IndexedDB'den siler. Kaynak fotoğrafları cihazdaki dosyalarından silmez.
 
+## Tasarım
+
+- "Atelier" teması: porselen (açık) ve obsidyen (koyu) zemin, şampanya altını vurgu; Geist ve Instrument Serif yazı tipleri `assets/fonts/` altında barındırılır (SIL Open Font License 1.1, lisans metinleri aynı klasörde).
+- Logo: heykelin halkasından esinlenen, tek şerit gibi akan "R" monogramı (`icons/retake.svg`, PNG simgeler bundan üretilir).
+- Masaüstünde heykel tüm genişliğe yayılır ve yeri yalnızca hero kutusunun boyutuna göre hesaplanır; açık ve koyu temada aynıdır. Telefonda heykel kartında parmakla sürükleme fare gibi parçacıkları dağıtır.
+- Açılışta önce heykel çizilir; yüz algılama modeli ve 25 referans fotoğrafı sayfa boşa çıkınca (ya da fotoğraf seçmeye uzanınca) yüklenir. Referanslar ikişer ikişer açılır.
+
 ## Telefon, tablet ve PWA ile kullanım
 
 Yüz dönüşümü NVIDIA ekran kartlı bilgisayarda çalışır; telefon bu bilgisayardaki motoru şifreli bir tünel ve eşleştirme koduyla kullanır. Fotoğraflar bir AI servisine yüklenmez, yalnızca tünel sağlayıcısının (Cloudflare veya Tailscale) şifreli bağlantısından geçer.

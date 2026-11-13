@@ -83,3 +83,25 @@ export function formatBytes(bytes) {
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
+/**
+ * Like Promise.allSettled(items.map(task)) but runs at most `limit` tasks at
+ * once. Results keep the order of `items`.
+ */
+export async function settleWithLimit(items, limit, task) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = { status: "fulfilled", value: await task(items[index], index) };
+      } catch (reason) {
+        results[index] = { status: "rejected", reason };
+      }
+    }
+  }
+  const workers = Math.max(1, Math.min(Math.floor(limit) || 1, items.length));
+  await Promise.all(Array.from({ length: workers }, worker));
+  return results;
+}

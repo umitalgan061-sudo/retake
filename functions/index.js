@@ -17,7 +17,7 @@ const REQUEST_LIMIT = 5;
 const requestBuckets = new Map();
 
 function allowedOrigins() {
-  const configured = (process.env.RETAKE_ALLOWED_ORIGINS || "https://retake06.web.app,https://retake06.firebaseapp.com")
+  const configured = (process.env.RETAKE_ALLOWED_ORIGINS || "https://retake06-ua.web.app,https://retake06-ua.firebaseapp.com,https://retake06.web.app,https://retake06.firebaseapp.com")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);

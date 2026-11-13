@@ -27,6 +27,7 @@ $ServerArgs = @(
     "--host", "127.0.0.1",
     "--port", "8765",
     "--face-swapper-pixel-boost", $FaceSwapperPixelBoost,
+    "--origin", "https://retake06-ua.web.app",
     "--origin", "https://retake06.web.app"
 )
 if ($EnableFaceEnhancer) {

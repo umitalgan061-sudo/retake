@@ -6,7 +6,9 @@ const firebase = JSON.parse(await readFile(new URL("../firebase.json", import.me
 const firebaserc = JSON.parse(await readFile(new URL("../.firebaserc", import.meta.url), "utf8"));
 
 test("maps only the Retake Hosting target to the retake06 site", () => {
-  assert.equal(firebaserc.projects.default, "hafize-23465");
+  assert.equal(firebaserc.projects.default, "projelerim-8fecd");
+  assert.deepEqual(firebaserc.targets["projelerim-8fecd"].hosting.retake06, ["retake06-ua"]);
+  // The old site stays deployable with --project hafize-23465.
   assert.deepEqual(firebaserc.targets["hafize-23465"].hosting.retake06, ["retake06"]);
   assert.equal(firebase.hosting.target, "retake06");
   assert.equal(firebase.hosting.public, ".");

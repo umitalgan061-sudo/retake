@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from tools import facefusion_local_server as srv
 
-ORIGIN = "https://retake06.web.app"
+ORIGIN = "https://retake06-ua.web.app"
 TOKEN = "pairing-code-for-tests-0123"
 PNG = srv.PNG_SIGNATURE + b"fake"
 
@@ -199,6 +199,13 @@ class PairedEngineTest(EngineServerTest):
         self.assertEqual(response.status, 204)
         self.assertIn(srv.PAIRING_HEADER, response.getheader("Access-Control-Allow-Headers"))
         self.assertEqual(response.getheader("Access-Control-Allow-Origin"), ORIGIN)
+
+
+class AllowedOriginsTest(unittest.TestCase):
+    def test_new_and_old_sites_are_allowed_by_default(self):
+        source = Path(srv.__file__).read_text(encoding="utf-8")
+        self.assertIn('"https://retake06-ua.web.app"', source)
+        self.assertIn('"https://retake06.web.app"', source)
 
 
 class PairingTokenFileTest(unittest.TestCase):

@@ -66,6 +66,39 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - Seçilen kişisel fotoğraflar tarayıcıda açılır ve yüz crop'ları çıkarılır. Yalnızca kullanıcı düzenlemeyi başlatıp açık onay verdikten sonra hedef yüz crop'u ve referans crop'ları bu bilgisayardaki `127.0.0.1:8765` servisine gönderilir; üçüncü taraf çıkarım API'si kullanılmaz.
 - Referans fotoğrafları sırayla açılıp küçültülür; profil hazırlama ilerlemesi görünür. **Fotoğrafları ve profili temizle** seçili fotoğrafları oturum belleğinden ve önbelleğe alınmış kırpılmış profili IndexedDB'den siler. Kaynak fotoğrafları cihazdaki dosyalarından silmez.
 
+## Telefon, tablet ve PWA ile kullanım
+
+Yüz dönüşümü NVIDIA ekran kartlı bilgisayarda çalışır; telefon bu bilgisayardaki motoru şifreli bir tünel ve eşleştirme koduyla kullanır. Fotoğraflar bir AI servisine yüklenmez, yalnızca tünel sağlayıcısının (Cloudflare veya Tailscale) şifreli bağlantısından geçer.
+
+1. Bilgisayarda motoru eşleştirme moduyla başlat:
+
+   ```powershell
+   .\tools\start_facefusion_retake.ps1 -EnablePairing
+   ```
+
+   Pencerede bir **EŞLEŞTİRME KODU** yazar (`%USERPROFILE%\.retake\pairing-token` dosyasında saklanır, her açılışta aynıdır).
+2. Ayrı bir pencerede tüneli aç ([cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) kurulu olmalı):
+
+   ```powershell
+   cloudflared tunnel --url http://127.0.0.1:8765
+   ```
+
+   Çıktıdaki `https://….trycloudflare.com` adresini not et. Tailscale kullanıyorsan `tailscale serve` ile verilen `https://….ts.net` adresi de çalışır.
+3. Telefonda https://retake06.web.app adresini aç → **Motor bağlantısı** → adresi ve kodu gir → **Bağlan**.
+4. Safari'de **Paylaş → Ana Ekrana Ekle** (Android Chrome'da **Uygulamayı yükle**) ile Retake'i uygulama olarak kurabilirsin. Adres ve kod yalnızca o cihazın tarayıcısında saklanır.
+
+Notlar:
+- Eşleştirme açıkken motora gelen her istek kodu taşımak zorundadır; kodu bilen herkes motoru kullanabilir, paylaşma. Kodu yenilemek için `pairing-token` dosyasını silip motoru yeniden başlat.
+- Ücretsiz `trycloudflare.com` adresi tünel her açıldığında değişir; telefonda adresi güncellemek gerekir.
+- Uzun işlemler arka plan işi olarak çalışır; telefon ekranı kapansa bile işlem bilgisayarda sürer, uygulama yeniden açıldığında durum tekrar sorgulanır.
+
+## Sonuç stüdyosu
+
+- **Önce / Sonra** kaydırıcısı orijinal ile sonucu aynı karede karşılaştırır.
+- **Dönüşüm gücü** (%30–100) sonucu orijinalle harmanlar; indirme ve paylaşım bu ayarı kullanır.
+- Son altı görünüm küçük resim olarak tutulur; aralarında geçiş yapılabilir.
+- PNG (kayıpsız) veya JPG olarak indirilebilir; destekleyen telefonlarda **Paylaş** ile doğrudan Fotoğraflar'a kaydedilebilir.
+
 ## Firebase Hosting
 
 Firebase projesi: `hafize-23465`  

@@ -451,6 +451,35 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
         raise RuntimeError("GFPGAN sonrası alfa maskeli hibrit sonuç yazılamadı.")
 
 
+def pad_image_to_even(path: Path) -> tuple[int, int]:
+    """FaceFusion rounds every output to even width/height (vision.normalize_resolution),
+    rescaling odd-sized targets by a pixel. Pad odd targets by one replicated
+    edge pixel instead, so outputs line up 1:1 with the target, and return the
+    original size to crop back to."""
+    import cv2
+
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None:
+        raise RuntimeError("Hedef kırpım okunamadı.")
+    height, width = image.shape[:2]
+    pad_right, pad_bottom = width % 2, height % 2
+    if pad_right or pad_bottom:
+        padded = cv2.copyMakeBorder(image, 0, pad_bottom, 0, pad_right, cv2.BORDER_REPLICATE)
+        if not cv2.imwrite(str(path), padded):
+            raise RuntimeError("Hedef kırpım çift boyuta tamamlanamadı.")
+    return width, height
+
+
+def crop_to_size(image, size: dict[str, int] | None):
+    """Undo pad_image_to_even: trim at most one padded row/column."""
+    if size is None or image is None:
+        return image
+    height, width = image.shape[:2]
+    if 0 <= width - size["width"] <= 1 and 0 <= height - size["height"] <= 1:
+        return image[: size["height"], : size["width"]]
+    return image
+
+
 def fit_head_to_face(
     input_path: Path,
     output_path: Path,
@@ -498,14 +527,18 @@ def blend_lower_face(
     except Exception as error:
         raise RuntimeError(f"Alt yüz harmanlama için OpenCV/NumPy yüklenemedi: {error}") from error
 
-    target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
-    identity = cv2.imread(str(identity_path), cv2.IMREAD_COLOR)
-    appearance = cv2.imread(str(appearance_path), cv2.IMREAD_COLOR)
+    target = crop_to_size(cv2.imread(str(target_path), cv2.IMREAD_COLOR), expected_size)
+    identity = crop_to_size(cv2.imread(str(identity_path), cv2.IMREAD_COLOR), expected_size)
+    appearance = crop_to_size(cv2.imread(str(appearance_path), cv2.IMREAD_COLOR), expected_size)
     if (
         target is None or identity is None or appearance is None
         or target.shape != identity.shape or target.shape != appearance.shape
     ):
-        raise RuntimeError("Hedef, kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor.")
+        sizes = ", ".join(
+            "yok" if image is None else f"{image.shape[1]}x{image.shape[0]}"
+            for image in (target, identity, appearance)
+        )
+        raise RuntimeError(f"Hedef, kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor ({sizes}).")
 
     height, width = identity.shape[:2]
     if expected_size is not None and (width, height) != (expected_size["width"], expected_size["height"]):
@@ -586,6 +619,7 @@ def process_swap(
         temp_dir = Path(temp_name)
         target_path = temp_dir / ("target" + target_ext)
         target_path.write_bytes(target_bytes)
+        pad_image_to_even(target_path)
         appearance_path = temp_dir / ("appearance-profile" + appearance_ext)
         appearance_path.write_bytes(appearance_bytes)
 

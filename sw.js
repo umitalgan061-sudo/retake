@@ -1,4 +1,4 @@
-const SHELL_CACHE = "retake-shell-v21";
+const SHELL_CACHE = "retake-shell-v22";
 const AI_CACHE = "retake-ai-assets-v2";
 // Written by src/reference-cache.js; must survive service-worker updates.
 const REFERENCE_CACHE = "retake-reference-photos-v1";
@@ -23,6 +23,25 @@ function isApprovedAIAsset(url) {
     "/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite",
     "/mediapipe-models/face_detector/blaze_face_full_range/float16/1/blaze_face_full_range.tflite"
   ].includes(url.pathname);
+}
+
+// App code (HTML, JS, CSS, manifest, icons) is fetched from the network first,
+// so a new deploy shows up on the next load without bumping SHELL_CACHE. The
+// cached copy is used only offline or when hosting fails (e.g. 509 quota).
+async function networkFirst(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const response = await fetch(request, { cache: "no-cache" });
+    if (response.ok) {
+      if (response.type === "basic" || response.type === "cors") await cache.put(request, response.clone());
+      return response;
+    }
+    return (await cache.match(request)) || response;
+  } catch (error) {
+    const cached = await cache.match(request);
+    if (cached) return cached;
+    throw error;
+  }
 }
 
 async function cacheFirst(request, cacheName) {
@@ -67,8 +86,11 @@ self.addEventListener("fetch", (event) => {
           return (await caches.match("./index.html")) || response;
         }).catch(async () => (await caches.match("./index.html")) || Response.error())
       );
-    } else {
+    } else if (url.pathname.startsWith("/assets/")) {
+      // Large, never-changing media (sculpture images): download once.
       event.respondWith(cacheFirst(request, SHELL_CACHE).catch(async () => (await caches.match(request)) || Response.error()));
+    } else {
+      event.respondWith(networkFirst(request, SHELL_CACHE).catch(async () => (await caches.match(request)) || Response.error()));
     }
     return;
   }

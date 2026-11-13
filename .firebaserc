@@ -1,12 +1,20 @@
 {
   "projects": {
-    "default": "hafize-23465"
+    "default": "projelerim-8fecd",
+    "legacy": "hafize-23465"
   },
   "targets": {
     "hafize-23465": {
       "hosting": {
         "retake06": [
           "retake06"
+        ]
+      }
+    },
+    "projelerim-8fecd": {
+      "hosting": {
+        "retake06": [
+          "retake06-ua"
         ]
       }
     }

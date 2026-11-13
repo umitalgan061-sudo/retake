@@ -78,8 +78,8 @@ Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v5, ide
 
 ## 4. Retake'i çalıştır
 
-1. Firebase'de https://retake06.web.app adresini aç.
-2. Tarayıcı retake06.web.app için yerel ağ erişimi isterse izin ver.
+1. Firebase'de https://retake06-ua.web.app adresini aç.
+2. Tarayıcı retake06-ua.web.app için yerel ağ erişimi isterse izin ver.
 3. Referans havuzundaki 25 fotoğrafın aynı kişiye ait olduğundan emin ol.
 4. Hedef fotoğrafı yükle ve değiştirilecek yüzü seç.
 5. Yerel işlem onayını kabul et.
@@ -116,7 +116,7 @@ Bu yöntem 25 fotoğrafı bir yüz görseli gibi körlemesine yan yana koymaz. H
 
 - FaceFusion PowerShell penceresi açık olmalı.
 - http://127.0.0.1:8765/health yerel tarayıcıda açılmalı.
-- Edge/Chrome site izinlerinde retake06.web.app için yerel ağ erişimi verilmelidir.
+- Edge/Chrome site izinlerinde retake06-ua.web.app için yerel ağ erişimi verilmelidir.
 - Servis loopback'te kalmalı; 0.0.0.0 kullanma.
 
 ### 25 referansın tamamı hizalanamadı

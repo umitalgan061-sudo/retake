@@ -1044,6 +1044,8 @@ def main() -> int:
         return 2
 
     origins = set(args.origin) | {
+        "https://retake06-ua.web.app",
+        "https://retake06-ua.firebaseapp.com",
         "https://retake06.web.app",
         "http://localhost:4173",
         "http://127.0.0.1:4173"

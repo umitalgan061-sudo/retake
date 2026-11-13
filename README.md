@@ -62,7 +62,7 @@ Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOC
 - Her referans önce FaceLandmarker, gerekirse BlazeFace kısa menzil ve tam menzil modelleriyle yeniden algılanır. Bir fotoğraf yine de hizalanamazsa işlem durur ve dosya adı gösterilir; 19/25 gibi eksik bir profille devam edilmez.
 - Hedef yüz crop'u, 25 referansın tamamından alınan yüz crop'ları, ağırlıklar ve hizalanmış profil aynı bilgisayardaki FaceFusion servisine gönderilir. Sunucu bu crop'ların ArcFace tutarlılık raporunu da çıkarır.
 - AlphaFace ve UniFace sonuçları tek hibrit yüze birleştirilir; alt yüz bölgesinde sakal/bıyık görünümü desteklenir. Sonuç hedefe maske ile uygulanır ve maske dışı piksel bütünlüğü kontrol edilir.
-- İlk kez açarken tarayıcı `retake06.web.app` için yerel ağ erişimi isterse izin verilmelidir.
+- İlk kez açarken tarayıcı `retake06-ua.web.app` için yerel ağ erişimi isterse izin verilmelidir.
 - Seçilen kişisel fotoğraflar tarayıcıda açılır ve yüz crop'ları çıkarılır. Yalnızca kullanıcı düzenlemeyi başlatıp açık onay verdikten sonra hedef yüz crop'u ve referans crop'ları bu bilgisayardaki `127.0.0.1:8765` servisine gönderilir; üçüncü taraf çıkarım API'si kullanılmaz.
 - Varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcı önbelleğinde (Cache Storage) kalıcı olarak saklanır; sonraki açılışlarda ve ana ekrana eklenen uygulamada yeniden indirilmez. Yalnızca birkaç KB'lık liste dosyası kontrol edilir. **Varsayılan havuza dön** fotoğrafları yeniden indirir. Tarayıcı verileri silinirse fotoğraflar bir kez daha iner.
 - Referans fotoğrafları sırayla açılıp küçültülür; profil hazırlama ilerlemesi görünür. **Fotoğrafları ve profili temizle** seçili fotoğrafları oturum belleğinden ve önbelleğe alınmış kırpılmış profili IndexedDB'den siler. Kaynak fotoğrafları cihazdaki dosyalarından silmez.
@@ -85,7 +85,7 @@ Yüz dönüşümü NVIDIA ekran kartlı bilgisayarda çalışır; telefon bu bil
    ```
 
    Çıktıdaki `https://….trycloudflare.com` adresini not et. Tailscale kullanıyorsan `tailscale serve` ile verilen `https://….ts.net` adresi de çalışır.
-3. Telefonda https://retake06.web.app adresini aç → **Motor bağlantısı** → adresi ve kodu gir → **Bağlan**.
+3. Telefonda https://retake06-ua.web.app adresini aç → **Motor bağlantısı** → adresi ve kodu gir → **Bağlan**.
 4. Safari'de **Paylaş → Ana Ekrana Ekle** (Android Chrome'da **Uygulamayı yükle**) ile Retake'i uygulama olarak kurabilirsin. Adres ve kod yalnızca o cihazın tarayıcısında saklanır.
 
 Notlar:
@@ -102,17 +102,19 @@ Notlar:
 
 ## Firebase Hosting
 
-Firebase projesi: `hafize-23465`  
-Hosting hedefi: `retake06`  
-Canlı adres: https://retake06.web.app
+Firebase projesi: `projelerim-8fecd`  
+Hosting hedefi: `retake06` → site `retake06-ua`  
+Canlı adres: https://retake06-ua.web.app
 
 Sadece bu siteyi dağıtmak için:
 
 ```bash
-npx --yes firebase-tools@latest deploy --only hosting:retake06 --project hafize-23465
+npx --yes firebase-tools@latest deploy --only hosting:retake06 --project projelerim-8fecd
 ```
 
 Diğer Hosting sitelerini güncellememek için `--only hosting:retake06` hedefini koru. Firebase CLI oturumu yoksa önce `npx --yes firebase-tools@latest login --no-localhost` ile doğrulama yap.
+
+Eski adres https://retake06.web.app (`hafize-23465` projesi, `.firebaserc` içinde `legacy`) bant genişliği kotası dolduğu için yerini yeni siteye bıraktı. Yerel FaceFusion motoru iki adrese de izin verir.
 
 ## Gizlilik ve referans görselleri — önemli
 

@@ -4,4 +4,4 @@ compatibility_date = "2026-11-09"
 workers_dev = true
 
 [vars]
-RETAKE_ALLOWED_ORIGINS = "https://retake06.web.app,https://retake06.firebaseapp.com"
+RETAKE_ALLOWED_ORIGINS = "https://retake06-ua.web.app,https://retake06-ua.firebaseapp.com,https://retake06.web.app,https://retake06.firebaseapp.com"

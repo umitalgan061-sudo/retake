@@ -41,7 +41,7 @@ def main() -> int:
         firebase_config = json.loads(firebase_path.read_text(encoding="utf-8"))
         hosting_config = firebase_config["hosting"]
         firebaserc = json.loads(firebaserc_path.read_text(encoding="utf-8"))
-        target_site = firebaserc["targets"]["hafize-23465"]["hosting"]["retake06"]
+        target_site = firebaserc["targets"]["projelerim-8fecd"]["hosting"]["retake06"]
         ignored = hosting_config.get("ignore", [])
         safe_ignores = all(pattern in ignored for pattern in (
             "functions/**", "ios/**", "docs/**", "tests/**", "tools/**", "models/**", "worker/**"
@@ -50,12 +50,12 @@ def main() -> int:
         hosting_ok = (
             hosting_config.get("target") == "retake06"
             and hosting_config.get("public") == "."
-            and target_site == ["retake06"]
-            and firebaserc.get("projects", {}).get("default") == "hafize-23465"
+            and target_site == ["retake06-ua"]
+            and firebaserc.get("projects", {}).get("default") == "projelerim-8fecd"
             and safe_ignores
             and reference_assets_public
         )
-        hosting_detail = "retake06 hedefi seçili; kaynak hariç, onaylı referans varlıkları public"
+        hosting_detail = "retake06 hedefi (retake06-ua) seçili; kaynak hariç, onaylı referans varlıkları public"
     except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
         hosting_ok = False
         hosting_detail = "Firebase Hosting hedefi yapılandırması geçersiz: " + str(error)

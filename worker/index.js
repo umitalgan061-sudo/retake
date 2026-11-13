@@ -7,7 +7,7 @@ const editAttempts = new Map();
 
 function configuredOrigins(env) {
   return new Set(
-    String(env.RETAKE_ALLOWED_ORIGINS || "https://retake06.web.app,https://retake06.firebaseapp.com")
+    String(env.RETAKE_ALLOWED_ORIGINS || "https://retake06-ua.web.app,https://retake06-ua.firebaseapp.com,https://retake06.web.app,https://retake06.firebaseapp.com")
       .split(",")
       .map((origin) => origin.trim())
       .filter(Boolean)

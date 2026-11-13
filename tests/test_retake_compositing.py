@@ -148,5 +148,68 @@ class HeadFitTest(unittest.TestCase):
         self.assertLess(float(displacement.max()), 0.01)
 
 
+@unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
+class OddTargetSizeTest(unittest.TestCase):
+    """FaceFusion rounds outputs to even sizes; odd targets are padded, then cropped back."""
+
+    def test_odd_target_is_padded_to_even_and_cropped_back_exactly(self):
+        import tempfile
+        from pathlib import Path
+        from tools.facefusion_local_server import crop_to_size, pad_image_to_even
+
+        rng = np.random.default_rng(3)
+        original = rng.integers(0, 255, (1811, 1387, 3), dtype=np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "target.png"
+            cv2.imwrite(str(path), original)
+            size = pad_image_to_even(path)
+            padded = cv2.imread(str(path), cv2.IMREAD_COLOR)
+        self.assertEqual(size, (1387, 1811))
+        self.assertEqual(padded.shape[:2], (1812, 1388))
+        self.assertTrue((padded[:1811, :1387] == original).all(), "no pixel of the photo is resampled")
+        cropped = crop_to_size(padded, {"width": 1387, "height": 1811})
+        self.assertTrue((cropped == original).all())
+
+    def test_even_target_is_left_alone(self):
+        import tempfile
+        from pathlib import Path
+        from tools.facefusion_local_server import crop_to_size, pad_image_to_even
+
+        original = np.zeros((1024, 784, 3), np.uint8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "target.png"
+            cv2.imwrite(str(path), original)
+            before = path.read_bytes()
+            self.assertEqual(pad_image_to_even(path), (784, 1024))
+            self.assertEqual(path.read_bytes(), before)
+        self.assertEqual(crop_to_size(original, {"width": 784, "height": 1024}).shape, original.shape)
+        # Larger mismatches are not hidden by cropping.
+        self.assertEqual(crop_to_size(original, {"width": 700, "height": 1024}).shape, original.shape)
+
+    def test_blend_accepts_facefusion_even_outputs_for_an_odd_target(self):
+        import tempfile
+        from pathlib import Path
+        from tools import facefusion_local_server as srv
+
+        target, swapped = synthetic_swap()
+        odd_target = target[:511, :391]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target_path = root / "target.png"
+            cv2.imwrite(str(target_path), odd_target)
+            srv.pad_image_to_even(target_path)
+            padded = cv2.imread(str(target_path))
+            swap_padded = padded.copy()
+            swap_padded[:511, :391] = swapped[:511, :391]
+            for name in ("identity.png", "appearance.png"):
+                cv2.imwrite(str(root / name), swap_padded)
+            srv.blend_lower_face(
+                target_path, root / "identity.png", root / "appearance.png", root / "out.png",
+                FACE, 0.2, {"width": 391, "height": 511}
+            )
+            result = cv2.imread(str(root / "out.png"), cv2.IMREAD_UNCHANGED)
+        self.assertEqual(result.shape[:2], (511, 391))
+
+
 if __name__ == "__main__":
     unittest.main()

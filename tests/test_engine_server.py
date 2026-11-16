@@ -108,7 +108,7 @@ class LocalEngineTest(EngineServerTest):
     def test_swap_runs_as_a_job_and_reports_stages(self):
         seen = []
 
-        def fake_swap(facefusion_dir, pixel_boost, enhancer, parsed, progress):
+        def fake_swap(facefusion_dir, pixel_boost, enhancer, parsed, progress, caches=None):
             for step in range(len(srv.JOB_STAGES)):
                 progress(step)
                 seen.append(step)
@@ -221,3 +221,96 @@ class PairingTokenFileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+try:
+    import cv2
+    import numpy as np
+except ImportError:  # OpenCV/NumPy live in the FaceFusion environment.
+    cv2 = None
+
+
+@unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
+class CachedPipelineTest(unittest.TestCase):
+    """Runs the real process_swap with FaceFusion and ArcFace replaced by fakes."""
+
+    def setUp(self):
+        from tools.retake_cache import IdentityReportCache, PassCache
+        self.temp = tempfile.TemporaryDirectory()
+        self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
+        self.arcface_calls = 0
+        self.facefusion_calls = []
+        rng = np.random.default_rng(5)
+        target = np.full((512, 391, 3), (120, 150, 205), np.uint8)
+        target = np.clip(target + rng.normal(0, 3, target.shape), 0, 255).astype(np.uint8)
+        self.target_png = cv2.imencode(".png", target)[1].tobytes()
+        self.reference = cv2.imencode(".png", target[:100, :100])[1].tobytes()
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def fake_arcface(self, facefusion_dir, reference_paths):
+        self.arcface_calls += 1
+        return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": []}
+
+    def fake_facefusion(self, facefusion_dir, target_path, sources, output, model, boost, weight):
+        self.facefusion_calls.append((model, weight))
+        image = cv2.imread(str(target_path))
+        cv2.ellipse(image, (195, 260), (85, 110), 0, 0, 360, (90, 110, 170), -1)
+        cv2.imwrite(str(output), image)
+        return boost
+
+    def run_swap(self, variation, stages):
+        metadata = {
+            "referenceWeights": [1] * srv.MAX_REFERENCES,
+            "faceBounds": {"x": 96.0, "y": 116.0, "width": 200.0, "height": 270.0},
+            "variation": variation,
+            "targetSize": {"width": 391, "height": 512},
+            "headFit": {"scaleX": 0.97, "scaleY": 1.04}
+        }
+        parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
+                  self.reference, ".png", metadata)
+        with patch.object(srv, "verify_reference_identity", self.fake_arcface), \
+                patch.object(srv, "run_with_memory_fallback", self.fake_facefusion):
+            result, headers = srv.process_swap(
+                Path(self.temp.name), "1024x1024", False, parsed,
+                lambda step, cached=False: stages.append((step, cached)), self.caches
+            )
+        self.assertEqual(cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED).shape[:2], (512, 391))
+        return headers
+
+    def test_regenerating_reuses_arcface_and_both_gpu_passes(self):
+        first, second = [], []
+        self.run_swap(0, first)
+        self.assertEqual(self.arcface_calls, 1)
+        self.assertEqual(len(self.facefusion_calls), 2)
+        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False)])
+
+        self.run_swap(1, second)  # same swapper weight, different head fit
+        self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
+        self.assertEqual(len(self.facefusion_calls), 2, "both FaceFusion passes reused")
+        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False)])
+
+    def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
+        self.run_swap(0, [])
+        self.run_swap(3, [])
+        self.assertEqual(self.arcface_calls, 1)
+        self.assertEqual([model for model, _ in self.facefusion_calls].count("alphaface_256"), 2)
+        self.assertEqual(self.facefusion_calls[-1][1], 0.94)
+
+
+class RemainingTimeTest(unittest.TestCase):
+    def test_estimate_skips_cached_stages(self):
+        from tools.retake_cache import StageTimings
+        with tempfile.TemporaryDirectory() as directory:
+            timings = StageTimings(Path(directory) / "t.json")
+            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 90, 5)):
+                timings.record(stage, seconds)
+            job = {"status": "running", "step": 0, "skipped": set(), "stage_started": time.time()}
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 255, delta=1)
+            job.update(step=1, skipped={0}, stage_started=time.time() - 20)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 195, delta=1)
+            job.update(step=3, skipped={0, 1, 2}, stage_started=time.time())
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 5, delta=1)
+            self.assertIsNone(srv.estimate_remaining({**job, "status": "done"}, timings))
+            self.assertIsNone(srv.estimate_remaining(job, None))

@@ -5,6 +5,7 @@ import {
   DEFAULT_ENGINE_ORIGIN,
   engineHeaders,
   formatElapsed,
+  formatRemaining,
   loadEngineSettings,
   normalizeEngineAddress,
   normalizePairingToken,
@@ -87,4 +88,12 @@ test("every accepted tunnel suffix is allowed by the page's connect-src", () => 
   const csp = /http-equiv="Content-Security-Policy" content="([^"]+)"/.exec(html)[1];
   const connect = csp.split(";").find((part) => part.trim().startsWith("connect-src"));
   for (const suffix of TUNNEL_SUFFIXES) assert.ok(connect.includes("https://*" + suffix), suffix);
+});
+
+test("remaining time is shown in friendly units", () => {
+  assert.equal(formatRemaining(null), "");
+  assert.equal(formatRemaining(undefined), "");
+  assert.equal(formatRemaining(3), "neredeyse bitti");
+  assert.equal(formatRemaining(37), "≈ 40 sn kaldı");
+  assert.equal(formatRemaining(150), "≈ 3 dk kaldı");
 });

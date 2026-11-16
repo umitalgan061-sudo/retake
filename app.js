@@ -39,6 +39,7 @@ import {
   DEFAULT_ENGINE_ORIGIN,
   engineHeaders,
   formatElapsed,
+  formatRemaining,
   loadEngineSettings,
   resolveEngineSettings,
   saveEngineSettings
@@ -1689,7 +1690,12 @@ async function waitForEngineJob(jobId, total) {
       continue;
     }
     if (job.status === "error") throw new Error(job.error || "FaceFusion işlemi başarısız.");
-    setWaitProgress(job.step, job.total || total, `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}`);
+    const remaining = formatRemaining(job.eta_seconds);
+    setWaitProgress(
+      job.step,
+      job.total || total,
+      `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}` + (remaining ? ` · ${remaining}` : "")
+    );
     if (job.status === "done") return;
   }
   throw new Error("İşlem 20 dakika içinde tamamlanmadı.");

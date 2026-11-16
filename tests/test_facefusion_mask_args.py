@@ -64,6 +64,8 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
     def test_alternate_render_balances_are_bounded_and_distinct(self):
         self.assertEqual(len(FACE_SWAP_VARIATIONS), 4)
         self.assertEqual(FACE_SWAP_VARIATIONS[0], (1.0, 0.20, 1.0))
+        # Three variants share the swapper weight so regenerate can reuse the GPU passes.
+        self.assertEqual(sum(1 for item in FACE_SWAP_VARIATIONS if item[0] == 1.0), 3)
         self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 4)
         strengths = set()
         for swapper_weight, detail_strength, head_fit_strength in FACE_SWAP_VARIATIONS:

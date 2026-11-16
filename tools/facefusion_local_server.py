@@ -18,8 +18,10 @@ from typing import Any
 
 try:
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
 except ImportError:
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
 
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
@@ -39,7 +41,7 @@ JOB_STAGES = (
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v6"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v7"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -58,11 +60,14 @@ HEAD_FIT_MAX = 1.12
 # (swapper weight, lower-face detail strength, head-fit strength).
 # Head-fit strength scales the head reshape measured by the browser from the
 # 25 references: 1 = measured fit, 0 = keep the photo's own head proportions.
+# The first three keep the swapper weight, so "regenerate" reuses both cached
+# FaceFusion passes and only redoes blending and head fitting (seconds, not
+# minutes). The fourth is a genuinely different, softer identity pass.
 FACE_SWAP_VARIATIONS = (
     (1.00, 0.20, 1.0),
-    (0.94, 0.24, 0.0),
-    (0.98, 0.12, 1.5),
-    (0.92, 0.30, 0.5)
+    (1.00, 0.24, 0.0),
+    (1.00, 0.12, 1.5),
+    (0.94, 0.30, 0.5)
 )
 
 
@@ -608,9 +613,13 @@ def process_swap(
     pixel_boost: str,
     enhancer_enabled: bool,
     parsed: tuple,
-    progress
+    progress,
+    caches: dict[str, Any] | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Run the full hybrid pipeline for one parsed request."""
+    caches = caches or {}
+    identity_cache: IdentityReportCache | None = caches.get("identity")
+    pass_cache: PassCache | None = caches.get("passes")
     (
         target_bytes, reference_bytes, target_ext, reference_exts,
         appearance_bytes, appearance_ext, metadata
@@ -629,8 +638,15 @@ def process_swap(
             source_path.write_bytes(payload)
             reference_paths.append(source_path)
 
-        progress(0)
-        identity_report = verify_reference_identity(facefusion_dir, reference_paths)
+        identity_key = references_digest(reference_bytes, IDENTITY_VERIFIER_MODEL)
+        identity_report = identity_cache.get(identity_key) if identity_cache else None
+        progress(0, cached=identity_report is not None)
+        if identity_report is None:
+            identity_report = verify_reference_identity(facefusion_dir, reference_paths)
+            if identity_cache:
+                identity_cache.put(identity_key, identity_report)
+        else:
+            print("ArcFace raporu önbellekten alındı (referanslar değişmedi).", flush=True)
         outlier_indices = [int(index) for index in identity_report.get("outlier_indices", [])]
         weights: list[int] = list(metadata["referenceWeights"])
         for outlier_index in outlier_indices:
@@ -681,28 +697,33 @@ def process_swap(
             flush=True
         )
 
-        progress(1)
-        identity_boost = run_with_memory_fallback(
-            facefusion_dir,
-            target_path,
-            weighted_identity_paths,
-            identity_output,
-            IDENTITY_MODEL,
-            preferred_boost,
-            face_swapper_weight
-        )
+        target_key_bytes = target_path.read_bytes()
+
+        def cached_pass(step: int, sources: list[Path], output: Path, model: str) -> str:
+            key = None
+            if pass_cache is not None:
+                key = PassCache.key(
+                    target_key_bytes, [path.read_bytes() for path in sources], model,
+                    face_swapper_weight, preferred_boost
+                )
+                hit = pass_cache.get(key)
+                if hit is not None:
+                    progress(step, cached=True)
+                    output.write_bytes(hit[0])
+                    print(f"{model}: aynı hedef için önceki geçiş yeniden kullanıldı.", flush=True)
+                    return hit[1]
+            progress(step)
+            used = run_with_memory_fallback(
+                facefusion_dir, target_path, sources, output, model, preferred_boost, face_swapper_weight
+            )
+            if pass_cache is not None and key is not None:
+                pass_cache.put(key, output.read_bytes(), used)
+            return used
+
+        identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
-        progress(2)
-        appearance_boost = run_with_memory_fallback(
-            facefusion_dir,
-            target_path,
-            [appearance_path],
-            appearance_output,
-            APPEARANCE_MODEL,
-            preferred_boost,
-            face_swapper_weight
-        )
+        appearance_boost = cached_pass(2, [appearance_path], appearance_output, APPEARANCE_MODEL)
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
         progress(3)
@@ -770,16 +791,31 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     """Worker thread: long swaps must not depend on one open HTTP response
     (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
-    def progress(step: int) -> None:
+    timings: StageTimings | None = getattr(server, "stage_timings", None)
+
+    def close_stage(now: float) -> None:
+        current = job.get("step", 0)
+        if timings is not None and current not in job["skipped"] and job.get("stage_started"):
+            timings.record(JOB_STAGES[current], now - job["stage_started"])
+
+    def progress(step: int, cached: bool = False) -> None:
+        now = time.time()
+        if step != job.get("step") and job.get("stage_started"):
+            close_stage(now)
+        if cached:
+            job["skipped"].add(step)
         job["step"] = step
-        job["stage"] = JOB_STAGES[step]
+        job["stage"] = JOB_STAGES[step] + (" (önbellekten)" if cached else "")
+        job["stage_started"] = now
 
     try:
         job["status"] = "running"
         result, headers = process_swap(
             server.facefusion_dir, server.face_swapper_pixel_boost,
-            server.face_enhancer_enabled, parsed, progress
+            server.face_enhancer_enabled, parsed, progress,
+            {"identity": getattr(server, "identity_cache", None), "passes": getattr(server, "pass_cache", None)}
         )
+        close_stage(time.time())
         job["result"] = result
         job["headers"] = headers
         job["step"] = len(JOB_STAGES)
@@ -793,10 +829,21 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         INFERENCE_LOCK.release()
 
 
+def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> float | None:
+    if timings is None or job["status"] not in {"queued", "running"}:
+        return None
+    step = min(job.get("step", 0), len(JOB_STAGES) - 1)
+    pending = [stage for index, stage in enumerate(JOB_STAGES) if index >= step and index not in job["skipped"]]
+    if not pending:
+        return 0.0
+    in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
+    return timings.remaining(pending, 0, in_current)
+
+
 def create_job() -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": JOB_STAGES[0], "created": time.time()
+        "stage": JOB_STAGES[0], "created": time.time(), "skipped": set()
     }
     with JOBS_LOCK:
         JOBS[job["id"]] = job
@@ -927,6 +974,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "face_mask_regions": list(FACE_MASK_REGIONS),
             "profile_references": MAX_REFERENCES,
             "async_jobs": True,
+            "caches": True,
             "paired": bool(self.server.pairing_token),  # type: ignore[attr-defined]
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
@@ -950,7 +998,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 "stage": job["stage"],
                 "elapsed": round((job.get("finished") or time.time()) - job["created"], 1),
                 "error": job.get("error"),
-                "http_status": job.get("http_status")
+                "http_status": job.get("http_status"),
+                "eta_seconds": (
+                    None if (eta := estimate_remaining(job, getattr(self.server, "stage_timings", None))) is None
+                    else round(eta)
+                )
             })
             return
         if job["status"] != "done":
@@ -1090,6 +1142,9 @@ def main() -> int:
     server.face_swapper_pixel_boost = args.face_swapper_pixel_boost  # type: ignore[attr-defined]
     server.face_enhancer_enabled = args.enable_face_enhancer  # type: ignore[attr-defined]
     server.pairing_token = load_pairing_token(args.pairing_token_file) if args.enable_pairing else ""  # type: ignore[attr-defined]
+    server.identity_cache = IdentityReportCache()  # type: ignore[attr-defined]
+    server.pass_cache = PassCache()  # type: ignore[attr-defined]
+    server.stage_timings = StageTimings()  # type: ignore[attr-defined]
     print(
         f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
         f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "

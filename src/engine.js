@@ -90,6 +90,15 @@ export function engineHeaders(settings, extra = {}) {
   return settings?.token ? { ...extra, [PAIRING_HEADER]: settings.token } : { ...extra };
 }
 
+/** "≈ 2 dk kaldı" / "≈ 40 sn kaldı" from the engine's estimate, or "" when unknown. */
+export function formatRemaining(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return "";
+  const value = Math.max(0, Number(seconds));
+  if (value < 5) return "neredeyse bitti";
+  if (value < 60) return "≈ " + Math.ceil(value / 5) * 5 + " sn kaldı";
+  return "≈ " + Math.round(value / 60) + " dk kaldı";
+}
+
 /** mm:ss for the wait counter. */
 export function formatElapsed(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0));

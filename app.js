@@ -21,7 +21,12 @@ import {
 import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
+  canonicalJaw,
   estimateHeadFit,
+  jawPointsFromMesh,
+  meshFrontalness,
+  planJawWarp,
+  summarizeReferenceJaw,
   getTargetRenderSize,
   mapLandmarksFromRegion,
   measureFaceShapeRatio,
@@ -360,7 +365,12 @@ async function loadReferenceImage(blob) {
 function faceFromLandmarks(landmarks, sourceWidth, sourceHeight) {
   const bounds = getLandmarkBounds(landmarks);
   if (!bounds) return null;
-  return { ...bounds, shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight) };
+  return {
+    ...bounds,
+    shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight),
+    // Jaw contour and fixed points in full-image pixels, for the jawline warp.
+    jaw: jawPointsFromMesh(landmarks, sourceWidth, sourceHeight)
+  };
 }
 
 // FaceLandmarker's built-in detector is tuned for faces that fill the frame.
@@ -417,7 +427,7 @@ async function detectFaces(image) {
         if (faces.some((face) => rectIoU(face, candidate.bounds) > 0.25)) continue;
         const refined = refineFaceInRegion(image, candidate.bounds, sourceWidth, sourceHeight);
         if (refined && faces.some((face) => rectIoU(face, refined) > 0.25)) continue;
-        faces.push(refined || { ...candidate.bounds, shapeRatio: null });
+        faces.push(refined || { ...candidate.bounds, shapeRatio: null, jaw: null });
       }
     } catch (error) {
       console.info(`Ek yüz taraması (${range}) kullanılamadı.`, error);
@@ -1038,7 +1048,7 @@ async function clearReferenceData() {
     : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-headfit-v5";
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-jawline-v6";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
 
@@ -1254,6 +1264,8 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
     shapeRatio: detectionMethod === "FaceLandmarker"
       ? measureFaceShapeRatio(detected.landmarks, sourceWidth, sourceHeight)
       : null,
+    jaw: detectionMethod === "FaceLandmarker" ? canonicalJaw(detected.landmarks, sourceWidth, sourceHeight) : null,
+    jawFrontalness: detectionMethod === "FaceLandmarker" ? meshFrontalness(detected.landmarks, sourceWidth, sourceHeight) : 0,
     profilePixels: quality.imageData.data,
     weight,
     quality,
@@ -1413,7 +1425,8 @@ async function buildLocalFaceFusionInputs() {
         appearanceProfileBlob: cached.appearanceProfileBlob,
         validCount: cached.validCount,
         totalWeight: cached.totalWeight,
-        shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null
+        shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null,
+        jawContour: Array.isArray(cached.jawContour) ? cached.jawContour : null
       };
       state.profileIsBuilding = false;
       updateProfileIndicator({
@@ -1488,6 +1501,11 @@ async function buildLocalFaceFusionInputs() {
           // Near-frontal, sharp references describe the face shape best.
           weight: candidate.quality.frontalness * candidate.weight
         }))),
+        // The person's typical jaw/chin contour, from frontal, sharp references:
+        // a turned head foreshortens one side of the jaw.
+        jawContour: summarizeReferenceJaw(candidates
+          .filter((candidate) => candidate.jaw && candidate.jawFrontalness >= 0.6)
+          .map((candidate) => ({ points: candidate.jaw, weight: candidate.jawFrontalness * candidate.weight }))),
         referenceDiagnostics
       };
       state.identityProfile = {
@@ -1527,6 +1545,16 @@ async function buildLocalFaceFusionInputs() {
   // Lengthen/shorten/widen/narrow the head so the reference person's face
   // proportions sit naturally on it.
   const headFit = estimateHeadFit(profile.shapeRatio, face.shapeRatio);
+  // Move the photo's jaw/chin contour towards the reference person's.
+  const toCanvas = (point) => ({ x: (point.x - crop.x) * scaleX, y: (point.y - crop.y) * scaleY });
+  const jawWarp = face.jaw && profile.jawContour
+    ? planJawWarp({
+      jaw: face.jaw.jaw.map(toCanvas),
+      anchors: face.jaw.anchors.map(toCanvas),
+      eyes: face.jaw.eyes.map(toCanvas),
+      frontalness: face.jaw.frontalness
+    }, profile.jawContour)
+    : null;
 
   return {
     targetCanvas,
@@ -1538,6 +1566,7 @@ async function buildLocalFaceFusionInputs() {
     faceBounds,
     targetSize: { width: targetCanvas.width, height: targetCanvas.height },
     headFit,
+    jawWarp,
     crop
   };
 }
@@ -1748,6 +1777,7 @@ async function runFaceFusionEdit() {
       faceBounds,
       targetSize,
       headFit,
+      jawWarp,
       crop
     } = await buildLocalFaceFusionInputs();
     const targetBlob = await canvasToBlob(targetCanvas);
@@ -1758,7 +1788,7 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, targetSize, headFit, variation }));
+    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation }));
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 

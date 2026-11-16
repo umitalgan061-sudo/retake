@@ -127,3 +127,97 @@ test("landmarks found in a zoomed region map back to the full image", () => {
   assert.ok(Math.abs(mapped[0].z - 0.02) < 1e-12);
   assert.deepEqual(mapped[1], { x: 0.2, y: 0.5, z: 0 });
 });
+
+import {
+  JAW_INDICES,
+  canonicalJaw,
+  eyeFrame,
+  fromFrame,
+  jawPointsFromMesh,
+  meshFrontalness,
+  planJawWarp,
+  summarizeReferenceJaw,
+  toFrame
+} from "../src/head-geometry.js";
+
+// A synthetic mesh: eyes, nose, mouth and a jaw shaped as a half ellipse.
+function faceMesh({ cx = 0.5, eyeY = 0.4, eyeHalf = 0.1, jawW = 0.22, jawH = 0.32, noseX = 0, chinPoint = 1 } = {}) {
+  const mesh = new Array(478).fill(null);
+  mesh[33] = { x: cx - eyeHalf, y: eyeY };
+  mesh[263] = { x: cx + eyeHalf, y: eyeY };
+  mesh[1] = { x: cx + noseX, y: eyeY + 0.12 };
+  mesh[168] = { x: cx, y: eyeY - 0.01 };
+  mesh[61] = { x: cx - 0.05, y: eyeY + 0.2 };
+  mesh[291] = { x: cx + 0.05, y: eyeY + 0.2 };
+  mesh[13] = { x: cx, y: eyeY + 0.19 };
+  mesh[14] = { x: cx, y: eyeY + 0.21 };
+  const last = JAW_INDICES.length - 1;
+  JAW_INDICES.forEach((index, i) => {
+    const angle = Math.PI * (i / last);          // 0 → left cheek, π → right cheek
+    const point = { x: cx - Math.cos(angle) * jawW, y: eyeY + 0.4 * eyeHalf + Math.sin(angle) * jawH * (i === last / 2 ? chinPoint : 1) };
+    mesh[index] = point;
+  });
+  return mesh;
+}
+
+test("eye frame round-trips points", () => {
+  const frame = eyeFrame({ x: 100, y: 200 }, { x: 180, y: 260 });
+  const point = { x: 133, y: 321 };
+  const back = fromFrame(frame, toFrame(frame, point));
+  assert.ok(Math.abs(back.x - point.x) < 1e-9 && Math.abs(back.y - point.y) < 1e-9);
+  assert.equal(eyeFrame({ x: 1, y: 1 }, { x: 1, y: 1 }), null);
+});
+
+test("canonical jaw ignores position, size and roll", () => {
+  const a = canonicalJaw(faceMesh(), 1000, 1000);
+  const b = canonicalJaw(faceMesh({ cx: 0.3, eyeHalf: 0.05, jawW: 0.11, jawH: 0.16 }), 1000, 1000);
+  a.forEach((point, i) => {
+    assert.ok(Math.abs(point.x - b[i].x) < 1e-9 && Math.abs(point.y - b[i].y) < 1e-9);
+  });
+  assert.equal(canonicalJaw(new Array(478).fill(null), 100, 100), null);
+});
+
+test("frontalness drops as the nose leaves the eye midpoint", () => {
+  assert.equal(meshFrontalness(faceMesh(), 1000, 1000), 1);
+  assert.ok(meshFrontalness(faceMesh({ noseX: 0.05 }), 1000, 1000) < 0.8);
+  assert.equal(meshFrontalness(faceMesh({ noseX: 0.2 }), 1000, 1000), 0);
+});
+
+test("the reference jaw is a weighted median that ignores an outlier", () => {
+  const normal = canonicalJaw(faceMesh(), 1000, 1000);
+  const odd = canonicalJaw(faceMesh({ jawH: 0.6 }), 1000, 1000);
+  const samples = [...Array(5)].map(() => ({ points: normal, weight: 1 })).concat([{ points: odd, weight: 1 }]);
+  const summary = summarizeReferenceJaw(samples);
+  summary.forEach((point, i) => assert.ok(Math.abs(point.y - normal[i].y) < 1e-9));
+  assert.equal(summarizeReferenceJaw(samples.slice(0, 4)), null);
+});
+
+test("a longer reference chin pulls the photo's chin down, cheeks move less", () => {
+  const reference = canonicalJaw(faceMesh({ jawH: 0.36 }), 1000, 1000);
+  const target = jawPointsFromMesh(faceMesh(), 1000, 1000);
+  const plan = planJawWarp(target, reference);
+  const chin = plan.controls[10];
+  const cheek = plan.controls[1];
+  assert.ok(chin.to[1] > chin.from[1], "chin moves down");
+  const shift = (control) => Math.hypot(control.to[0] - control.from[0], control.to[1] - control.from[1]);
+  assert.ok(shift(chin) > shift(cheek) * 1.5);
+  assert.equal(plan.anchors.length, 8);
+});
+
+test("shifts are capped, same shapes and turned heads give no warp", () => {
+  const target = jawPointsFromMesh(faceMesh(), 1000, 1000);
+  const huge = planJawWarp(target, canonicalJaw(faceMesh({ jawH: 0.9 }), 1000, 1000));
+  const width = 2 * 0.22 * 1000;
+  for (const control of huge.controls) {
+    assert.ok(Math.hypot(control.to[0] - control.from[0], control.to[1] - control.from[1]) <= width * 0.07 + 0.02);
+  }
+  assert.equal(planJawWarp(target, canonicalJaw(faceMesh(), 1000, 1000)), null);
+  const turned = jawPointsFromMesh(faceMesh({ noseX: 0.06 }), 1000, 1000);
+  assert.equal(planJawWarp(turned, canonicalJaw(faceMesh({ jawH: 0.36 }), 1000, 1000)), null);
+});
+
+test("small jaw differences within pose noise are ignored", () => {
+  const target = jawPointsFromMesh(faceMesh(), 1000, 1000);
+  // 0.32 → 0.328: an 8 px chin difference on a 440 px wide face.
+  assert.equal(planJawWarp(target, canonicalJaw(faceMesh({ jawH: 0.328 }), 1000, 1000)), null);
+});

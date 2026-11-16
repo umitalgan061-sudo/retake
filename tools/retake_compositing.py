@@ -324,3 +324,112 @@ def fit_head_geometry(
     warped[untouched] = composite[untouched]
     return warped, out_alpha
 
+
+
+# ---------------------------------------------------------------------------
+# Jawline warp: move the photo's jaw/chin contour towards the reference
+# person's, keeping eyes, nose and mouth in place.
+
+JAW_SIGMA_RATIO = 0.16      # Gaussian radius of each control, of the face width
+JAW_MAX_SHIFT_RATIO = 0.10  # hard cap on any control displacement
+JAW_GRID_STEP = 4           # displacement field is solved on a coarse grid
+
+
+def _rbf_weights(centers: np.ndarray, values: np.ndarray, sigma: float) -> np.ndarray:
+    diff = centers[:, None, :] - centers[None, :, :]
+    kernel = np.exp(-(diff ** 2).sum(-1) / (2.0 * sigma * sigma))
+    kernel += np.eye(len(centers)) * 1e-3
+    return np.linalg.solve(kernel, values)
+
+
+def jaw_displacement_field(
+    shape: tuple[int, int],
+    controls: list[dict[str, list[float]]],
+    anchors: list[list[float]],
+    face_width: float,
+    scale: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Backward displacement (dx, dy) per output pixel: sample source at p - D(p).
+
+    D is a Gaussian radial-basis interpolant that equals each control's shift at
+    its destination and zero at every anchor, fading to zero far away.
+    """
+    height, width = shape
+    limit = face_width * JAW_MAX_SHIFT_RATIO
+    centers, shifts = [], []
+    for control in controls:
+        start = np.asarray(control["from"], dtype=np.float64)
+        shift = (np.asarray(control["to"], dtype=np.float64) - start) * scale
+        length = float(np.hypot(*shift))
+        if length > limit:
+            shift *= limit / length
+        centers.append(start + shift)
+        shifts.append(shift)
+    for anchor in anchors:
+        centers.append(np.asarray(anchor, dtype=np.float64))
+        shifts.append(np.zeros(2))
+    sigma = max(4.0, face_width * JAW_SIGMA_RATIO)
+    # Pin the crop border too, so the shift fades out gradually instead of
+    # being squeezed into a thin band at the edge.
+    spacing = sigma * 0.9
+    for x in np.arange(0, width + 1, spacing):
+        centers += [np.array([x, 0.0]), np.array([x, height - 1.0])]
+        shifts += [np.zeros(2), np.zeros(2)]
+    for y in np.arange(spacing, height, spacing):
+        centers += [np.array([0.0, y]), np.array([width - 1.0, y])]
+        shifts += [np.zeros(2), np.zeros(2)]
+    centers_arr = np.asarray(centers)
+    shifts_arr = np.asarray(shifts)
+    if not len(controls) or float(np.abs(shifts_arr).max()) < 0.05:
+        zero = np.zeros(shape, np.float32)
+        return zero, zero.copy()
+
+    weights = _rbf_weights(centers_arr, shifts_arr, sigma)
+
+    grid_y = np.arange(0, height + JAW_GRID_STEP, JAW_GRID_STEP, dtype=np.float64)
+    grid_x = np.arange(0, width + JAW_GRID_STEP, JAW_GRID_STEP, dtype=np.float64)
+    gx, gy = np.meshgrid(grid_x, grid_y)
+    points = np.stack([gx.ravel(), gy.ravel()], axis=1)
+    field = np.zeros((len(points), 2))
+    for start in range(0, len(points), 65536):
+        chunk = points[start:start + 65536]
+        diff = chunk[:, None, :] - centers_arr[None, :, :]
+        kernel = np.exp(-(diff ** 2).sum(-1) / (2.0 * sigma * sigma))
+        field[start:start + 65536] = kernel @ weights
+    dx = cv2.resize(field[:, 0].reshape(gx.shape).astype(np.float32), (gx.shape[1] * JAW_GRID_STEP, gx.shape[0] * JAW_GRID_STEP),
+                    interpolation=cv2.INTER_CUBIC)[:height, :width]
+    dy = cv2.resize(field[:, 1].reshape(gx.shape).astype(np.float32), (gx.shape[1] * JAW_GRID_STEP, gx.shape[0] * JAW_GRID_STEP),
+                    interpolation=cv2.INTER_CUBIC)[:height, :width]
+    # The field must vanish at the crop border so the photo joins seamlessly.
+    margin = max(8, int(sigma * 0.25))
+    ramp_x = np.clip(np.minimum(np.arange(width), width - 1 - np.arange(width)) / margin, 0, 1)
+    ramp_y = np.clip(np.minimum(np.arange(height), height - 1 - np.arange(height)) / margin, 0, 1)
+    fade = (_smootherstep(ramp_y)[:, None] * _smootherstep(ramp_x)[None, :]).astype(np.float32)
+    return dx * fade, dy * fade
+
+
+def warp_jawline(
+    composite: np.ndarray,
+    alpha: np.ndarray,
+    controls: list[dict[str, list[float]]],
+    anchors: list[list[float]],
+    face_width: float,
+    scale: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    if not controls or scale <= 0:
+        return composite, alpha
+    dx, dy = jaw_displacement_field(composite.shape[:2], controls, anchors, face_width, scale)
+    magnitude = np.sqrt(dx * dx + dy * dy)
+    if float(magnitude.max()) < 0.05:
+        return composite, alpha
+    height, width = composite.shape[:2]
+    grid_y, grid_x = np.mgrid[0:height, 0:width].astype(np.float32)
+    map_x = grid_x - dx
+    map_y = grid_y - dy
+    warped = cv2.remap(composite, map_x, map_y, cv2.INTER_LANCZOS4, borderMode=cv2.BORDER_REFLECT_101)
+    warped_alpha = cv2.remap(alpha, map_x, map_y, cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    moved = _smootherstep((magnitude - 0.08) / 0.5) * 255.0
+    out_alpha = np.clip(np.rint(np.maximum(warped_alpha.astype(np.float32), moved)), 0, 255).astype(np.uint8)
+    untouched = out_alpha == 0
+    warped[untouched] = composite[untouched]
+    return warped, out_alpha

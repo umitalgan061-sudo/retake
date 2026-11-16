@@ -83,3 +83,15 @@ test("extracts FaceFusion PNG alpha matte as a normalized mask", () => {
 test("rejects an invalid RGBA alpha matte", () => {
   assert.throws(() => alphaMaskFromRGBA(new Uint8Array([0, 0, 0]), 1, 1), /width \* height \* 4/);
 });
+
+test("the photo stays fully opaque: the patch's matte alpha never leaks into the result", () => {
+  // 3 pixels: outside the matte, in the feathered ring, fully inside.
+  const source = new Uint8ClampedArray([10, 20, 30, 255, 10, 20, 30, 255, 10, 20, 30, 255]);
+  const generated = new Uint8ClampedArray([0, 0, 0, 0, 200, 100, 50, 128, 200, 100, 50, 255]);
+  const mask = new Float32Array([0, 128 / 255, 1]);
+  const out = compositeMaskedRGBA(source, generated, mask, 3, 1);
+  assert.deepEqual([out[3], out[7], out[11]], [255, 255, 255]);
+  assert.deepEqual([...out.slice(0, 3)], [10, 20, 30]);
+  assert.deepEqual([...out.slice(8, 11)], [200, 100, 50]);
+  assert.ok(out[4] > 10 && out[4] < 200, "ring pixel is a colour blend");
+});

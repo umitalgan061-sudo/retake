@@ -135,7 +135,8 @@
               <span id="outputPlaceholder"><strong>Sonuç burada görünecek</strong><p id="outputMessage">Fotoğrafını yükle, ardından yüz düzenlemeyi başlat.</p></span>
             </div>
             <div id="resultTools" class="result-tools" hidden>
-              <label class="tool-row" for="compareRange"><span>Önce / Sonra</span><span class="tool-hint">kaydır</span></label>
+              <div id="qualityBadge" class="quality-badge" hidden></div>
+              <label class="tool-row" for="compareRange"><span>Önce / Sonra</span><span class="tool-hint">kaydır · ya da fotoğrafa basılı tut</span></label>
               <input id="compareRange" class="tool-range" type="range" min="0" max="100" value="0" aria-label="Önce ve sonra karşılaştırma">
               <label class="tool-row" for="strengthRange"><span>Dönüşüm gücü</span><b id="strengthValue">%100</b></label>
               <input id="strengthRange" class="tool-range" type="range" min="30" max="100" value="100" aria-label="Dönüşüm gücü">
@@ -192,6 +193,7 @@
                 <div class="state-row"><span class="state-indicator" id="profileStateDot"></span><strong id="profileStatusText">Profil hazırlanıyor</strong><span id="referenceCount" class="state-meta">0 / 25</span></div>
                 <div class="profile-progress"><span id="profileProgressBar"></span></div>
                 <p id="profileStatusDetail" class="state-detail">Görseller ve yüz algılama motoru kontrol ediliyor.</p>
+                <p id="profileHealth" class="profile-health" hidden></p>
               </div>
               <div class="profile-specs">
                 <div><span class="spec-label">KİMLİK</span><strong>ArcFace</strong></div>

@@ -77,3 +77,18 @@ def analyze_identity_embeddings(
         "hard_conflict": hard_conflict,
         "method": "arcface-medoid-median-v1"
     }
+
+
+def identity_centroid(embeddings: Sequence[Sequence[float]], exclude: Sequence[int] = ()) -> list[float]:
+    """Normalized mean of the normalized embeddings, leaving out flagged outliers."""
+    skip = set(exclude)
+    kept = [_normalize(vector) for index, vector in enumerate(embeddings) if index not in skip]
+    if not kept:
+        kept = [_normalize(vector) for vector in embeddings]
+    size = len(kept[0])
+    mean = [sum(vector[i] for vector in kept) / len(kept) for i in range(size)]
+    return [round(value, 7) for value in _normalize(mean)]
+
+
+def similarity_to_centroid(embedding: Sequence[float], centroid: Sequence[float]) -> float:
+    return _cosine(_normalize(embedding), _normalize(centroid))

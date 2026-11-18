@@ -37,7 +37,10 @@ JOB_STAGES = (
     "Kimlik geçişi (AlphaFace)",
     "Görünüm ve sakal geçişi (UniFace)",
     "Dikişsiz birleştirme ve kafa oranı",
+    "Kimlik benzerliği ölçülüyor",
 )
+# Bumped when the cached ArcFace report gains fields (centroid for scoring).
+IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
@@ -231,6 +234,49 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
 def validate_reference_count(reference_count: int) -> None:
     if reference_count != MAX_REFERENCES:
         raise ValueError(f"Retake hibrit profil işlemi için tam olarak {MAX_REFERENCES} referans fotoğrafı gerekli.")
+
+
+def score_identity(
+    facefusion_dir: Path,
+    centroid: list[float] | None,
+    probe_paths: list[Path]
+) -> list[float | None]:
+    """ArcFace similarity of each probe image to the reference identity.
+
+    Scoring is informative only: any failure returns Nones instead of failing
+    the swap the user is waiting for.
+    """
+    empty: list[float | None] = [None] * len(probe_paths)
+    worker_path = Path(__file__).with_name("facefusion_identity_worker.py")
+    if not centroid or not worker_path.is_file():
+        return empty
+    centroid_file = probe_paths[0].with_name("retake-identity-centroid.json")
+    centroid_file.write_text(json.dumps(centroid), encoding="utf-8")
+    command = [
+        sys.executable, str(worker_path),
+        "--facefusion-dir", str(facefusion_dir),
+        "--centroid-file", str(centroid_file),
+        "--probe-paths", *[str(path) for path in probe_paths]
+    ]
+    try:
+        completed = subprocess.run(
+            command, cwd=str(facefusion_dir), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=600, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[ArcFace] Benzerlik ölçülemedi: {error}", flush=True)
+        return empty
+    marker = "RETAKE_IDENTITY_REPORT="
+    lines = [line[len(marker):] for line in completed.stdout.splitlines() if line.startswith(marker)]
+    try:
+        report = json.loads(lines[-1]) if lines else {}
+    except json.JSONDecodeError:
+        report = {}
+    values = report.get("similarities") if report.get("ok") else None
+    if not isinstance(values, list) or len(values) != len(probe_paths):
+        print("[ArcFace] Benzerlik ölçülemedi: " + tail(completed.stderr + "\n" + completed.stdout, 600), flush=True)
+        return empty
+    return [float(value) if isinstance(value, (int, float)) else None for value in values]
 
 
 def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
@@ -697,7 +743,7 @@ def process_swap(
             source_path.write_bytes(payload)
             reference_paths.append(source_path)
 
-        identity_key = references_digest(reference_bytes, IDENTITY_VERIFIER_MODEL)
+        identity_key = references_digest(reference_bytes, f"{IDENTITY_VERIFIER_MODEL}:{IDENTITY_REPORT_VERSION}")
         identity_report = identity_cache.get(identity_key) if identity_cache else None
         progress(0, cached=identity_report is not None)
         if identity_report is None:
@@ -822,8 +868,22 @@ def process_swap(
             face_width_scale,
             face_height_scale
         )
+        # How close is the result to the person? Score it and the untouched
+        # crop against the references' identity centroid in one worker run.
+        progress(4)
+        result_similarity, before_similarity = score_identity(
+            facefusion_dir, identity_report.get("centroid"), [final_output, target_path]
+        )
+        if result_similarity is not None:
+            print(
+                f"Kimlik benzerliği: sonuç {result_similarity:.3f}"
+                + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
+                flush=True
+            )
         result = final_output.read_bytes()
         headers = {
+            "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
+            "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
             "X-Retake-Identity-Outliers": ",".join(str(index + 1) for index in outlier_indices),
             "X-Retake-Pixel-Boost": f"{identity_boost},{appearance_boost}",
@@ -974,7 +1034,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
-            "X-Retake-Variation"
+            "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

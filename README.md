@@ -104,6 +104,10 @@ Notlar:
 
 ## Sonuç stüdyosu
 
+- **Kimlik benzerliği:** Motor her sonucu ve orijinal yüz kırpımını, 25 referansın ortak ArcFace kimlik vektörüyle (aykırılar hariç ortalama) karşılaştırır. Sonuç panelinde "Kimlik benzerliği 66 · Çok güçlü · orijinal 21" gibi gösterilir; her görünümün küçük resminde puanı yazar, en benzer görünüm ★ ile işaretlenir. Bu bir benzerlik ölçüsüdür, kimlik kanıtı değildir; ölçüm başarısız olursa sonuç yine gelir, yalnızca puan gösterilmez.
+- **Profil sağlığı:** Yüz profili ayarlarında 25 referansın birbirine uyumu ve diğerlerine benzemeyen fotoğraflar (etkileri otomatik azaltılır) listelenir.
+- **Basılı tut, karşılaştır:** Sonuç fotoğrafına basılı tutunca orijinal, bırakınca sonuç görünür.
+
 - **Önce / Sonra** kaydırıcısı orijinal ile sonucu aynı karede karşılaştırır.
 - **Dönüşüm gücü** (%30–100) sonucu orijinalle harmanlar; indirme ve paylaşım bu ayarı kullanır.
 - Son altı görünüm küçük resim olarak tutulur; aralarında geçiş yapılabilir.

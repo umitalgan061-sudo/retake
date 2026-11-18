@@ -694,3 +694,14 @@ h1 em { display: inline-block; color: var(--ink); font-family: var(--font-serif)
   .connection-chip { padding: 8px 10px; font-size: 11px; }
   .topbar-divider { display: none; }
 }
+
+/* result quality and profile health */
+.quality-badge { display: inline-flex; align-items: center; gap: 8px; justify-self: start; padding: 7px 12px; color: var(--lime); border: 1px solid color-mix(in srgb, var(--lime) 35%, var(--line)); border-radius: 999px; background: color-mix(in srgb, var(--lime) 8%, transparent); font-size: 12px; font-weight: 600; }
+.quality-badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.profile-health { margin: 8px 0 0; padding: 9px 11px; color: var(--muted); border: 1px solid var(--line); border-radius: 10px; font-size: 12px; line-height: 1.5; }
+.profile-health.is-warning { color: var(--warning); border-color: color-mix(in srgb, var(--warning) 35%, var(--line)); }
+.history-item.is-best { border-color: var(--lime); }
+.history-item.is-best span::before { content: "★ "; color: var(--lime); }
+.result-view { cursor: pointer; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; touch-action: pan-y; }
+.result-view.is-holding .result-image { opacity: 0; }
+.result-view.is-holding .compare-tag-before { opacity: 1; }

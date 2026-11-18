@@ -35,6 +35,13 @@ import {
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
 import {
+  bestResultIndex,
+  describeProfileHealth,
+  describeSimilarity,
+  parseSimilarity,
+  similarityScore
+} from "./src/quality.js";
+import {
   fetchCachedReference,
   fetchReferenceManifest,
   pruneReferenceCache,
@@ -93,6 +100,8 @@ const elements = {
   resultView: $("#resultView"),
   originalImage: $("#originalImage"),
   resultTools: $("#resultTools"),
+  qualityBadge: $("#qualityBadge"),
+  profileHealth: $("#profileHealth"),
   compareRange: $("#compareRange"),
   strengthRange: $("#strengthRange"),
   strengthValue: $("#strengthValue"),
@@ -511,6 +520,26 @@ function clearResult() {
 
 const MAX_RESULT_HISTORY = 6;
 
+function showProfileHealth(median, outliers) {
+  const health = describeProfileHealth(median, outliers);
+  if (!health) return;
+  elements.profileHealth.textContent = health.text;
+  elements.profileHealth.classList.toggle("is-warning", health.warn);
+  elements.profileHealth.hidden = false;
+}
+
+// Press and hold the result to see the original, release to see the result.
+function initializeHoldToCompare() {
+  const view = elements.resultView;
+  const hold = (on) => view.classList.toggle("is-holding", on);
+  view.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 && event.pointerType === "mouse") return;
+    hold(true);
+  });
+  for (const type of ["pointerup", "pointerleave", "pointercancel"]) view.addEventListener(type, () => hold(false));
+  view.addEventListener("contextmenu", (event) => event.preventDefault());
+}
+
 function resultStrength() {
   return Number(elements.strengthRange.value) / 100;
 }
@@ -526,6 +555,7 @@ function updateResultView() {
 function renderResultHistory() {
   elements.historyStrip.replaceChildren();
   elements.historyCount.textContent = state.results.length + " / " + MAX_RESULT_HISTORY;
+  const best = bestResultIndex(state.results);
   state.results.forEach((item, index) => {
     const button = document.createElement("button");
     button.type = "button";
@@ -537,7 +567,12 @@ function renderResultHistory() {
     image.alt = "";
     image.loading = "lazy";
     const caption = document.createElement("span");
-    caption.textContent = String(index + 1);
+    const score = similarityScore(item.similarity);
+    caption.textContent = score === null ? String(index + 1) : String(score);
+    if (index === best && state.results.length > 1) {
+      button.classList.add("is-best");
+      button.title = item.label + " · en benzer görünüm";
+    }
     button.append(image, caption);
     button.addEventListener("click", () => selectResult(index));
     elements.historyStrip.append(button);
@@ -557,13 +592,16 @@ function selectResult(index) {
   elements.outputSymbol.hidden = true;
   elements.outputTitle.textContent = "Görünüm " + (index + 1);
   elements.outputStatus.textContent = item.label;
+  const quality = describeSimilarity(item.similarity, item.before);
+  elements.qualityBadge.textContent = quality;
+  elements.qualityBadge.hidden = !quality;
   updateResultView();
   renderResultHistory();
   updateSwapAvailability();
 }
 
-function addResult(blob, label) {
-  const item = { blob, url: createObjectURL(blob), label };
+function addResult(blob, label, scores = {}) {
+  const item = { blob, url: createObjectURL(blob), label, similarity: scores.similarity ?? null, before: scores.before ?? null };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
     URL.revokeObjectURL(state.results.shift().url);
@@ -1807,6 +1845,14 @@ async function runFaceFusionEdit() {
         throw new Error(payload.error || `Sonuç alınamadı (HTTP ${response.status}).`);
       }
     }
+    const scores = {
+      similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
+      before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before"))
+    };
+    showProfileHealth(
+      response.headers.get("X-Retake-Identity-Median-Similarity"),
+      response.headers.get("X-Retake-Identity-Outliers")
+    );
     const appliedVariation = Number(response.headers.get("X-Retake-Variation"));
     const variationIndex = Number.isInteger(appliedVariation) &&
       appliedVariation >= 0 && appliedVariation < FACE_VARIATION_LABELS.length
@@ -1820,9 +1866,10 @@ async function runFaceFusionEdit() {
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
     state.nextVariation = (variation + 1) % 4;
-    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex]);
+    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex], scores);
     elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
-    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}.`);
+    const scoreText = describeSimilarity(scores.similarity, scores.before);
+    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}` + (scoreText ? ` · ${scoreText}` : "") + ".");
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;
@@ -2155,6 +2202,7 @@ async function initializeApp() {
   initializeInteractions();
   initializeStones();
   initializeEngineSettings();
+  initializeHoldToCompare();
 
   // The sculpture's opening animation gets the first seconds to itself; the
   // heavy work (face model, 25 reference photos) starts once the page is

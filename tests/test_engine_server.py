@@ -260,8 +260,9 @@ class CachedPipelineTest(unittest.TestCase):
         cv2.imwrite(str(output), image)
         return boost
 
-    def run_swap(self, variation, stages):
+    def run_swap(self, variation, stages, jaw_warp=None):
         metadata = {
+            "jawWarp": jaw_warp,
             "referenceWeights": [1] * srv.MAX_REFERENCES,
             "faceBounds": {"x": 96.0, "y": 116.0, "width": 200.0, "height": 270.0},
             "variation": variation,
@@ -290,6 +291,13 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
         self.assertEqual(len(self.facefusion_calls), 2, "both FaceFusion passes reused")
         self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False)])
+
+    def test_jaw_warp_runs_in_the_pipeline_and_respects_the_variant(self):
+        jaw = {"controls": [{"from": [195.0, 370.0], "to": [195.0, 388.0]}], "anchors": [[195.0, 200.0]]}
+        moved = self.run_swap(0, [], jaw)
+        kept = self.run_swap(1, [], jaw)  # "photo's own proportions": no reshape
+        self.assertEqual(moved["X-Retake-Variation"], "0")
+        self.assertEqual(kept["X-Retake-Variation"], "1")
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])

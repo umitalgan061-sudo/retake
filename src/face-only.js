@@ -36,17 +36,16 @@ export function compositeMaskedRGBA(sourceRGBA, generatedRGBA, alphaMask, width,
       output.set(sourceRGBA.subarray(offset, offset + CHANNELS), offset);
       continue;
     }
-    if (alpha === 1) {
-      output.set(generatedRGBA.subarray(offset, offset + CHANNELS), offset);
-      continue;
-    }
-
+    // Only colour is blended. The generated patch carries the change matte in
+    // its alpha channel; mixing that in left a semi-transparent ring around
+    // the face in PNG exports. The photo keeps its own opacity.
     const inverse = 1 - alpha;
-    for (let channel = 0; channel < CHANNELS; channel += 1) {
-      output[offset + channel] = Math.round(
-        sourceRGBA[offset + channel] * inverse + generatedRGBA[offset + channel] * alpha
-      );
+    for (let channel = 0; channel < 3; channel += 1) {
+      output[offset + channel] = alpha === 1
+        ? generatedRGBA[offset + channel]
+        : Math.round(sourceRGBA[offset + channel] * inverse + generatedRGBA[offset + channel] * alpha);
     }
+    output[offset + 3] = sourceRGBA[offset + 3];
   }
   return output;
 }

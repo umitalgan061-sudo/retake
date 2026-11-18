@@ -122,6 +122,45 @@ def image_extension(content_type: str, payload: bytes) -> str:
     raise ValueError("Yalnızca geçerli PNG, JPEG veya WebP görselleri kabul edilir.")
 
 
+MAX_JAW_CONTROLS = 32
+MAX_JAW_ANCHORS = 16
+
+
+def _point(value: Any, size: dict[str, int], margin: float) -> list[float]:
+    if (
+        not isinstance(value, list) or len(value) != 2
+        or any(isinstance(item, bool) or not isinstance(item, (int, float)) or not math.isfinite(item) for item in value)
+        or not -margin <= value[0] <= size["width"] + margin
+        or not -margin <= value[1] <= size["height"] + margin
+    ):
+        raise ValueError("Çene hattı noktaları hedef kırpımın içinde sayı çiftleri olmalı.")
+    return [float(value[0]), float(value[1])]
+
+
+def _validate_jaw_warp(value: Any, size: dict[str, int], bounds: dict[str, float]) -> dict[str, Any] | None:
+    """Optional jawline controls from the browser (target-crop pixel space)."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Çene hattı verisi nesne olmalı.")
+    controls, anchors = value.get("controls"), value.get("anchors", [])
+    if not isinstance(controls, list) or not 1 <= len(controls) <= MAX_JAW_CONTROLS:
+        raise ValueError(f"Çene hattı 1 ile {MAX_JAW_CONTROLS} arasında kontrol noktası içermeli.")
+    if not isinstance(anchors, list) or len(anchors) > MAX_JAW_ANCHORS:
+        raise ValueError(f"Çene hattı en fazla {MAX_JAW_ANCHORS} sabit nokta içerebilir.")
+    margin = 0.25 * max(size["width"], size["height"])
+    limit = bounds["width"] * 0.2
+    checked = []
+    for control in controls:
+        if not isinstance(control, dict):
+            raise ValueError("Çene hattı kontrol noktası geçersiz.")
+        start, end = _point(control.get("from"), size, margin), _point(control.get("to"), size, margin)
+        if math.hypot(end[0] - start[0], end[1] - start[1]) > limit:
+            raise ValueError("Çene hattı kaydırması izin verilen sınırı aşıyor.")
+        checked.append({"from": start, "to": end})
+    return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors]}
+
+
 def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("Profil metadata alanı geçerli JSON nesnesi olmalı.")
@@ -178,7 +217,9 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     variation = metadata.get("variation", 0)
     if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
         raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
+    jaw_warp = _validate_jaw_warp(metadata.get("jawWarp"), target_size, bounds)
     return {
+        "jawWarp": jaw_warp,
         "referenceWeights": normalized_weights,
         "faceBounds": bounds,
         "variation": variation,
@@ -485,6 +526,24 @@ def crop_to_size(image, size: dict[str, int] | None):
     return image
 
 
+def reshape_jawline(path: Path, jaw_warp: dict[str, Any], face_width: float, scale: float) -> None:
+    """Move the jaw/chin contour towards the reference person's (see retake_compositing.warp_jawline)."""
+    import cv2
+    try:
+        from .retake_compositing import warp_jawline
+    except ImportError:
+        from retake_compositing import warp_jawline
+    image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
+    if image is None or image.ndim != 3 or image.shape[2] != 4:
+        raise RuntimeError("Çene hattı düzeltmesi için alfa maskeli PNG okunamadı.")
+    color, alpha = warp_jawline(
+        image[:, :, :3].copy(), image[:, :, 3].copy(),
+        jaw_warp["controls"], jaw_warp["anchors"], face_width, scale
+    )
+    if not cv2.imwrite(str(path), cv2.merge((*cv2.split(color), alpha))):
+        raise RuntimeError("Çene hattı düzeltmesi uygulanmış PNG yazılamadı.")
+
+
 def fit_head_to_face(
     input_path: Path,
     output_path: Path,
@@ -679,6 +738,12 @@ def process_swap(
             FACE_SWAP_VARIATIONS[variation]
         )
         head_fit = metadata["headFit"]
+        jaw_warp = metadata.get("jawWarp")
+        # The jaw warp already reshapes the lower face; the global head fit then
+        # only adds half of its proportion change, so length is not counted twice.
+        jaw_scale = min(1.25, max(0.0, head_fit_strength)) if jaw_warp else 0.0
+        if jaw_scale > 0:
+            head_fit_strength *= 0.5
         face_width_scale = min(HEAD_FIT_MAX, max(
             HEAD_FIT_MIN, 1.0 + (head_fit["scaleX"] - 1.0) * head_fit_strength
         ))
@@ -747,6 +812,9 @@ def process_swap(
         else:
             final_output = hybrid_output
 
+        if jaw_scale > 0:
+            reshape_jawline(final_output, jaw_warp, metadata["faceBounds"]["width"], jaw_scale)
+            print(f"Çene hattı referans kişiye göre düzeltildi (güç {jaw_scale:.2f}).", flush=True)
         fit_head_to_face(
             final_output,
             final_output,

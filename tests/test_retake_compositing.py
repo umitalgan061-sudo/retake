@@ -148,6 +148,60 @@ class HeadFitTest(unittest.TestCase):
         self.assertLess(float(displacement.max()), 0.01)
 
 
+def jaw_controls(chin_drop=30.0):
+    controls = []
+    for i in range(21):
+        angle = np.pi * i / 20
+        start = [392 - np.cos(angle) * 220, 560 + np.sin(angle) * 300]
+        along = 1 - abs(i - 10) / 10
+        controls.append({"from": start, "to": [start[0], start[1] + chin_drop * along]})
+    anchors = [[332, 420], [452, 420], [392, 500], [352, 600], [432, 600], [392, 410], [392, 590], [392, 610]]
+    return controls, anchors
+
+
+@unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
+class JawlineWarpTest(unittest.TestCase):
+    SHAPE = (1024, 784)
+
+    def chin_y(self, image):
+        column = image[:, 392].astype(int)
+        return int(np.where(np.abs(column - np.array([60, 80, 100])).sum(1) > 30)[0].max())
+
+    def face(self):
+        image = np.full((*self.SHAPE, 3), (60, 80, 100), np.uint8)
+        cv2.ellipse(image, (392, 560), (220, 300), 0, 0, 360, (140, 170, 210), -1)
+        return image
+
+    def test_chin_follows_the_controls_while_eyes_nose_and_mouth_stay(self):
+        controls, anchors = jaw_controls(30)
+        image = self.face()
+        out, alpha = rc.warp_jawline(image, np.zeros(self.SHAPE, np.uint8), controls, anchors, 440.0)
+        self.assertGreater(self.chin_y(out) - self.chin_y(image), 18)
+        dx, dy = rc.jaw_displacement_field(self.SHAPE, controls, anchors, 440.0)
+        for x, y in anchors:
+            self.assertLess(float(np.hypot(dx[y, x], dy[y, x])), 0.05)
+        self.assertGreater(int(alpha[862, 392]), 0, "moved pixels are covered by the matte")
+
+    def test_warp_is_smooth_and_leaves_the_crop_border_alone(self):
+        controls, anchors = jaw_controls(30)
+        dx, dy = rc.jaw_displacement_field(self.SHAPE, controls, anchors, 440.0)
+        det = (1 + np.diff(dx, axis=1)[:-1]) * (1 + np.diff(dy, axis=0)[:, :-1]) \
+            - np.diff(dx, axis=0)[:, :-1] * np.diff(dy, axis=1)[:-1]
+        self.assertGreater(float(det.min()), 0.3, "no folding or tearing")
+        for edge in (dx[0], dx[-1], dx[:, 0], dx[:, -1], dy[0], dy[-1], dy[:, 0], dy[:, -1]):
+            self.assertLess(float(np.abs(edge).max()), 1e-3)
+
+    def test_shifts_are_capped_and_zero_scale_is_a_no_op(self):
+        controls, anchors = jaw_controls(400)
+        dx, dy = rc.jaw_displacement_field(self.SHAPE, controls, anchors, 440.0)
+        self.assertLess(float(np.hypot(dx, dy).max()), 440 * rc.JAW_MAX_SHIFT_RATIO * 1.15)
+        image = self.face()
+        alpha = np.zeros(self.SHAPE, np.uint8)
+        same, same_alpha = rc.warp_jawline(image, alpha, controls, anchors, 440.0, scale=0)
+        self.assertIs(same, image)
+        self.assertIs(same_alpha, alpha)
+
+
 @unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
 class OddTargetSizeTest(unittest.TestCase):
     """FaceFusion rounds outputs to even sizes; odd targets are padded, then cropped back."""

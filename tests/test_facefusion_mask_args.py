@@ -108,6 +108,28 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "kırpımının dışında"):
             _validate_metadata({**metadata, "targetSize": {"width": 784, "height": 1024}}, MAX_REFERENCES)
 
+    def test_jaw_warp_metadata_is_optional_and_validated(self):
+        base = {
+            "referenceWeights": [1] * MAX_REFERENCES,
+            "faceBounds": {"x": 100, "y": 100, "width": 400, "height": 500},
+            "targetSize": {"width": 784, "height": 1024}
+        }
+        self.assertIsNone(_validate_metadata(base, MAX_REFERENCES)["jawWarp"])
+        good = {"controls": [{"from": [300, 800], "to": [300, 820]}], "anchors": [[350, 400]]}
+        validated = _validate_metadata({**base, "jawWarp": good}, MAX_REFERENCES)["jawWarp"]
+        self.assertEqual(validated["controls"][0]["to"], [300.0, 820.0])
+        for bad in (
+            [],
+            {"controls": []},
+            {"controls": [{"from": [300, 800], "to": [300, 990]}]},          # shift > 20% of face width
+            {"controls": [{"from": [300, "x"], "to": [300, 820]}]},
+            {"controls": [{"from": [300, 800], "to": [300, 820]}] * 40},
+            {"controls": [{"from": [99999, 800], "to": [99999, 820]}]},
+            {"controls": [{"from": [300, 800], "to": [300, 820]}], "anchors": [[1, 1]] * 20},
+        ):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "Çene hattı"):
+                _validate_metadata({**base, "jawWarp": bad}, MAX_REFERENCES)
+
     def test_metadata_defaults_to_first_variant_and_rejects_invalid_variants(self):
         metadata = {
             "referenceWeights": [1] * MAX_REFERENCES,

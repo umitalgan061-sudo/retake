@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from types import SimpleNamespace
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import patch
@@ -251,7 +252,11 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_arcface(self, facefusion_dir, reference_paths):
         self.arcface_calls += 1
-        return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": []}
+        return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
+
+    def fake_score(self, facefusion_dir, centroid, probes):
+        self.scored = (centroid, [path.name for path in probes])
+        return [0.74, 0.21]
 
     def fake_facefusion(self, facefusion_dir, target_path, sources, output, model, boost, weight):
         self.facefusion_calls.append((model, weight))
@@ -272,7 +277,8 @@ class CachedPipelineTest(unittest.TestCase):
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
         with patch.object(srv, "verify_reference_identity", self.fake_arcface), \
-                patch.object(srv, "run_with_memory_fallback", self.fake_facefusion):
+                patch.object(srv, "run_with_memory_fallback", self.fake_facefusion), \
+                patch.object(srv, "score_identity", self.fake_score):
             result, headers = srv.process_swap(
                 Path(self.temp.name), "1024x1024", False, parsed,
                 lambda step, cached=False: stages.append((step, cached)), self.caches
@@ -285,18 +291,21 @@ class CachedPipelineTest(unittest.TestCase):
         self.run_swap(0, first)
         self.assertEqual(self.arcface_calls, 1)
         self.assertEqual(len(self.facefusion_calls), 2)
-        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False)])
+        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False)])
 
         self.run_swap(1, second)  # same swapper weight, different head fit
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
         self.assertEqual(len(self.facefusion_calls), 2, "both FaceFusion passes reused")
-        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False)])
+        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False), (4, False)])
 
     def test_jaw_warp_runs_in_the_pipeline_and_respects_the_variant(self):
         jaw = {"controls": [{"from": [195.0, 370.0], "to": [195.0, 388.0]}], "anchors": [[195.0, 200.0]]}
         moved = self.run_swap(0, [], jaw)
         kept = self.run_swap(1, [], jaw)  # "photo's own proportions": no reshape
         self.assertEqual(moved["X-Retake-Variation"], "0")
+        self.assertEqual(moved["X-Retake-Similarity"], "0.7400")
+        self.assertEqual(moved["X-Retake-Similarity-Before"], "0.2100")
+        self.assertEqual(self.scored[0], [1.0, 0.0], "scored against the cached centroid")
         self.assertEqual(kept["X-Retake-Variation"], "1")
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
@@ -312,13 +321,46 @@ class RemainingTimeTest(unittest.TestCase):
         from tools.retake_cache import StageTimings
         with tempfile.TemporaryDirectory() as directory:
             timings = StageTimings(Path(directory) / "t.json")
-            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 90, 5)):
+            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 90, 5, 8)):
                 timings.record(stage, seconds)
             job = {"status": "running", "step": 0, "skipped": set(), "stage_started": time.time()}
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 255, delta=1)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 263, delta=1)
             job.update(step=1, skipped={0}, stage_started=time.time() - 20)
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 195, delta=1)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 203, delta=1)
             job.update(step=3, skipped={0, 1, 2}, stage_started=time.time())
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 5, delta=1)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 13, delta=1)
             self.assertIsNone(srv.estimate_remaining({**job, "status": "done"}, timings))
             self.assertIsNone(srv.estimate_remaining(job, None))
+
+
+class ScoreIdentityTest(unittest.TestCase):
+    def probes(self, directory):
+        paths = [Path(directory) / "result.png", Path(directory) / "target.png"]
+        for path in paths:
+            path.write_bytes(b"x")
+        return paths
+
+    def test_reads_the_worker_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probes = self.probes(directory)
+            done = SimpleNamespace(returncode=0, stderr="", stdout=
+                "[ArcFace] ...\nRETAKE_IDENTITY_REPORT=" + json.dumps({"ok": True, "similarities": [0.71, None]}))
+            with patch.object(srv.subprocess, "run", return_value=done) as run:
+                self.assertEqual(srv.score_identity(Path(directory), [1.0, 0.0], probes), [0.71, None])
+            command = run.call_args.args[0]
+            self.assertIn("--centroid-file", command)
+            self.assertEqual(command[-2:], [str(probes[0]), str(probes[1])])
+
+    def test_failures_never_break_the_swap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            probes = self.probes(directory)
+            self.assertEqual(srv.score_identity(Path(directory), None, probes), [None, None])
+            for outcome in (
+                SimpleNamespace(returncode=2, stderr="boom", stdout=""),
+                SimpleNamespace(returncode=0, stderr="", stdout="RETAKE_IDENTITY_REPORT={not json"),
+                SimpleNamespace(returncode=0, stderr="", stdout='RETAKE_IDENTITY_REPORT={"ok": true, "similarities": [0.5]}'),
+            ):
+                with patch.object(srv.subprocess, "run", return_value=outcome):
+                    self.assertEqual(srv.score_identity(Path(directory), [1.0], probes), [None, None])
+            with patch.object(srv.subprocess, "run", side_effect=srv.subprocess.TimeoutExpired("x", 1)):
+                self.assertEqual(srv.score_identity(Path(directory), [1.0], probes), [None, None])

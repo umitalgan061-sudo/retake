@@ -1,6 +1,6 @@
 import unittest
 
-from tools.identity_consistency import analyze_identity_embeddings
+from tools.identity_consistency import identity_centroid, similarity_to_centroid, analyze_identity_embeddings
 
 
 class IdentityConsistencyTests(unittest.TestCase):
@@ -37,3 +37,15 @@ class IdentityConsistencyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CentroidTest(unittest.TestCase):
+    def test_centroid_ignores_outliers_and_is_normalized(self):
+        vectors = [[1.0, 0.0], [0.9, 0.1], [1.0, 0.05], [0.0, 1.0]]
+        centroid = identity_centroid(vectors, exclude=[3])
+        self.assertAlmostEqual(sum(value * value for value in centroid), 1.0, places=6)
+        self.assertGreater(centroid[0], 0.99)
+        self.assertGreater(similarity_to_centroid([2.0, 0.0], centroid), 0.99)
+        self.assertLess(similarity_to_centroid([0.0, 3.0], centroid), 0.1)
+        # All flagged: fall back to every vector rather than failing.
+        self.assertEqual(len(identity_centroid(vectors, exclude=[0, 1, 2, 3])), 2)

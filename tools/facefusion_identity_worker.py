@@ -7,7 +7,7 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from identity_consistency import analyze_identity_embeddings
+from identity_consistency import analyze_identity_embeddings, identity_centroid, similarity_to_centroid
 
 REPORT_PREFIX = "RETAKE_IDENTITY_REPORT="
 
@@ -15,18 +15,23 @@ REPORT_PREFIX = "RETAKE_IDENTITY_REPORT="
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Retake local ArcFace reference consistency worker.")
     parser.add_argument("--facefusion-dir", required=True, type=Path)
-    parser.add_argument("--reference-paths", required=True, nargs="+", type=Path)
-    return parser.parse_args()
+    parser.add_argument("--reference-paths", nargs="+", type=Path)
+    # Probe mode: score images against a stored identity centroid.
+    parser.add_argument("--centroid-file", type=Path)
+    parser.add_argument("--probe-paths", nargs="+", type=Path)
+    args = parser.parse_args()
+    if bool(args.centroid_file) != bool(args.probe_paths):
+        parser.error("--centroid-file ve --probe-paths birlikte verilmeli.")
+    if not args.reference_paths and not args.probe_paths:
+        parser.error("--reference-paths veya --probe-paths gerekli.")
+    return args
 
 
 def _fail_reference(reference_path: Path, message: str) -> RuntimeError:
     return RuntimeError(f"{reference_path.name}: {message}")
 
 
-def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
-    if len(reference_paths) != 25:
-        raise ValueError(f"ArcFace doğrulaması için tam 25 referans gerekli; gelen: {len(reference_paths)}.")
-
+def load_models(facefusion_dir: Path):
     sys.path.insert(0, str(facefusion_dir))
     from facefusion import choices, face_detector, face_recognizer, state_manager, vision
 
@@ -47,72 +52,100 @@ def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
         raise RuntimeError("FaceFusion YOLO yüz algılayıcı ağırlıkları hazırlanamadı.")
     if not face_recognizer.pre_check():
         raise RuntimeError("FaceFusion ArcFace ONNX ağırlığı hazırlanamadı.")
+    return face_detector, face_recognizer, vision
 
+
+def embed_largest_face(models, image_path: Path) -> list[float]:
+    """Normalized ArcFace embedding of the largest face in the image."""
+    face_detector, face_recognizer, vision = models
+    reference_path = image_path
+    if not reference_path.is_file():
+        raise _fail_reference(reference_path, "görsel dosyası bulunamadı.")
+
+    image = vision.read_static_image(str(reference_path))
+    if image is None:
+        raise _fail_reference(reference_path, "FaceFusion görsel okuyucusu None döndürdü.")
+    detections = face_detector.detect_faces(image)
+    if not isinstance(detections, (tuple, list)) or len(detections) != 3:
+        raise _fail_reference(
+            reference_path,
+            "FaceFusion detect_faces beklenen (boxes, scores, landmarks) üçlüsünü döndürmedi."
+        )
+    boxes, scores, landmarks = detections
+    if boxes is None or scores is None or landmarks is None:
+        raise _fail_reference(
+            reference_path,
+            "FaceFusion algılayıcısı boxes/scores/landmarks alanlarından birini None döndürdü."
+        )
+    if len(boxes) == 0:
+        raise _fail_reference(reference_path, "ArcFace ön kontrolü yüz bulamadı.")
+    if len(scores) != len(boxes) or len(landmarks) != len(boxes):
+        raise _fail_reference(
+            reference_path,
+            f"Algılama alanlarının sayısı eşleşmiyor (boxes={len(boxes)}, "
+            f"scores={len(scores)}, landmarks={len(landmarks)})."
+        )
+
+    def detection_rank(index: int) -> tuple[float, float]:
+        box = boxes[index]
+        if box is None or len(box) < 4:
+            return 0.0, 0.0
+        area = max(0.0, float(box[2] - box[0])) * max(0.0, float(box[3] - box[1]))
+        score = float(scores[index]) if scores[index] is not None else 0.0
+        return area, score
+
+    selected = max(range(len(boxes)), key=detection_rank)
+    selected_landmarks = landmarks[selected]
+    if selected_landmarks is None:
+        raise _fail_reference(reference_path, "Seçilen yüz için 5 noktalı landmark None döndü.")
+
+    # FaceFusion 3.9.2 returns (raw_embedding, normalized_embedding).
+    embedding_result: Any = face_recognizer.calculate_face_embedding(image, selected_landmarks)
+    if not isinstance(embedding_result, (tuple, list)) or len(embedding_result) != 2:
+        raise _fail_reference(
+            reference_path,
+            "ArcFace embedding çağrısı beklenen iki vektörlü sonucu döndürmedi."
+        )
+    raw_embedding, normalized_embedding = embedding_result
+    if raw_embedding is None or normalized_embedding is None:
+        raise _fail_reference(reference_path, "ArcFace ONNX modeli embedding vektörü döndürmedi.")
+
+    vector = normalized_embedding.ravel()
+    if getattr(vector, "size", 0) == 0:
+        raise _fail_reference(reference_path, "ArcFace embedding boş.")
+    return [float(value) for value in vector]
+
+
+def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
+    if len(reference_paths) != 25:
+        raise ValueError(f"ArcFace doğrulaması için tam 25 referans gerekli; gelen: {len(reference_paths)}.")
+    models = load_models(facefusion_dir)
     embeddings: list[list[float]] = []
     names: list[str] = []
     for number, reference_path in enumerate(reference_paths, start=1):
-        if not reference_path.is_file():
-            raise _fail_reference(reference_path, "referans dosyası bulunamadı.")
-
-        image = vision.read_static_image(str(reference_path))
-        if image is None:
-            raise _fail_reference(reference_path, "FaceFusion görsel okuyucusu None döndürdü.")
-
-        detections = face_detector.detect_faces(image)
-        if not isinstance(detections, (tuple, list)) or len(detections) != 3:
-            raise _fail_reference(
-                reference_path,
-                "FaceFusion detect_faces beklenen (boxes, scores, landmarks) üçlüsünü döndürmedi."
-            )
-        boxes, scores, landmarks = detections
-        if boxes is None or scores is None or landmarks is None:
-            raise _fail_reference(
-                reference_path,
-                "FaceFusion algılayıcısı boxes/scores/landmarks alanlarından birini None döndürdü."
-            )
-        if len(boxes) == 0:
-            raise _fail_reference(reference_path, "ArcFace ön kontrolü yüz bulamadı.")
-        if len(scores) != len(boxes) or len(landmarks) != len(boxes):
-            raise _fail_reference(
-                reference_path,
-                f"Algılama alanlarının sayısı eşleşmiyor (boxes={len(boxes)}, "
-                f"scores={len(scores)}, landmarks={len(landmarks)})."
-            )
-
-        def detection_rank(index: int) -> tuple[float, float]:
-            box = boxes[index]
-            if box is None or len(box) < 4:
-                return 0.0, 0.0
-            area = max(0.0, float(box[2] - box[0])) * max(0.0, float(box[3] - box[1]))
-            score = float(scores[index]) if scores[index] is not None else 0.0
-            return area, score
-
-        selected = max(range(len(boxes)), key=detection_rank)
-        selected_landmarks = landmarks[selected]
-        if selected_landmarks is None:
-            raise _fail_reference(reference_path, "Seçilen yüz için 5 noktalı landmark None döndü.")
-
-        # FaceFusion 3.9.2 returns (raw_embedding, normalized_embedding).
-        embedding_result: Any = face_recognizer.calculate_face_embedding(image, selected_landmarks)
-        if not isinstance(embedding_result, (tuple, list)) or len(embedding_result) != 2:
-            raise _fail_reference(
-                reference_path,
-                "ArcFace embedding çağrısı beklenen iki vektörlü sonucu döndürmedi."
-            )
-        raw_embedding, normalized_embedding = embedding_result
-        if raw_embedding is None or normalized_embedding is None:
-            raise _fail_reference(reference_path, "ArcFace ONNX modeli embedding vektörü döndürmedi.")
-
-        vector = normalized_embedding.ravel()
-        if getattr(vector, "size", 0) == 0:
-            raise _fail_reference(reference_path, "ArcFace embedding boş.")
-        embeddings.append([float(value) for value in vector])
+        embeddings.append(embed_largest_face(models, reference_path))
         names.append(reference_path.name)
         print(f"[ArcFace] Referans {number}/25 doğrulandı: {reference_path.name}", flush=True)
 
     report = analyze_identity_embeddings(embeddings, names)
+    # The person's identity as one vector: mean of the consistent references.
+    report["centroid"] = identity_centroid(embeddings, report["outlier_indices"])
     report["ok"] = True
     return report
+
+
+def probe(facefusion_dir: Path, centroid_file: Path, probe_paths: list[Path]) -> dict[str, object]:
+    """Similarity of each probe image's largest face to the stored centroid."""
+    centroid = json.loads(centroid_file.read_text(encoding="utf-8"))
+    models = load_models(facefusion_dir)
+    similarities: list[float | None] = []
+    for probe_path in probe_paths:
+        try:
+            similarities.append(round(similarity_to_centroid(embed_largest_face(models, probe_path), centroid), 6))
+        except RuntimeError as error:
+            print(f"[ArcFace] {error}", flush=True)
+            similarities.append(None)
+    return {"ok": True, "similarities": similarities}
 
 
 def main() -> int:
@@ -127,7 +160,10 @@ def main() -> int:
         stage = "FaceFusion yüz algılayıcı ve ArcFace modülleri yükleniyor"
         # run() logs each successful reference. The traceback below preserves
         # the exact failing FaceFusion call instead of returning only its text.
-        report = run(facefusion_dir, args.reference_paths)
+        report = (
+            probe(facefusion_dir, args.centroid_file, args.probe_paths)
+            if args.probe_paths else run(facefusion_dir, args.reference_paths)
+        )
         print(REPORT_PREFIX + json.dumps(report, ensure_ascii=True), flush=True)
         return 0
     except Exception as error:

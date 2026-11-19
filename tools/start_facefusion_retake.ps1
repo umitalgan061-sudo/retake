@@ -3,7 +3,9 @@ param(
     [string]$FaceSwapperPixelBoost = "1024x1024",
     [switch]$EnableFaceEnhancer,
     # Telefon / tablet / PWA'dan kullanmak için: eşleştirme kodunu zorunlu kılar.
-    [switch]$EnablePairing
+    [switch]$EnablePairing,
+    # Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, 0.7 varsayılan, 1.2 en çok).
+    [double]$ShadingStrength = -1
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,6 +37,10 @@ if ($EnableFaceEnhancer) {
     Write-Host "GFPGAN 1.4 son aşaması açık (%25 karışım)." -ForegroundColor Yellow
 }
 
+if ($ShadingStrength -ge 0) {
+    $ServerArgs += @("--shading-strength", $ShadingStrength.ToString([System.Globalization.CultureInfo]::InvariantCulture))
+    Write-Host "Gölgelendirme aktarımı gücü: $ShadingStrength" -ForegroundColor Yellow
+}
 if ($EnablePairing) {
     $ServerArgs += "--enable-pairing"
     Write-Host "Telefon/PWA eşleştirmesi açık. Ayrı bir pencerede şifreli tüneli başlat:" -ForegroundColor Yellow

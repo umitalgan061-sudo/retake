@@ -625,7 +625,8 @@ def blend_lower_face(
     output_path: Path,
     face_bounds: dict[str, float],
     detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH,
-    expected_size: dict[str, int] | None = None
+    expected_size: dict[str, int] | None = None,
+    shading_strength: float | None = None
 ) -> None:
     try:
         import cv2
@@ -705,7 +706,11 @@ def blend_lower_face(
     # without a visible border: rim tone matching (gradient domain), multi-band
     # blending and sharpness/grain matching. The returned matte lets the
     # browser keep every other source pixel byte-for-byte.
-    composite, alpha = seamless_face_composite(target, result, face_bounds)
+    composite, alpha = (
+        seamless_face_composite(target, result, face_bounds)
+        if shading_strength is None
+        else seamless_face_composite(target, result, face_bounds, shading_strength)
+    )
     rgba = cv2.cvtColor(composite, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 
@@ -845,7 +850,8 @@ def process_swap(
             hybrid_output,
             metadata["faceBounds"],
             detail_transfer_strength,
-            metadata["targetSize"]
+            metadata["targetSize"],
+            caches.get("shading")
         )
         used_enhancer = bool(enhancer_enabled)
         if used_enhancer:
@@ -941,7 +947,11 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         result, headers = process_swap(
             server.facefusion_dir, server.face_swapper_pixel_boost,
             server.face_enhancer_enabled, parsed, progress,
-            {"identity": getattr(server, "identity_cache", None), "passes": getattr(server, "pass_cache", None)}
+            {
+                "identity": getattr(server, "identity_cache", None),
+                "passes": getattr(server, "pass_cache", None),
+                "shading": getattr(server, "shading_strength", None)
+            }
         )
         close_stage(time.time())
         job["result"] = result
@@ -1213,6 +1223,10 @@ def parse_args() -> argparse.Namespace:
         help="İlk deneme 1024x1024; CUDA bellek hatasında sırasıyla 768x768 ve 512x512 denenir."
     )
     parser.add_argument(
+        "--shading-strength", type=float, default=None,
+        help="Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, varsayılan 0.7, en çok 1.2)."
+    )
+    parser.add_argument(
         "--enable-face-enhancer",
         action="store_true",
         help="İsteğe bağlı GFPGAN 1.4 son aşamasını %25 karışımla etkinleştir."
@@ -1273,6 +1287,10 @@ def main() -> int:
     server.identity_cache = IdentityReportCache()  # type: ignore[attr-defined]
     server.pass_cache = PassCache()  # type: ignore[attr-defined]
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
+    if args.shading_strength is not None and not 0.0 <= args.shading_strength <= 1.2:
+        print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
+        return 2
+    server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
     print(
         f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
         f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "

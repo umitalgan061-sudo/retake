@@ -148,6 +148,82 @@ class HeadFitTest(unittest.TestCase):
         self.assertLess(float(displacement.max()), 0.01)
 
 
+def lit_face_pair():
+    """A photo of a 3D-lit face (side light, nose highlight) and a flat-lit
+    swap of it with a moustache only the swap has."""
+    yy, xx = np.mgrid[0:HEIGHT, 0:WIDTH].astype(np.float32)
+    cx, cy, rx, ry = 196, 250, 115, 155
+    u, v = (xx - cx) / rx, (yy - cy) / ry
+    inside = (u * u + v * v) < 1
+    shade = np.clip(0.5 * u + 0.3 * v + np.sqrt(np.clip(1 - u * u - v * v, 0, 1)) * 0.81, 0.15, 1)
+    nose = np.exp(-((xx - cx) / 9) ** 2 - ((yy - (cy - 10)) / 45) ** 2) * 0.35
+    skin = np.array([120, 150, 205], np.float32)
+    background = np.stack([90 + xx * 0.1, 110 + yy * 0.08, 120 + xx * 0.06], 2)
+    photo = background.copy()
+    photo[inside] = (skin * (0.55 + 0.55 * (shade + nose))[:, :, None])[inside]
+    swap = background.copy()
+    swap[inside] = skin * 0.9
+    cv2.ellipse(swap, (cx, cy + 60), (40, 14), 0, 0, 360, (60, 60, 80), -1)
+    rng = np.random.default_rng(1)
+    photo = np.clip(photo + rng.normal(0, 2, photo.shape), 0, 255).astype(np.uint8)
+    swap = np.clip(swap + rng.normal(0, 2, swap.shape), 0, 255).astype(np.uint8)
+    moustache_free = inside & (np.hypot(xx - cx, (yy - cy - 60) * 2.8) > 70)
+    bounds = {"x": cx - rx, "y": cy - ry, "width": 2 * rx, "height": 2 * ry}
+    return photo, swap, bounds, moustache_free
+
+
+@unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
+class ShadingTransferTest(unittest.TestCase):
+    def gray(self, image):
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+
+    def shading_match(self, image, photo, region):
+        a = cv2.GaussianBlur(self.gray(image), (0, 0), 3)[region]
+        b = cv2.GaussianBlur(self.gray(photo), (0, 0), 3)[region]
+        return float(np.corrcoef(a, b)[0, 1])
+
+    def test_the_photo_3d_shading_is_carried_onto_a_flat_swap(self):
+        photo, swap, bounds, region = lit_face_pair()
+        flat, _ = rc.seamless_face_composite(photo, swap, bounds, shading_strength=0)
+        lit, _ = rc.seamless_face_composite(photo, swap, bounds)
+        self.assertLess(self.shading_match(flat, photo, region), 0.6)
+        self.assertGreater(self.shading_match(lit, photo, region), 0.85)
+
+    def test_features_only_the_new_face_has_are_kept(self):
+        photo, swap, bounds, _ = lit_face_pair()
+        lit, _ = rc.seamless_face_composite(photo, swap, bounds)
+        moustache = (slice(305, 315), slice(176, 216))
+        self.assertLess(abs(float(self.gray(lit)[moustache].mean()) - float(self.gray(swap)[moustache].mean())), 4)
+
+    def test_luminance_change_is_bounded_and_overshoot_is_safe(self):
+        photo, swap, bounds, region = lit_face_pair()
+        weight = np.zeros(photo.shape[:2], np.float32)
+        weight[region] = 1
+        out = rc.transfer_shading(swap.astype(np.float32), photo.astype(np.float32), weight, 230.0)
+        gain = self.gray(np.clip(out, 0, 255).astype(np.uint8))[region] / np.maximum(self.gray(swap)[region], 1)
+        self.assertLess(float(gain.max()), np.exp(rc.SHADING_MAX_DELTA * rc.SHADING_STRENGTH) + 0.08)
+        # Overshoot from the multi-band blend (values outside 0..255) must not produce NaNs.
+        overshoot = swap.astype(np.float32) * 1.4 - 60
+        safe = rc.transfer_shading(overshoot, photo.astype(np.float32), weight, 230.0)
+        self.assertTrue(np.isfinite(safe).all())
+        self.assertGreaterEqual(float(safe.min()), 0)
+        same = rc.transfer_shading(swap.astype(np.float32), photo.astype(np.float32), weight, 230.0, strength=0)
+        self.assertTrue(np.array_equal(same, swap.astype(np.float32)))
+
+    def test_colour_blotches_take_the_photo_skin_tone_but_a_beard_keeps_its_colour(self):
+        photo, swap, bounds, _ = lit_face_pair()
+        swap = swap.copy()
+        cv2.circle(swap, (196, 255), 22, (95, 110, 235), -1)    # red nose tip only the swap has
+        lab = lambda image: cv2.cvtColor(image.astype(np.float32) / 255, cv2.COLOR_BGR2Lab)
+        out, _ = rc.seamless_face_composite(photo, swap, bounds)
+        nose = (slice(248, 262), slice(189, 203))
+        red_before = float(lab(swap)[nose][:, :, 1].mean() - lab(photo)[nose][:, :, 1].mean())
+        red_after = float(lab(out)[nose][:, :, 1].mean() - lab(photo)[nose][:, :, 1].mean())
+        self.assertGreater(red_before, 15)
+        self.assertLess(red_after, red_before * 0.5)
+        moustache = (slice(305, 315), slice(176, 216))
+        self.assertLess(abs(float(lab(out)[moustache][:, :, 1].mean() - lab(swap)[moustache][:, :, 1].mean())), 6)
+
 def jaw_controls(chin_drop=30.0):
     controls = []
     for i in range(21):

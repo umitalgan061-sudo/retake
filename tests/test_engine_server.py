@@ -256,8 +256,14 @@ class CachedPipelineTest(unittest.TestCase):
 
     render_scores: list = []
 
+    reinforce_scores = (0.70, 0.60)
+
     def fake_score(self, facefusion_dir, centroid, probes):
-        self.scored = (centroid, [path.name for path in probes])
+        names = [path.name for path in probes]
+        if "retake-identity-reinforced.png" in names:
+            self.reinforce_probes = names
+            return list(self.reinforce_scores)
+        self.scored = (centroid, names)
         return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
 
     def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir):
@@ -307,14 +313,27 @@ class CachedPipelineTest(unittest.TestCase):
         first, second = [], []
         self.run_swap(0, first)
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual(len(self.facefusion_calls), 2)
-        # Stage 4 (photographic realism) is not installed here and is skipped.
-        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (5, False)])
+        self.assertEqual([model for model, _ in self.facefusion_calls], ["alphaface_256", "inswapper_128", "uniface_256"])
+        # Stage 5 (photographic realism) is not installed here and is skipped.
+        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False), (6, False)])
 
         self.run_swap(1, second)  # same swapper weight, different head fit
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
-        self.assertEqual(len(self.facefusion_calls), 2, "both FaceFusion passes reused")
-        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False), (5, False)])
+        self.assertEqual(len(self.facefusion_calls), 3, "all FaceFusion passes reused")
+        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, True), (4, False), (6, False)])
+
+    def test_identity_reinforcement_is_kept_only_when_it_is_closer_to_the_person(self):
+        self.reinforce_scores = (0.70, 0.78)
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Reinforced"], "on")
+        self.assertEqual(self.reinforce_probes, ["retake-identity-alpha.png", "retake-identity-reinforced.png"])
+        self.reinforce_scores = (0.70, 0.66)
+        self.assertEqual(self.run_swap(2, [])["X-Retake-Identity-Reinforced"], "off")
+
+    def test_softer_variant_is_not_reinforced(self):
+        headers = self.run_swap(3, [])
+        self.assertEqual(headers["X-Retake-Identity-Reinforced"], "off")
+        self.assertNotIn("inswapper_128", [model for model, _ in self.facefusion_calls])
 
     def test_jaw_warp_runs_in_the_pipeline_and_respects_the_variant(self):
         jaw = {"controls": [{"from": [195.0, 370.0], "to": [195.0, 388.0]}], "anchors": [[195.0, 200.0]]}
@@ -363,16 +382,16 @@ class RemainingTimeTest(unittest.TestCase):
         from tools.retake_cache import StageTimings
         with tempfile.TemporaryDirectory() as directory:
             timings = StageTimings(Path(directory) / "t.json")
-            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 90, 5, 60, 8)):
+            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 30, 90, 5, 60, 8)):
                 timings.record(stage, seconds)
             job = {"status": "running", "step": 0, "skipped": set(), "stage_started": time.time()}
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 323, delta=1)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 353, delta=1)
             job.update(step=1, skipped={0}, stage_started=time.time() - 20)
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 263, delta=1)
-            job.update(step=3, skipped={0, 1, 2}, stage_started=time.time())
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 293, delta=1)
+            job.update(step=4, skipped={0, 1, 2, 3}, stage_started=time.time())
             self.assertAlmostEqual(srv.estimate_remaining(job, timings), 73, delta=1)
             # Without the realism environment its stage is not waited for.
-            job.update(skipped={0, 1, 2, srv.REALISM_STAGE})
+            job.update(skipped={0, 1, 2, 3, srv.REALISM_STAGE})
             self.assertAlmostEqual(srv.estimate_remaining(job, timings), 13, delta=1)
             fresh = srv.create_job()
             self.assertIn(srv.REALISM_STAGE, fresh["skipped"])

@@ -4,7 +4,7 @@
     [switch]$EnableFaceEnhancer,
     # Telefon / tablet / PWA'dan kullanmak için: eşleştirme kodunu zorunlu kılar.
     [switch]$EnablePairing,
-    # Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, 0.7 varsayılan, 1.2 en çok).
+    # Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, 0.35 varsayılan, 1.2 en çok).
     [double]$ShadingStrength = -1,
     # Fotoğraf gerçekçiliği katmanını (tools\install_realism.ps1) kurulu olsa bile kapat.
     [switch]$DisableRealism,

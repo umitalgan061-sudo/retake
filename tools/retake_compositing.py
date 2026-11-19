@@ -30,9 +30,17 @@ CHANGE_THRESHOLD = 2
 # Share of the rim colour offset that is removed from the swapped face. The
 # small remainder keeps a trace of the reference skin tone.
 HARMONIZE_STRENGTH = 0.9
-RIM_INSET_RATIO = 0.08
-RIM_INSET_MIN = 6.0
-RIM_INSET_MAX = 34.0
+# The tone offset is read on a thin rim just inside the swapped region. A
+# wide rim (8% of the face) handed the whole face outline, brows and jaw
+# back to the photo's own person: ArcFace similarity to the references fell
+# from 0.80 (raw swap) to 0.66. At 3% it stays 0.74 and a strong tone
+# mismatch still loses 60% of its border (measured on the user's photos).
+RIM_INSET_RATIO = 0.03
+RIM_INSET_MIN = 3.0
+RIM_INSET_MAX = 16.0
+TONE_RIM_RATIO = 0.05
+TONE_RIM_MIN = 5.0
+TONE_RIM_MAX = 28.0
 MEMBRANE_FACE_WIDTH = 32.0
 INNER_FEATHER_RATIO = 0.06
 INNER_FEATHER_MIN = 4.0
@@ -42,8 +50,8 @@ MAX_PYRAMID_LEVELS = 6
 MAX_SHARPEN_GAIN = 0.45
 MAX_GRAIN_GAIN = 0.5
 MAX_SOFTEN_SIGMA = 1.6
-HEAD_SCALE_MIN = 0.90
-HEAD_SCALE_MAX = 1.12
+HEAD_SCALE_MIN = 0.85   # kept equal to the engine's HEAD_FIT_MIN
+HEAD_SCALE_MAX = 1.18   # kept equal to the engine's HEAD_FIT_MAX
 HEAD_INNER_RADIUS = 0.62
 HEAD_OUTER_LIMIT = 2.4
 HEAD_OUTER_MINIMUM = 1.25
@@ -134,7 +142,13 @@ def _relax_membrane(values: np.ndarray, interior: np.ndarray, iterations: int) -
 
 
 def rim_inset(face_width: float) -> float:
+    """Where the swap starts to be blended in (from the edge of its change mask)."""
     return min(RIM_INSET_MAX, max(RIM_INSET_MIN, face_width * RIM_INSET_RATIO))
+
+
+def tone_rim_inset(face_width: float) -> float:
+    """Where the tone offset is read: past the swapper's own soft edge."""
+    return min(TONE_RIM_MAX, max(TONE_RIM_MIN, face_width * TONE_RIM_RATIO))
 
 
 def membrane_correction(difference: np.ndarray, mask: np.ndarray, face_width: float) -> np.ndarray:
@@ -149,12 +163,17 @@ def membrane_correction(difference: np.ndarray, mask: np.ndarray, face_width: fl
     height, width = mask.shape
     scale = min(1.0, MEMBRANE_FACE_WIDTH / max(face_width, 1.0))
     coarse_size = (max(8, int(round(width * scale))), max(8, int(round(height * scale))))
-    inset = rim_inset(face_width)
+    inset = tone_rim_inset(face_width)
 
     full_inside = cv2.distanceTransform(mask, cv2.DIST_L2, 5) > inset
     if not full_inside.any():
         return np.zeros_like(difference)
-    smooth = cv2.GaussianBlur(difference, (0, 0), max(1.0, 0.5 / scale))
+    # Normalised (masked) blur: on a thin rim a plain blur would mix in the
+    # unchanged pixels outside the swap and underestimate the offset.
+    sigma = max(1.0, 0.5 / scale)
+    inside = (mask > 0).astype(np.float32)
+    weight = cv2.GaussianBlur(inside, (0, 0), sigma)
+    smooth = cv2.GaussianBlur(difference * inside[:, :, None], (0, 0), sigma) / np.maximum(weight, 1e-3)[:, :, None]
 
     coarse_values = cv2.resize(smooth, coarse_size, interpolation=cv2.INTER_AREA)
     coarse_inside = cv2.resize(full_inside.astype(np.uint8), coarse_size, interpolation=cv2.INTER_NEAREST) > 0
@@ -219,7 +238,7 @@ def match_photo_texture(composite: np.ndarray, target: np.ndarray, core: np.ndar
 # 3D. Swap models re-render the face with flat, averaged lighting, so that
 # relief is carried over from the original photo, in log-luminance, in a
 # mid-frequency band. Fine detail and colour stay with the new face.
-SHADING_STRENGTH = 0.7
+SHADING_STRENGTH = 0.35
 SHADING_FINE_RATIO = 0.022    # lower band edge (of face width): keeps pores/hair/lashes
 SHADING_COARSE_RATIO = 0.16   # upper band edge: overall tone is handled by the rim match
 SHADING_STRUCTURE_TOLERANCE = 0.28  # log-luminance; bigger band differences are structure
@@ -227,7 +246,7 @@ SHADING_MAX_DELTA = 0.35      # never change luminance by more than ~exp(0.35)
 # Local skin colour: swap models leave colour blotches (a red nose tip, pink
 # around the mouth). Each area's chroma is pulled towards the photo's colour
 # at the same place, at a scale above skin texture.
-CHROMA_STRENGTH = 0.85
+CHROMA_STRENGTH = 0.4
 CHROMA_SCALE_RATIO = 0.03
 CHROMA_MAX_SHIFT = 24.0       # Lab a/b units
 

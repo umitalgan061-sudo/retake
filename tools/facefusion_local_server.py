@@ -35,13 +35,15 @@ MAX_KEPT_JOBS = 3
 JOB_STAGES = (
     "25 referans ArcFace ile karşılaştırılıyor",
     "Kimlik geçişi (AlphaFace)",
+    "Kimlik pekiştirme (InSwapper)",
     "Görünüm ve sakal geçişi (UniFace)",
     "Dikişsiz birleştirme ve kafa oranı",
     "Fotoğraf gerçekçiliği (difüzyon)",
     "Kimlik benzerliği ölçülüyor",
 )
-REALISM_STAGE = 4
-SCORING_STAGE = 5
+REINFORCE_STAGE = 2
+REALISM_STAGE = 5
+SCORING_STAGE = 6
 # A realism render may cost at most this much ArcFace similarity to be used.
 REALISM_MAX_IDENTITY_LOSS = 0.01
 REALISM_TIMEOUT_SECONDS = 900
@@ -49,8 +51,13 @@ REALISM_TIMEOUT_SECONDS = 900
 IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
+# A second identity pass over the first one's result. On the user's photos
+# ArcFace similarity to the references went 0.803 (AlphaFace) -> 0.832
+# (AlphaFace + InSwapper); AlphaFace twice gave 0.816. It is kept only when
+# the measurement confirms it for the photo at hand.
+REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v9"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v10"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1021,11 +1028,13 @@ def process_swap(
 
         target_key_bytes = target_path.read_bytes()
 
-        def cached_pass(step: int, sources: list[Path], output: Path, model: str) -> str:
+        def cached_pass(step: int, sources: list[Path], output: Path, model: str, source_image: Path | None = None) -> str:
+            image = source_image or target_path
             key = None
             if pass_cache is not None:
                 key = PassCache.key(
-                    target_key_bytes, [path.read_bytes() for path in sources], model,
+                    target_key_bytes if source_image is None else image.read_bytes(),
+                    [path.read_bytes() for path in sources], model,
                     face_swapper_weight, preferred_boost
                 )
                 hit = pass_cache.get(key)
@@ -1036,7 +1045,7 @@ def process_swap(
                     return hit[1]
             progress(step)
             used = run_with_memory_fallback(
-                facefusion_dir, target_path, sources, output, model, preferred_boost, face_swapper_weight
+                facefusion_dir, image, sources, output, model, preferred_boost, face_swapper_weight
             )
             if pass_cache is not None and key is not None:
                 pass_cache.put(key, output.read_bytes(), used)
@@ -1045,13 +1054,35 @@ def process_swap(
         identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
-        appearance_boost = cached_pass(2, [appearance_path], appearance_output, APPEARANCE_MODEL)
+        # Identity reinforcement: a second swapper over the first result, kept
+        # only if ArcFace confirms it is closer to the person.
+        identity_source = identity_output
+        reinforced = False
+        centroid = identity_report.get("centroid")
+        if centroid and face_swapper_weight >= 1.0:
+            reinforced_output = temp_dir / "retake-identity-reinforced.png"
+            try:
+                cached_pass(REINFORCE_STAGE, weighted_identity_paths, reinforced_output, REINFORCE_MODEL, identity_output)
+                single, double = score_identity(facefusion_dir, centroid, [identity_output, reinforced_output])
+                if single is not None and double is not None and double > single:
+                    identity_source = reinforced_output
+                    reinforced = True
+                print(
+                    "Kimlik pekiştirme: "
+                    + ("uygulandı" if reinforced else "kullanılmadı")
+                    + (f" (benzerlik {single:.3f} → {double:.3f})" if single is not None and double is not None else ""),
+                    flush=True
+                )
+            except Exception as error:  # informative only; the first pass stays
+                print(f"Kimlik pekiştirme atlandı: {error}", flush=True)
+
+        appearance_boost = cached_pass(3, [appearance_path], appearance_output, APPEARANCE_MODEL)
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
-        progress(3)
+        progress(4)
         used_real_face = blend_lower_face(
             target_path,
-            identity_output,
+            identity_source,
             appearance_output,
             hybrid_output,
             metadata["faceBounds"],
@@ -1086,7 +1117,6 @@ def process_swap(
         )
         # Photographic realism (optional): re-render the face with a diffusion
         # model steered by the person's ArcFace identity.
-        centroid = identity_report.get("centroid")
         realism = caches.get("realism")
         renders: list[Path] = []
         if realism and centroid:
@@ -1132,6 +1162,7 @@ def process_swap(
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_real_face else "off",
+            "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
         print(
@@ -1470,7 +1501,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--shading-strength", type=float, default=None,
-        help="Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, varsayılan 0.7, en çok 1.2)."
+        help="Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, varsayılan 0.35, en çok 1.2)."
     )
     parser.add_argument(
         "--enable-face-enhancer",

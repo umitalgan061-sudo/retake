@@ -220,7 +220,9 @@ class ShadingTransferTest(unittest.TestCase):
         red_before = float(lab(swap)[nose][:, :, 1].mean() - lab(photo)[nose][:, :, 1].mean())
         red_after = float(lab(out)[nose][:, :, 1].mean() - lab(photo)[nose][:, :, 1].mean())
         self.assertGreater(red_before, 15)
-        self.assertLess(red_after, red_before * 0.5)
+        # Clearly reduced, but not erased: a full pull to the photo's colours
+        # also brings back the photo person's lip and brow colour (identity).
+        self.assertLess(red_after, red_before * 0.75)
         moustache = (slice(305, 315), slice(176, 216))
         self.assertLess(abs(float(lab(out)[moustache][:, :, 1].mean() - lab(swap)[moustache][:, :, 1].mean())), 6)
 

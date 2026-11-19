@@ -117,6 +117,17 @@ export function rectIoU(a, b) {
   return union > 0 ? intersection / union : 0;
 }
 
+/** Share of the smaller rectangle covered by the other (1 = one inside the other). */
+export function rectOverlap(a, b) {
+  const left = Math.max(a.x, b.x);
+  const top = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
+  const smaller = Math.min(a.width * a.height, b.width * b.height);
+  return smaller > 0 ? intersection / smaller : 0;
+}
+
 /** Map mesh landmarks found inside a normalized sub-rectangle back to the full image. */
 export function mapLandmarksFromRegion(landmarks, region) {
   return landmarks.map((point) => ({

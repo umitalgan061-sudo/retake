@@ -214,10 +214,87 @@ def match_photo_texture(composite: np.ndarray, target: np.ndarray, core: np.ndar
     return composite
 
 
+# Shading transfer: the photo's own light-and-shadow relief (nose highlight,
+# cheek and eye-socket shadows, forehead sheen) is what makes a face read as
+# 3D. Swap models re-render the face with flat, averaged lighting, so that
+# relief is carried over from the original photo, in log-luminance, in a
+# mid-frequency band. Fine detail and colour stay with the new face.
+SHADING_STRENGTH = 0.7
+SHADING_FINE_RATIO = 0.022    # lower band edge (of face width): keeps pores/hair/lashes
+SHADING_COARSE_RATIO = 0.16   # upper band edge: overall tone is handled by the rim match
+SHADING_STRUCTURE_TOLERANCE = 0.28  # log-luminance; bigger band differences are structure
+SHADING_MAX_DELTA = 0.35      # never change luminance by more than ~exp(0.35)
+# Local skin colour: swap models leave colour blotches (a red nose tip, pink
+# around the mouth). Each area's chroma is pulled towards the photo's colour
+# at the same place, at a scale above skin texture.
+CHROMA_STRENGTH = 0.85
+CHROMA_SCALE_RATIO = 0.03
+CHROMA_MAX_SHIFT = 24.0       # Lab a/b units
+
+
+def _luminance_band(log_luma: np.ndarray, fine: float, coarse: float) -> np.ndarray:
+    return cv2.GaussianBlur(log_luma, (0, 0), fine) - cv2.GaussianBlur(log_luma, (0, 0), coarse)
+
+
+def transfer_shading(
+    composite: np.ndarray,
+    target: np.ndarray,
+    weight: np.ndarray,
+    face_width: float,
+    strength: float = SHADING_STRENGTH
+) -> np.ndarray:
+    """Give the swapped face the 3D shading of the original photo.
+
+    composite, target: float32 BGR (0..255). weight: 0..1 where the swap is
+    fully applied. Luminance only; colour channels are scaled by the same
+    factor so hue and saturation of the new skin are kept.
+    """
+    if strength <= 0 or not weight.any():
+        return composite
+    # The multi-band blend can overshoot slightly below 0 / above 255 before
+    # the final clip; the log needs valid luminance.
+    composite = np.clip(composite, 0, 255)
+    fine = max(1.0, face_width * SHADING_FINE_RATIO)
+    coarse = max(fine * 2.0, face_width * SHADING_COARSE_RATIO)
+    eps = 4.0
+    luma_c = np.log(_luma(composite) + eps)
+    luma_t = np.log(_luma(target) + eps)
+    band_c = _luminance_band(luma_c, fine, coarse)
+    band_t = _luminance_band(luma_t, fine, coarse)
+    delta = band_t - band_c
+    # Where the two differ structurally (a beard only the new face has,
+    # glasses, open vs closed eyes) do not import the old face's features.
+    confidence = np.exp(-(delta / SHADING_STRUCTURE_TOLERANCE) ** 2).astype(np.float32)
+    # The band filter spreads a feature's influence a couple of radii around
+    # it; widen the "do not touch" zone the same way to avoid halos.
+    spread = int(round(fine * 4)) | 1
+    confidence = cv2.erode(confidence, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (spread, spread)))
+    delta = np.clip(delta, -SHADING_MAX_DELTA, SHADING_MAX_DELTA) * confidence
+    # Smooth the gain a little so it never draws its own edges.
+    delta = cv2.GaussianBlur(delta, (0, 0), fine * 0.5)
+    gain = np.exp(delta * strength * weight)
+    shaded = np.clip(composite * gain[:, :, None], 0, 255)
+    return _match_local_chroma(shaded, target, weight, face_width)
+
+
+def _match_local_chroma(composite: np.ndarray, target: np.ndarray, weight: np.ndarray, face_width: float) -> np.ndarray:
+    lab_c = cv2.cvtColor(np.clip(composite, 0, 255).astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+    lab_t = cv2.cvtColor(target.astype(np.float32) / 255.0, cv2.COLOR_BGR2Lab)
+    sigma = max(1.5, face_width * CHROMA_SCALE_RATIO)
+    shift = cv2.GaussianBlur(lab_t[:, :, 1:], (0, 0), sigma) - cv2.GaussianBlur(lab_c[:, :, 1:], (0, 0), sigma)
+    shift = np.clip(shift, -CHROMA_MAX_SHIFT, CHROMA_MAX_SHIFT)
+    # Leave dark structures of the new face (beard, brows, nostrils) their
+    # own colour: only skin-bright pixels are re-toned.
+    skin = np.clip((lab_c[:, :, 0] - 28.0) / 25.0, 0.0, 1.0)
+    lab_c[:, :, 1:] += shift * (CHROMA_STRENGTH * weight * skin)[:, :, None]
+    return np.clip(cv2.cvtColor(lab_c, cv2.COLOR_Lab2BGR) * 255.0, 0, 255)
+
+
 def seamless_face_composite(
     target: np.ndarray,
     swapped: np.ndarray,
-    face_bounds: dict[str, float]
+    face_bounds: dict[str, float],
+    shading_strength: float = SHADING_STRENGTH
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (composite BGR uint8, alpha uint8) for a swapped face.
 
@@ -245,6 +322,8 @@ def seamless_face_composite(
     composite = target_f + blended
 
     core = _smootherstep((inner_mask - 0.5) / 0.5).astype(np.float32)
+    # Stay clear of the face's outer rim, where the photo's own head edge sits.
+    composite = transfer_shading(composite, target_f, core, face_width, shading_strength)
     composite = match_photo_texture(composite, target_f, core)
 
     # The coarse bands spread a little beyond the changed region; the matte

@@ -6,6 +6,7 @@ import {
   mapLandmarksFromRegion,
   measureFaceShapeRatio,
   rectIoU,
+  rectOverlap,
   summarizeReferenceShape,
   weightedMedian
 } from "../src/head-geometry.js";
@@ -116,6 +117,16 @@ test("rectangle overlap", () => {
   assert.equal(rectIoU(a, a), 1);
   assert.equal(rectIoU(a, { x: 5, y: 5, width: 1, height: 1 }), 0);
   assert.ok(Math.abs(rectIoU(a, { x: 1, y: 0, width: 2, height: 2 }) - 1 / 3) < 1e-9);
+});
+
+test("a distant face inside an oversized detector box counts as the same face", () => {
+  // Mirror selfie: BlazeFace's box is ~3x the face and shifted down to the neck.
+  const face = { x: 0.38, y: 0.43, width: 0.09, height: 0.1 };
+  const box = { x: 0.28, y: 0.47, width: 0.24, height: 0.18 };
+  assert.ok(rectIoU(face, box) < 0.25);
+  assert.ok(rectOverlap(face, box) > 0.5);
+  assert.equal(rectOverlap(face, { x: 0.6, y: 0.43, width: 0.09, height: 0.1 }), 0);
+  assert.equal(rectOverlap(face, { ...face, width: 0 }), 0);
 });
 
 test("landmarks found in a zoomed region map back to the full image", () => {

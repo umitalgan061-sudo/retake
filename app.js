@@ -31,9 +31,11 @@ import {
   mapLandmarksFromRegion,
   measureFaceShapeRatio,
   rectIoU,
+  rectOverlap,
   summarizeReferenceShape
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
+import { meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
   describeProfileHealth,
@@ -95,6 +97,7 @@ const elements = {
   clearReferences: $("#clearReferencesButton"),
   referenceProgress: $("#referenceProgress"),
   swapButton: $("#swapButton"),
+  realFaceToggle: $("#realFaceToggle"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
   resultView: $("#resultView"),
@@ -378,7 +381,10 @@ function faceFromLandmarks(landmarks, sourceWidth, sourceHeight) {
     ...bounds,
     shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight),
     // Jaw contour and fixed points in full-image pixels, for the jawline warp.
-    jaw: jawPointsFromMesh(landmarks, sourceWidth, sourceHeight)
+    jaw: jawPointsFromMesh(landmarks, sourceWidth, sourceHeight),
+    // Full mesh (normalized) and pose signature, for the real-photo face.
+    mesh: landmarks.map((point) => ({ x: point.x, y: point.y })),
+    pose: poseDescriptor(landmarks, sourceWidth, sourceHeight)
   };
 }
 
@@ -413,8 +419,16 @@ function refineFaceInRegion(image, box, sourceWidth, sourceHeight) {
   };
   return meshes
     .map((landmarks) => faceFromLandmarks(mapLandmarksFromRegion(landmarks, region), sourceWidth, sourceHeight))
-    .filter((face) => face && rectIoU(face, box) > 0.2)
+    // BlazeFace boxes can be much larger or smaller than the face itself, so
+    // match by containment rather than IoU.
+    .filter((face) => face && rectOverlap(face, box) > 0.4)
     .sort((a, b) => rectIoU(b, box) - rectIoU(a, box))[0] || null;
+}
+
+// Two detections of one face: they overlap well, or one sits inside the other
+// (BlazeFace's box around a distant face can be three times the face).
+function isSameFace(a, b) {
+  return rectIoU(a, b) > 0.25 || rectOverlap(a, b) > 0.5;
 }
 
 async function detectFaces(image) {
@@ -433,10 +447,10 @@ async function detectFaces(image) {
         .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
         .filter((item) => item && item.confidence >= 0.5);
       for (const candidate of candidates) {
-        if (faces.some((face) => rectIoU(face, candidate.bounds) > 0.25)) continue;
+        if (faces.some((face) => isSameFace(face, candidate.bounds))) continue;
         const refined = refineFaceInRegion(image, candidate.bounds, sourceWidth, sourceHeight);
-        if (refined && faces.some((face) => rectIoU(face, refined) > 0.25)) continue;
-        faces.push(refined || { ...candidate.bounds, shapeRatio: null, jaw: null });
+        if (refined && faces.some((face) => isSameFace(face, refined))) continue;
+        faces.push(refined || { ...candidate.bounds, shapeRatio: null, jaw: null, mesh: null, pose: null });
       }
     } catch (error) {
       console.info(`Ek yüz taraması (${range}) kullanılamadı.`, error);
@@ -592,7 +606,8 @@ function selectResult(index) {
   elements.outputSymbol.hidden = true;
   elements.outputTitle.textContent = "Görünüm " + (index + 1);
   elements.outputStatus.textContent = item.label;
-  const quality = describeSimilarity(item.similarity, item.before);
+  const quality = [describeSimilarity(item.similarity, item.before), item.realFace ? "gerçek fotoğraf dokusu" : ""]
+    .filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
   elements.qualityBadge.hidden = !quality;
   updateResultView();
@@ -601,7 +616,14 @@ function selectResult(index) {
 }
 
 function addResult(blob, label, scores = {}) {
-  const item = { blob, url: createObjectURL(blob), label, similarity: scores.similarity ?? null, before: scores.before ?? null };
+  const item = {
+    blob,
+    url: createObjectURL(blob),
+    label,
+    similarity: scores.similarity ?? null,
+    before: scores.before ?? null,
+    realFace: scores.realFace === true
+  };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
     URL.revokeObjectURL(state.results.shift().url);
@@ -1086,7 +1108,7 @@ async function clearReferenceData() {
     : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-jawline-v6";
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-realface-v7";
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
 
@@ -1304,6 +1326,7 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
       : null,
     jaw: detectionMethod === "FaceLandmarker" ? canonicalJaw(detected.landmarks, sourceWidth, sourceHeight) : null,
     jawFrontalness: detectionMethod === "FaceLandmarker" ? meshFrontalness(detected.landmarks, sourceWidth, sourceHeight) : 0,
+    pose: detectionMethod === "FaceLandmarker" ? poseDescriptor(detected.landmarks, sourceWidth, sourceHeight) : null,
     profilePixels: quality.imageData.data,
     weight,
     quality,
@@ -1464,7 +1487,8 @@ async function buildLocalFaceFusionInputs() {
         validCount: cached.validCount,
         totalWeight: cached.totalWeight,
         shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null,
-        jawContour: Array.isArray(cached.jawContour) ? cached.jawContour : null
+        jawContour: Array.isArray(cached.jawContour) ? cached.jawContour : null,
+        poseDescriptors: Array.isArray(cached.poseDescriptors) ? cached.poseDescriptors : null
       };
       state.profileIsBuilding = false;
       updateProfileIndicator({
@@ -1544,6 +1568,9 @@ async function buildLocalFaceFusionInputs() {
         jawContour: summarizeReferenceJaw(candidates
           .filter((candidate) => candidate.jaw && candidate.jawFrontalness >= 0.6)
           .map((candidate) => ({ points: candidate.jaw, weight: candidate.jawFrontalness * candidate.weight }))),
+        // Pose/expression signature of each reference, in reference order, to
+        // pick the photo whose real face can be warped onto the target.
+        poseDescriptors: candidates.map((candidate) => candidate.pose),
         referenceDiagnostics
       };
       state.identityProfile = {
@@ -1593,6 +1620,9 @@ async function buildLocalFaceFusionInputs() {
       frontalness: face.jaw.frontalness
     }, profile.jawContour)
     : null;
+  const realFace = isRealFaceEnabled()
+    ? await prepareRealFace(face, profile, readyReferences, toCanvas)
+    : null;
 
   return {
     targetCanvas,
@@ -1605,7 +1635,77 @@ async function buildLocalFaceFusionInputs() {
     targetSize: { width: targetCanvas.width, height: targetCanvas.height },
     headFit,
     jawWarp,
+    realFace,
     crop
+  };
+}
+
+const REAL_FACE_STORAGE_KEY = "retake-real-face";
+
+function isRealFaceEnabled() {
+  return elements.realFaceToggle ? elements.realFaceToggle.checked : true;
+}
+
+function restoreRealFacePreference() {
+  if (!elements.realFaceToggle) return;
+  try {
+    elements.realFaceToggle.checked = window.localStorage.getItem(REAL_FACE_STORAGE_KEY) !== "off";
+  } catch { /* storage unavailable: keep the default (on) */ }
+  elements.realFaceToggle.addEventListener("change", () => {
+    try {
+      window.localStorage.setItem(REAL_FACE_STORAGE_KEY, elements.realFaceToggle.checked ? "on" : "off");
+    } catch { /* ignore */ }
+  });
+}
+
+// Real-photo face: the person's own reference photos closest in pose and
+// expression (up to three), with their 478-point meshes and the target's. The
+// engine warps each onto the target face and keeps the one that fits best, so
+// real skin, nose and lips replace the generated ones. Returns null when no
+// reference is close enough; the AI swap alone is then used.
+async function prepareRealFace(face, profile, readyReferences, toCanvas) {
+  if (!face.mesh || !face.pose || !Array.isArray(profile.poseDescriptors)) return null;
+  const candidates = [];
+  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose)) {
+    try {
+      const candidate = await cropRealReference(readyReferences[index]);
+      if (candidate) candidates.push(candidate);
+    } catch (error) {
+      console.info("Gerçek fotoğraf adayı hazırlanamadı:", readyReferences[index]?.name, error);
+    }
+  }
+  if (!candidates.length) return null;
+  return {
+    candidates,
+    targetLandmarks: meshToPixels(face.mesh, state.target.image.naturalWidth, state.target.image.naturalHeight, toCanvas)
+  };
+}
+
+// The reference photo cropped around its face (at most 1024 px) with its
+// 478-point mesh in the crop's pixels.
+async function cropRealReference(reference) {
+  const image = reference?.image;
+  if (!image) return null;
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const landmarks = (state.detector.detect(image).faceLandmarks || [])
+    .map((mesh) => ({ mesh, bounds: getLandmarkBounds(mesh) }))
+    .filter((item) => item.bounds)
+    .sort((a, b) => (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height))[0]?.mesh;
+  if (!landmarks || landmarks.length < 478) return null;
+  const area = referenceCrop(landmarks, width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = area.outWidth;
+  canvas.height = area.outHeight;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, area.x, area.y, area.width, area.height, 0, 0, canvas.width, canvas.height);
+  return {
+    blob: await canvasToBlob(canvas),
+    name: reference.name,
+    landmarks: meshToPixels(landmarks, width, height,
+      (point) => ({ x: (point.x - area.x) * area.scale, y: (point.y - area.y) * area.scale }))
   };
 }
 
@@ -1786,8 +1886,8 @@ async function runFaceFusionEdit() {
   const consent = await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
     message: state.engine.remote
-      ? "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
-      : "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+      ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
     confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
@@ -1816,6 +1916,7 @@ async function runFaceFusionEdit() {
       targetSize,
       headFit,
       jawWarp,
+      realFace,
       crop
     } = await buildLocalFaceFusionInputs();
     const targetBlob = await canvasToBlob(targetCanvas);
@@ -1826,7 +1927,17 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    form.append("metadata", JSON.stringify({ referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation }));
+    const metadata = { referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation };
+    if (realFace) {
+      realFace.candidates.forEach((candidate, index) => {
+        form.append("real_reference", candidate.blob, `retake-real-reference-${index + 1}.png`);
+      });
+      metadata.realFace = {
+        targetLandmarks: realFace.targetLandmarks,
+        references: realFace.candidates.map((candidate) => ({ landmarks: candidate.landmarks }))
+      };
+    }
+    form.append("metadata", JSON.stringify(metadata));
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
@@ -1847,7 +1958,8 @@ async function runFaceFusionEdit() {
     }
     const scores = {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
-      before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before"))
+      before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
+      realFace: response.headers.get("X-Retake-Real-Face") === "on"
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -1981,6 +2093,7 @@ function initializeEngineSettings() {
   elements.engineReset.addEventListener("click", resetEngineForm);
   elements.compareRange.addEventListener("input", updateResultView);
   elements.strengthRange.addEventListener("input", updateResultView);
+  restoreRealFacePreference();
   elements.shareButton.addEventListener("click", shareResult);
   elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
   // When the app comes back to the foreground (phone unlocked, tab restored)

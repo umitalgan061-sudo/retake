@@ -37,25 +37,29 @@ export function descriptorDistance(a, b) {
   return sum / (a.length / 2);
 }
 
+export const REAL_FACE_CANDIDATES = 3;
+
 /**
- * Index of the best reference for the target face, or -1 if none is close
- * enough (a very different pose would warp badly; the AI swap is used then).
- * Sharper, better-lit references (higher weight) win close calls.
+ * Indices of the references that can be warped onto the target face, best
+ * first (at most `count`). A very different pose would warp badly, so only
+ * references within `maxDistance` qualify. Sharper, better-lit references
+ * (higher weight) win close calls. The engine warps every candidate and keeps
+ * the one whose features line up best with the photo.
  */
-export function pickRealReference(descriptors, weights, target, maxDistance = MAX_POSE_DISTANCE) {
-  let best = -1;
-  let bestScore = Infinity;
+export function rankRealReferences(descriptors, weights, target, maxDistance = MAX_POSE_DISTANCE, count = REAL_FACE_CANDIDATES) {
+  const ranked = [];
   (Array.isArray(descriptors) ? descriptors : []).forEach((descriptor, index) => {
     const distance = descriptorDistance(descriptor, target);
     if (!(distance <= maxDistance)) return;
     const weight = Number(weights?.[index]) || 1;
-    const score = distance * (1.15 - 0.05 * Math.min(3, weight));
-    if (score < bestScore) {
-      bestScore = score;
-      best = index;
-    }
+    ranked.push({ index, score: distance * (1.15 - 0.05 * Math.min(3, weight)) });
   });
-  return best;
+  return ranked.sort((a, b) => a.score - b.score).slice(0, Math.max(0, count)).map((item) => item.index);
+}
+
+/** Index of the best reference for the target face, or -1 if none is close enough. */
+export function pickRealReference(descriptors, weights, target, maxDistance = MAX_POSE_DISTANCE) {
+  return rankRealReferences(descriptors, weights, target, maxDistance, 1)[0] ?? -1;
 }
 
 /** Crop around the face (1.8× its size) at no more than REFERENCE_CROP_MAX_EDGE px. */

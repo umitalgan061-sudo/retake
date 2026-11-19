@@ -11,6 +11,8 @@ from tools.retake_detail import (
     LEFT_BROW,
     MESH_POINTS,
     RIGHT_BROW,
+    choose_and_transplant,
+    reference_skin,
     transplant_reference_face,
     transplant_region,
     validate_mesh,
@@ -125,15 +127,23 @@ class RealFaceRequestTest(unittest.TestCase):
     def test_real_face_metadata_is_optional_and_validated(self):
         self.assertIsNone(srv._validate_metadata(self.base, srv.MAX_REFERENCES)["realFace"])
         mesh = synthetic_mesh().tolist()
-        real = {"referenceLandmarks": mesh, "targetLandmarks": mesh}
-        validated = srv._validate_metadata({**self.base, "realFace": real}, srv.MAX_REFERENCES)["realFace"]
+        many = {"targetLandmarks": mesh, "references": [{"landmarks": mesh}] * 3}
+        validated = srv._validate_metadata({**self.base, "realFace": many}, srv.MAX_REFERENCES)["realFace"]
         self.assertEqual(len(validated["targetLandmarks"]), MESH_POINTS)
+        self.assertEqual(len(validated["references"]), 3)
+        # The single-candidate form is still understood.
+        single = {"referenceLandmarks": mesh, "targetLandmarks": mesh}
+        validated = srv._validate_metadata({**self.base, "realFace": single}, srv.MAX_REFERENCES)["realFace"]
+        self.assertEqual(len(validated["references"]), 1)
         for bad in ([], {"targetLandmarks": mesh}, {"referenceLandmarks": mesh, "targetLandmarks": mesh[:10]},
-                    {"referenceLandmarks": [[-50, 1]] * MESH_POINTS, "targetLandmarks": mesh}):
-            with self.subTest(bad=str(bad)[:30]), self.assertRaisesRegex(ValueError, "Gerçek fotoğraf"):
+                    {"referenceLandmarks": [[-50, 1]] * MESH_POINTS, "targetLandmarks": mesh},
+                    {"targetLandmarks": mesh, "references": []},
+                    {"targetLandmarks": mesh, "references": [{"landmarks": mesh}] * 4},
+                    {"targetLandmarks": mesh, "references": [mesh]}):
+            with self.subTest(bad=str(bad)[:40]), self.assertRaisesRegex(ValueError, "Gerçek fotoğraf"):
                 srv._validate_metadata({**self.base, "realFace": bad}, srv.MAX_REFERENCES)
 
-    def multipart(self, real_face=None, real_photo=None):
+    def multipart(self, real_face=None, real_photos=()):
         boundary = "b0undary"
         parts = []
 
@@ -148,8 +158,8 @@ class RealFaceRequestTest(unittest.TestCase):
         add("appearance_profile", png, "a.png")
         for index in range(srv.MAX_REFERENCES):
             add("reference", png, f"r{index}.png")
-        if real_photo is not None:
-            add("real_reference", real_photo, "real.png")
+        for index, photo in enumerate(real_photos):
+            add("real_reference", photo, f"real{index}.png")
         metadata = dict(self.base)
         if real_face is not None:
             metadata["realFace"] = real_face
@@ -160,17 +170,19 @@ class RealFaceRequestTest(unittest.TestCase):
     def reference_image():
         return textured(2, 64)
 
-    def test_the_real_photo_and_its_mesh_travel_together(self):
+    def test_the_real_photos_and_their_meshes_travel_together(self):
         mesh = synthetic_mesh().tolist()
-        real = {"referenceLandmarks": mesh, "targetLandmarks": mesh}
-        photo = cv2.imencode(".png", textured(4))[1].tobytes()
-        body, content_type = self.multipart(real, photo)
-        metadata = srv.parse_multipart(content_type, body)[-1]
-        self.assertEqual(metadata["realReferenceBytes"], photo)
-        body, content_type = self.multipart(None, None)
+        real = {"targetLandmarks": mesh, "references": [{"landmarks": mesh}, {"landmarks": mesh}]}
+        photos = [cv2.imencode(".png", textured(seed))[1].tobytes() for seed in (4, 6)]
+        body, content_type = self.multipart(real, photos)
+        self.assertEqual(srv.parse_multipart(content_type, body)[-1]["realReferenceBytes"], photos)
+        body, content_type = self.multipart(None)
         self.assertIsNone(srv.parse_multipart(content_type, body)[-1]["realReferenceBytes"])
-        body, content_type = self.multipart(real, None)
+        body, content_type = self.multipart(real, photos[:1])
         with self.assertRaisesRegex(ValueError, "fotoğrafı eksik"):
+            srv.parse_multipart(content_type, body)
+        body, content_type = self.multipart(real, photos + photos)
+        with self.assertRaisesRegex(ValueError, "En fazla"):
             srv.parse_multipart(content_type, body)
 
     def test_an_unreadable_real_photo_falls_back_to_the_ai_swap(self):
@@ -178,17 +190,49 @@ class RealFaceRequestTest(unittest.TestCase):
         target = textured(5)
         swapped = target.copy()
         swapped[60:180, 60:180] = 200
+        references = [{"landmarks": mesh}]
         result, used = srv.apply_real_face(
-            swapped, target, {"image": b"not an image", "referenceLandmarks": mesh, "targetLandmarks": mesh}, 140
+            swapped, target, {"images": [b"not an image"], "references": references, "targetLandmarks": mesh}, 140
         )
         self.assertFalse(used)
         self.assertIs(result, swapped)
         photo = cv2.imencode(".png", textured(9))[1].tobytes()
+        # A broken candidate is skipped; the readable one is used.
         result, used = srv.apply_real_face(
-            swapped, target, {"image": photo, "referenceLandmarks": mesh, "targetLandmarks": mesh}, 140
+            swapped, target,
+            {"images": [b"broken", photo], "references": references * 2, "targetLandmarks": mesh}, 140
         )
         self.assertTrue(used)
         self.assertFalse(np.array_equal(result, swapped))
+
+
+class CandidateChoiceTest(unittest.TestCase):
+    def test_the_candidate_whose_features_line_up_wins(self):
+        points = synthetic_mesh()
+        target = textured(5)
+        swapped = np.clip(target.astype(np.int16) + 30, 0, 255).astype(np.uint8)
+        aligned = target.copy()                                    # same features as the photo
+        misaligned = np.roll(target, 9, axis=1)                    # features shifted sideways
+        result, chosen, fits = choose_and_transplant(
+            swapped, target, [(misaligned, points), (aligned, points)], points, 140
+        )
+        self.assertEqual(chosen, 1)
+        self.assertGreater(fits[1]["structure"], fits[0]["structure"] + 0.3)
+        cheek = (slice(115, 130), slice(75, 90))
+        self.assertLess(np.abs(result[cheek].astype(int) - aligned[cheek].astype(int)).mean(), 2.0)
+
+    def test_forehead_comes_from_the_photo_only_where_it_is_skin(self):
+        points = synthetic_mesh()
+        reference = np.full((SIZE, SIZE, 3), (120, 150, 200), np.uint8)    # skin
+        reference[38:60, 60:120] = (30, 30, 35)                               # a dark fringe, left forehead
+        warped, coverage = warp_piecewise_affine(reference, points, points, (SIZE, SIZE))
+        skin = reference_skin(warped, points, coverage, 140)
+        self.assertLess(float(skin[50, 90]), 0.05)
+        self.assertGreater(float(skin[50, 150]), 0.95)
+        region = transplant_region(points, (SIZE, SIZE), 140, skin)
+        self.assertLess(float(region[50, 90]), 0.05)
+        self.assertGreater(float(region[52, 150]), 0.6)
+        self.assertEqual(float(transplant_region(points, (SIZE, SIZE), 140)[52, 150]), 0.0)
 
 
 if __name__ == "__main__":

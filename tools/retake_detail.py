@@ -110,20 +110,61 @@ def validate_mesh(points, width: float, height: float, margin: float) -> np.ndar
     return array.astype(np.float32)
 
 
+def _brow_line(points: np.ndarray) -> tuple[float, float]:
+    eye_distance = float(np.hypot(*(points[263] - points[33])))
+    top = min(float(points[LEFT_BROW + RIGHT_BROW, 1].min()), float(points[[33, 263], 1].min()))
+    return top - 0.28 * eye_distance, eye_distance
 
 
-def transplant_region(points: np.ndarray, shape: tuple[int, int], face_width: float) -> np.ndarray:
-    """0..1 region for the transplant: the face from just above the brows
-    down to the chin (the forehead above is often covered by hair), minus
-    the open mouth."""
+def reference_skin(warped: np.ndarray, points: np.ndarray, coverage: np.ndarray, face_width: float) -> np.ndarray:
+    """0..1 likelihood that each warped-reference pixel is the person's skin.
+
+    The skin colour is learnt from the reference's own cheeks and nose
+    (between the eyes and the mouth); hair, brows-to-hairline shadows and
+    glasses frames fall outside it. Used for the forehead, where the
+    reference's fringe would otherwise be pasted onto the photo.
+    """
+    height, width = coverage.shape
+    lab = cv2.cvtColor(np.clip(warped, 0, 255).astype(np.uint8), cv2.COLOR_BGR2LAB).astype(np.float32)
+    eye_y = float(points[[33, 263], 1].mean())
+    mouth_y = float(points[[13, 14], 1].mean())
+    oval = np.zeros((height, width), np.uint8)
+    cv2.fillPoly(oval, [np.round(points[FACE_OVAL]).astype(np.int32)], 1)
+    yy = np.arange(height, dtype=np.float32)[:, None]
+    sample = (oval > 0) & (coverage > 0.5) & (yy > eye_y + 0.15 * (mouth_y - eye_y)) & (yy < mouth_y - 0.25 * (mouth_y - eye_y))
+    if int(sample.sum()) < 50:
+        return np.ones((height, width), np.float32)
+    pixels = lab[sample]
+    centre = np.median(pixels, axis=0)
+    spread = np.maximum(np.percentile(np.abs(pixels - centre), 75, axis=0) * 1.5, (9.0, 4.0, 4.0))
+    # Lighter skin (a forehead in the light) is fine; darker or off-hue is not.
+    delta = (lab - centre) / spread
+    delta[:, :, 0] = np.minimum(delta[:, :, 0], 0.0) + np.maximum(delta[:, :, 0], 0.0) * 0.3
+    distance = np.sqrt((delta * delta).sum(axis=2) / 3.0)
+    skin = _smootherstep((2.6 - distance) / 1.2)
+    return cv2.GaussianBlur(skin.astype(np.float32), (0, 0), max(1.0, face_width * 0.008))
+
+
+def transplant_region(
+    points: np.ndarray,
+    shape: tuple[int, int],
+    face_width: float,
+    forehead_skin: np.ndarray | None = None
+) -> np.ndarray:
+    """0..1 region for the transplant: the face oval minus the open mouth.
+
+    Above the brows (where hair often falls) the reference is only used where
+    `forehead_skin` says it is skin; without it the forehead is left out.
+    """
     height, width = shape
     oval = np.zeros((height, width), np.uint8)
     cv2.fillPoly(oval, [np.round(points[FACE_OVAL]).astype(np.int32)], 255)
-    eye_distance = float(np.hypot(*(points[263] - points[33])))
-    brow_top = min(float(points[LEFT_BROW + RIGHT_BROW, 1].min()), float(points[[33, 263], 1].min())) - 0.28 * eye_distance
+    brow_top, eye_distance = _brow_line(points)
     yy = np.arange(height, dtype=np.float32)[:, None]
     fade = max(2.0, eye_distance * 0.12)
     below_brows = _smootherstep((yy - brow_top) / fade)
+    if forehead_skin is not None:
+        below_brows = below_brows + (1.0 - below_brows) * np.clip(forehead_skin, 0.0, 1.0)
     mouth = np.zeros_like(oval)
     cv2.fillPoly(mouth, [np.round(points[INNER_MOUTH]).astype(np.int32)], 255)
     grow = int(max(3, face_width * 0.01)) | 1
@@ -136,6 +177,102 @@ def transplant_region(points: np.ndarray, shape: tuple[int, int], face_width: fl
     return (_smootherstep(inward / feather) * below_brows).astype(np.float32)
 
 
+def _changed_mask(swapped: np.ndarray, target: np.ndarray, face_width: float) -> np.ndarray:
+    """Where the swap model replaced the photo (its mask keeps hair, hands, glasses)."""
+    changed = np.max(cv2.absdiff(swapped, target), axis=2) >= 2
+    grow = int(max(3, face_width * 0.02)) | 1
+    changed = cv2.morphologyEx(changed.astype(np.uint8), cv2.MORPH_CLOSE,
+                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
+    return cv2.GaussianBlur(changed.astype(np.float32), (0, 0), max(1.0, face_width * 0.01))
+
+
+def _log_luma(image: np.ndarray) -> np.ndarray:
+    image = np.clip(image.astype(np.float32), 0, 255)
+    return np.log(image[:, :, 0] * 0.114 + image[:, :, 1] * 0.587 + image[:, :, 2] * 0.299 + 4.0)
+
+
+def _weighted_correlation(a: np.ndarray, b: np.ndarray, weight: np.ndarray) -> float:
+    total = float(weight.sum())
+    if total < 16:
+        return 0.0
+    a = a - float((a * weight).sum()) / total
+    b = b - float((b * weight).sum()) / total
+    denominator = np.sqrt(float((a * a * weight).sum()) * float((b * b * weight).sum()))
+    return float((a * b * weight).sum()) / denominator if denominator > 1e-9 else 0.0
+
+
+def candidate_fit(
+    warped: np.ndarray,
+    weight: np.ndarray,
+    swapped: np.ndarray,
+    target: np.ndarray,
+    face_width: float
+) -> dict[str, float]:
+    """How naturally a warped reference sits on the face.
+
+    structure: its dark features (eyes, brows, nostrils, lip line) land where
+      the photo's own are, and where the swap (rendered in the photo's exact
+      pose and expression) has them; glasses, a hand or another expression in
+      the reference lower it. This decides the choice.
+    light: its large-scale light and shadow resemble the photo's; a small
+      tie-break, since the composite corrects the light afterwards anyway.
+    """
+    log_w = _log_luma(warped)
+    low = max(0.8, face_width * 0.012)
+    high = max(low * 2.0, face_width * 0.05)
+    band = lambda image: cv2.GaussianBlur(image, (0, 0), low) - cv2.GaussianBlur(image, (0, 0), high)
+    features = band(log_w)
+    to_photo = _weighted_correlation(features, band(_log_luma(target)), weight)
+    to_swap = _weighted_correlation(features, band(_log_luma(swapped)), weight)
+    broad = max(2.0, face_width * 0.08)
+    light = _weighted_correlation(
+        cv2.GaussianBlur(log_w, (0, 0), broad), cv2.GaussianBlur(_log_luma(target), (0, 0), broad), weight
+    )
+    structure = to_photo + 0.5 * to_swap
+    return {"structure": structure, "light": light, "score": structure + 0.2 * light}
+
+
+def _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed):
+    image, reference_points = candidate
+    shape = target.shape[:2]
+    warped, coverage = warp_piecewise_affine(image, reference_points, target_points, shape)
+    skin = reference_skin(warped, target_points, coverage, face_width)
+    weight = transplant_region(target_points, shape, face_width, skin) * coverage * allowed
+    return warped, coverage, weight
+
+
+def choose_and_transplant(
+    swapped: np.ndarray,
+    target: np.ndarray,
+    candidates: list[tuple[np.ndarray, np.ndarray]],
+    target_points: np.ndarray,
+    face_width: float
+) -> tuple[np.ndarray, int, list[dict[str, float]]]:
+    """Warp each (image, mesh) candidate onto the face, keep the one that fits best.
+
+    Candidates arrive best pose match first; a later one must fit clearly
+    better to win. Returns (uint8 BGR result, chosen index, per-candidate fit).
+    """
+    if not candidates:
+        raise ValueError("gerçek fotoğraf adayı yok")
+    allowed = _changed_mask(swapped, target, face_width)
+    best = None
+    fits = []
+    for index, candidate in enumerate(candidates):
+        warped, coverage, weight = _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed)
+        # Outside the warped mesh use the swap, so the mesh border does not
+        # count as a feature.
+        filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
+        fit = candidate_fit(filled, weight, swapped, target, face_width)
+        fit["score"] -= 0.03 * index
+        fits.append(fit)
+        if best is None or fit["score"] > best[0]:
+            best = (fit["score"], index, warped, weight)
+    _, index, warped, weight = best
+    blended = swapped.astype(np.float32) * (1.0 - weight[:, :, None]) + warped * weight[:, :, None]
+    return np.clip(np.rint(blended), 0, 255).astype(np.uint8), index, fits
+
+
 def transplant_reference_face(
     swapped: np.ndarray,
     target: np.ndarray,
@@ -144,19 +281,8 @@ def transplant_reference_face(
     target_points: np.ndarray,
     face_width: float
 ) -> np.ndarray:
-    """The swap with its face replaced by the person's real photo (warped).
-
-    Only where the swap model itself changed the photo: its parser/occlusion
-    mask keeps hair, hands and glasses of the original photo. Returns uint8 BGR.
-    """
-    shape = target.shape[:2]
-    warped, coverage = warp_piecewise_affine(reference_image, reference_points, target_points, shape)
-    region = transplant_region(target_points, shape, face_width) * coverage
-    changed = np.max(cv2.absdiff(swapped, target), axis=2) >= 2
-    grow = int(max(3, face_width * 0.02)) | 1
-    changed = cv2.morphologyEx(changed.astype(np.uint8), cv2.MORPH_CLOSE,
-                               cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
-    allowed = cv2.GaussianBlur(changed.astype(np.float32), (0, 0), max(1.0, face_width * 0.01))
-    weight = (region * allowed)[:, :, None]
-    blended = swapped.astype(np.float32) * (1.0 - weight) + warped * weight
-    return np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+    """The swap with its face replaced by one real photo (warped). Returns uint8 BGR."""
+    result, _, _ = choose_and_transplant(
+        swapped, target, [(reference_image, reference_points)], target_points, face_width
+    )
+    return result

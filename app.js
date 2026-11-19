@@ -35,7 +35,7 @@ import {
   summarizeReferenceShape
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
-import { meshToPixels, pickRealReference, poseDescriptor, referenceCrop } from "./src/real-face.js";
+import { meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
   describeProfileHealth,
@@ -1658,46 +1658,55 @@ function restoreRealFacePreference() {
   });
 }
 
-// Real-photo face: the person's own reference photo with the closest pose and
-// expression, plus its 478-point mesh and the target's, so the engine can warp
-// real skin, nose and lips onto the target face. Returns null when no
+// Real-photo face: the person's own reference photos closest in pose and
+// expression (up to three), with their 478-point meshes and the target's. The
+// engine warps each onto the target face and keeps the one that fits best, so
+// real skin, nose and lips replace the generated ones. Returns null when no
 // reference is close enough; the AI swap alone is then used.
 async function prepareRealFace(face, profile, readyReferences, toCanvas) {
-  try {
-    if (!face.mesh || !face.pose || !Array.isArray(profile.poseDescriptors)) return null;
-    const index = pickRealReference(profile.poseDescriptors, profile.weights, face.pose);
-    const reference = readyReferences[index];
-    if (index < 0 || !reference?.image) return null;
-    const image = reference.image;
-    const width = image.naturalWidth || image.width;
-    const height = image.naturalHeight || image.height;
-    const landmarks = (state.detector.detect(image).faceLandmarks || [])
-      .map((mesh) => ({ mesh, bounds: getLandmarkBounds(mesh) }))
-      .filter((item) => item.bounds)
-      .sort((a, b) => (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height))[0]?.mesh;
-    if (!landmarks || landmarks.length < 478) return null;
-    const area = referenceCrop(landmarks, width, height);
-    const canvas = document.createElement("canvas");
-    canvas.width = area.outWidth;
-    canvas.height = area.outHeight;
-    const context = canvas.getContext("2d");
-    if (!context) return null;
-    context.imageSmoothingQuality = "high";
-    context.drawImage(image, area.x, area.y, area.width, area.height, 0, 0, canvas.width, canvas.height);
-    const blob = await canvasToBlob(canvas);
-    const targetWidth = state.target.image.naturalWidth;
-    const targetHeight = state.target.image.naturalHeight;
-    return {
-      blob,
-      referenceName: reference.name,
-      referenceLandmarks: meshToPixels(landmarks, width, height,
-        (point) => ({ x: (point.x - area.x) * area.scale, y: (point.y - area.y) * area.scale })),
-      targetLandmarks: meshToPixels(face.mesh, targetWidth, targetHeight, toCanvas)
-    };
-  } catch (error) {
-    console.info("Gerçek fotoğraf yüzü hazırlanamadı; yalnızca yapay zekâ sonucu kullanılacak.", error);
-    return null;
+  if (!face.mesh || !face.pose || !Array.isArray(profile.poseDescriptors)) return null;
+  const candidates = [];
+  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose)) {
+    try {
+      const candidate = await cropRealReference(readyReferences[index]);
+      if (candidate) candidates.push(candidate);
+    } catch (error) {
+      console.info("Gerçek fotoğraf adayı hazırlanamadı:", readyReferences[index]?.name, error);
+    }
   }
+  if (!candidates.length) return null;
+  return {
+    candidates,
+    targetLandmarks: meshToPixels(face.mesh, state.target.image.naturalWidth, state.target.image.naturalHeight, toCanvas)
+  };
+}
+
+// The reference photo cropped around its face (at most 1024 px) with its
+// 478-point mesh in the crop's pixels.
+async function cropRealReference(reference) {
+  const image = reference?.image;
+  if (!image) return null;
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  const landmarks = (state.detector.detect(image).faceLandmarks || [])
+    .map((mesh) => ({ mesh, bounds: getLandmarkBounds(mesh) }))
+    .filter((item) => item.bounds)
+    .sort((a, b) => (b.bounds.width * b.bounds.height) - (a.bounds.width * a.bounds.height))[0]?.mesh;
+  if (!landmarks || landmarks.length < 478) return null;
+  const area = referenceCrop(landmarks, width, height);
+  const canvas = document.createElement("canvas");
+  canvas.width = area.outWidth;
+  canvas.height = area.outHeight;
+  const context = canvas.getContext("2d");
+  if (!context) return null;
+  context.imageSmoothingQuality = "high";
+  context.drawImage(image, area.x, area.y, area.width, area.height, 0, 0, canvas.width, canvas.height);
+  return {
+    blob: await canvasToBlob(canvas),
+    name: reference.name,
+    landmarks: meshToPixels(landmarks, width, height,
+      (point) => ({ x: (point.x - area.x) * area.scale, y: (point.y - area.y) * area.scale }))
+  };
 }
 
 function applyGeneratedFacePatch(generatedTargetImage, crop) {
@@ -1877,8 +1886,8 @@ async function runFaceFusionEdit() {
   const consent = await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
     message: state.engine.remote
-      ? "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
-      : "Bu işlemde seçili fotoğrafın yüz kırpımı ve 25 referanstan hazırlanan yüz profili bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+      ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
     confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
@@ -1920,10 +1929,12 @@ async function runFaceFusionEdit() {
     });
     const metadata = { referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation };
     if (realFace) {
-      form.append("real_reference", realFace.blob, "retake-real-reference.png");
+      realFace.candidates.forEach((candidate, index) => {
+        form.append("real_reference", candidate.blob, `retake-real-reference-${index + 1}.png`);
+      });
       metadata.realFace = {
-        referenceLandmarks: realFace.referenceLandmarks,
-        targetLandmarks: realFace.targetLandmarks
+        targetLandmarks: realFace.targetLandmarks,
+        references: realFace.candidates.map((candidate) => ({ landmarks: candidate.landmarks }))
       };
     }
     form.append("metadata", JSON.stringify(metadata));

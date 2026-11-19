@@ -6,6 +6,7 @@ import {
   meshToPixels,
   pickRealReference,
   poseDescriptor,
+  rankRealReferences,
   referenceCrop
 } from "../src/real-face.js";
 
@@ -42,6 +43,16 @@ test("the closest pose wins; weight breaks near ties; far poses are refused", ()
   assert.equal(pickRealReference([near, nearer], [3, 1], target), 0, "a much better photo wins a near tie");
   assert.equal(pickRealReference([far], [3], target), -1);
   assert.equal(pickRealReference([], [], target), -1);
+});
+
+test("up to three candidates are ranked best first, far poses never included", () => {
+  const target = poseDescriptor(mesh(), 1000, 1000);
+  const at = (turn) => poseDescriptor(mesh({ turn }), 1000, 1000);
+  const far = poseDescriptor(mesh({ turn: 1.5, mouthOpen: 1 }), 1000, 1000);
+  const descriptors = [at(0.08), far, at(0.02), at(0.05), at(0.035), far];
+  assert.deepEqual(rankRealReferences(descriptors, new Array(6).fill(1), target), [2, 4, 3]);
+  assert.deepEqual(rankRealReferences(descriptors, new Array(6).fill(1), target, undefined, 5), [2, 4, 3, 0]);
+  assert.deepEqual(rankRealReferences([far, far], [1, 1], target), []);
 });
 
 test("reference crop surrounds the face and is capped in size", () => {

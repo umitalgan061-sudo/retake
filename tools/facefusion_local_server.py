@@ -164,8 +164,12 @@ def _validate_jaw_warp(value: Any, size: dict[str, int], bounds: dict[str, float
     return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors]}
 
 
+MAX_REAL_FACE_CANDIDATES = 3
+
+
 def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | None:
-    """Optional real-photo face: 478-point meshes of the reference photo and of the target crop."""
+    """Optional real-photo face: the target crop's 478-point mesh and, for each
+    candidate reference photo (best pose match first), its mesh."""
     if value is None:
         return None
     if not isinstance(value, dict):
@@ -177,10 +181,18 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
     margin = 0.25 * max(size["width"], size["height"])
     try:
         target_points = validate_mesh(value.get("targetLandmarks"), size["width"], size["height"], margin)
-        reference_points = validate_mesh(value.get("referenceLandmarks"), 4096, 4096, 0)
+        references = value.get("references")
+        if references is None and "referenceLandmarks" in value:  # single-candidate form
+            references = [{"landmarks": value.get("referenceLandmarks")}]
+        if not isinstance(references, list) or not 1 <= len(references) <= MAX_REAL_FACE_CANDIDATES:
+            raise ValueError(f"1–{MAX_REAL_FACE_CANDIDATES} aday olmalı.")
+        meshes = [
+            validate_mesh(item.get("landmarks") if isinstance(item, dict) else None, 4096, 4096, 0).tolist()
+            for item in references
+        ]
     except (ValueError, TypeError) as error:
         raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
-    return {"targetLandmarks": target_points.tolist(), "referenceLandmarks": reference_points.tolist()}
+    return {"targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
 def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
@@ -415,12 +427,15 @@ def parse_multipart(
     validate_reference_count(len(reference_files))
 
     metadata = _validate_metadata(metadata_value, len(reference_files))
-    if len(real_reference_files) > 1:
-        raise ValueError("En fazla bir gerçek fotoğraf referansı gönderilebilir.")
-    if metadata.get("realFace") and not real_reference_files:
+    if len(real_reference_files) > MAX_REAL_FACE_CANDIDATES:
+        raise ValueError(f"En fazla {MAX_REAL_FACE_CANDIDATES} gerçek fotoğraf adayı gönderilebilir.")
+    real_face = metadata.get("realFace")
+    if real_face and len(real_reference_files) < len(real_face["references"]):
         raise ValueError("Gerçek fotoğraf yüz ağı gönderildi ama fotoğrafı eksik.")
+    if real_face and len(real_reference_files) != len(real_face["references"]):
+        raise ValueError("Gerçek fotoğraf sayısı ile yüz ağı sayısı eşleşmiyor.")
     # Kept with the metadata so the parsed tuple keeps its shape.
-    metadata["realReferenceBytes"] = real_reference_files[0][1] if (real_reference_files and metadata.get("realFace")) else None
+    metadata["realReferenceBytes"] = [payload for _, payload in real_reference_files] if real_face else None
     return (
         target_files[0][1],
         [payload for _, payload in reference_files],
@@ -651,27 +666,38 @@ def fit_head_to_face(
 def apply_real_face(result, target, real_face: dict[str, Any], face_width: float):
     """Replace the swap's face with the person's own photo, warped onto the target.
 
-    Never fails the job: if the photo cannot be read or warped, the AI swap is kept.
+    Every candidate photo is warped and the one that fits the face best is
+    used. Never fails the job: if no photo can be read or warped, the AI swap
+    is kept. Returns (image, used).
     """
     import cv2
     import numpy as np
     try:
-        from .retake_detail import transplant_reference_face
+        from .retake_detail import choose_and_transplant
     except ImportError:
-        from retake_detail import transplant_reference_face
+        from retake_detail import choose_and_transplant
     try:
-        image = cv2.imdecode(np.frombuffer(real_face["image"], np.uint8), cv2.IMREAD_COLOR)
-        if image is None:
+        candidates = []
+        for payload, reference in zip(real_face["images"], real_face["references"]):
+            image = cv2.imdecode(np.frombuffer(payload, np.uint8), cv2.IMREAD_COLOR)
+            points = np.asarray(reference["landmarks"], np.float32)
+            if image is None:
+                continue
+            height, width = image.shape[:2]
+            if (points[:, 0] > width + 2).any() or (points[:, 1] > height + 2).any():
+                continue
+            candidates.append((image, points))
+        if not candidates:
             raise ValueError("gerçek fotoğraf okunamadı")
-        reference_points = np.asarray(real_face["referenceLandmarks"], np.float32)
-        height, width = image.shape[:2]
-        if (reference_points[:, 0] > width + 2).any() or (reference_points[:, 1] > height + 2).any():
-            raise ValueError("yüz ağı fotoğrafın dışında")
-        transplanted = transplant_reference_face(
-            result, target, image, reference_points,
-            np.asarray(real_face["targetLandmarks"], np.float32), face_width
+        transplanted, chosen, fits = choose_and_transplant(
+            result, target, candidates, np.asarray(real_face["targetLandmarks"], np.float32), face_width
         )
-        print("Gerçek fotoğraf yüzü hedef geometriye bükülerek uygulandı.", flush=True)
+        scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
+        print(
+            f"Gerçek fotoğraf yüzü uygulandı: {len(candidates)} aday bükülüp karşılaştırıldı "
+            f"(uyum {scores}), {chosen + 1}. aday seçildi.",
+            flush=True
+        )
         return transplanted, True
     except Exception as error:  # informative only; keep the AI swap
         print(f"Gerçek fotoğraf yüzü uygulanamadı, yapay zekâ sonucu kullanılıyor: {error}", flush=True)
@@ -918,7 +944,7 @@ def process_swap(
             metadata["targetSize"],
             caches.get("shading"),
             (
-                {**metadata["realFace"], "image": metadata["realReferenceBytes"]}
+                {**metadata["realFace"], "images": metadata["realReferenceBytes"]}
                 if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
             )
         )

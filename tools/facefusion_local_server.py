@@ -44,7 +44,7 @@ IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v7"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v8"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -164,6 +164,25 @@ def _validate_jaw_warp(value: Any, size: dict[str, int], bounds: dict[str, float
     return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors]}
 
 
+def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | None:
+    """Optional real-photo face: 478-point meshes of the reference photo and of the target crop."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Gerçek fotoğraf verisi nesne olmalı.")
+    try:
+        from .retake_detail import validate_mesh
+    except ImportError:
+        from retake_detail import validate_mesh
+    margin = 0.25 * max(size["width"], size["height"])
+    try:
+        target_points = validate_mesh(value.get("targetLandmarks"), size["width"], size["height"], margin)
+        reference_points = validate_mesh(value.get("referenceLandmarks"), 4096, 4096, 0)
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
+    return {"targetLandmarks": target_points.tolist(), "referenceLandmarks": reference_points.tolist()}
+
+
 def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("Profil metadata alanı geçerli JSON nesnesi olmalı.")
@@ -221,8 +240,10 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
         raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
     jaw_warp = _validate_jaw_warp(metadata.get("jawWarp"), target_size, bounds)
+    real_face = _validate_real_face(metadata.get("realFace"), target_size)
     return {
         "jawWarp": jaw_warp,
+        "realFace": real_face,
         "referenceWeights": normalized_weights,
         "faceBounds": bounds,
         "variation": variation,
@@ -357,6 +378,7 @@ def parse_multipart(
     target_files: list[tuple[str, bytes]] = []
     reference_files: list[tuple[str, bytes]] = []
     appearance_files: list[tuple[str, bytes]] = []
+    real_reference_files: list[tuple[str, bytes]] = []
     metadata_value: Any = None
 
     for part in message.iter_parts():
@@ -370,14 +392,16 @@ def parse_multipart(
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
                 raise ValueError("Profil metadata JSON olarak okunamadı.") from error
             continue
-        if field_name not in {"target", "reference", "appearance_profile"}:
+        if field_name not in {"target", "reference", "appearance_profile", "real_reference"}:
             continue
 
         extension = image_extension(part.get_content_type(), payload)
         if not payload or len(payload) > MAX_FILE_BYTES:
             raise ValueError("Her görsel boş olmamalı ve 25 MB sınırını aşmamalı.")
         item = (extension, payload)
-        if field_name == "target":
+        if field_name == "real_reference":
+            real_reference_files.append(item)
+        elif field_name == "target":
             target_files.append(item)
         elif field_name == "reference":
             reference_files.append(item)
@@ -391,6 +415,12 @@ def parse_multipart(
     validate_reference_count(len(reference_files))
 
     metadata = _validate_metadata(metadata_value, len(reference_files))
+    if len(real_reference_files) > 1:
+        raise ValueError("En fazla bir gerçek fotoğraf referansı gönderilebilir.")
+    if metadata.get("realFace") and not real_reference_files:
+        raise ValueError("Gerçek fotoğraf yüz ağı gönderildi ama fotoğrafı eksik.")
+    # Kept with the metadata so the parsed tuple keeps its shape.
+    metadata["realReferenceBytes"] = real_reference_files[0][1] if (real_reference_files and metadata.get("realFace")) else None
     return (
         target_files[0][1],
         [payload for _, payload in reference_files],
@@ -618,6 +648,36 @@ def fit_head_to_face(
         raise RuntimeError("Kafa oranı düzeltmesi uygulanmış PNG yazılamadı.")
 
 
+def apply_real_face(result, target, real_face: dict[str, Any], face_width: float):
+    """Replace the swap's face with the person's own photo, warped onto the target.
+
+    Never fails the job: if the photo cannot be read or warped, the AI swap is kept.
+    """
+    import cv2
+    import numpy as np
+    try:
+        from .retake_detail import transplant_reference_face
+    except ImportError:
+        from retake_detail import transplant_reference_face
+    try:
+        image = cv2.imdecode(np.frombuffer(real_face["image"], np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("gerçek fotoğraf okunamadı")
+        reference_points = np.asarray(real_face["referenceLandmarks"], np.float32)
+        height, width = image.shape[:2]
+        if (reference_points[:, 0] > width + 2).any() or (reference_points[:, 1] > height + 2).any():
+            raise ValueError("yüz ağı fotoğrafın dışında")
+        transplanted = transplant_reference_face(
+            result, target, image, reference_points,
+            np.asarray(real_face["targetLandmarks"], np.float32), face_width
+        )
+        print("Gerçek fotoğraf yüzü hedef geometriye bükülerek uygulandı.", flush=True)
+        return transplanted, True
+    except Exception as error:  # informative only; keep the AI swap
+        print(f"Gerçek fotoğraf yüzü uygulanamadı, yapay zekâ sonucu kullanılıyor: {error}", flush=True)
+        return result, False
+
+
 def blend_lower_face(
     target_path: Path,
     identity_path: Path,
@@ -626,8 +686,9 @@ def blend_lower_face(
     face_bounds: dict[str, float],
     detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH,
     expected_size: dict[str, int] | None = None,
-    shading_strength: float | None = None
-) -> None:
+    shading_strength: float | None = None,
+    real_face: dict[str, Any] | None = None
+) -> bool:
     try:
         import cv2
         import numpy as np
@@ -706,6 +767,9 @@ def blend_lower_face(
     # without a visible border: rim tone matching (gradient domain), multi-band
     # blending and sharpness/grain matching. The returned matte lets the
     # browser keep every other source pixel byte-for-byte.
+    used_real_face = False
+    if real_face is not None:
+        result, used_real_face = apply_real_face(result, target, real_face, face_width)
     composite, alpha = (
         seamless_face_composite(target, result, face_bounds)
         if shading_strength is None
@@ -716,6 +780,7 @@ def blend_lower_face(
 
     if not cv2.imwrite(str(output_path), rgba):
         raise RuntimeError("Hibrit yüz sonucu ve semantik alfa maskesi diske yazılamadı.")
+    return used_real_face
 
 
 def process_swap(
@@ -843,7 +908,7 @@ def process_swap(
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
         progress(3)
-        blend_lower_face(
+        used_real_face = blend_lower_face(
             target_path,
             identity_output,
             appearance_output,
@@ -851,7 +916,11 @@ def process_swap(
             metadata["faceBounds"],
             detail_transfer_strength,
             metadata["targetSize"],
-            caches.get("shading")
+            caches.get("shading"),
+            (
+                {**metadata["realFace"], "image": metadata["realReferenceBytes"]}
+                if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
+            )
         )
         used_enhancer = bool(enhancer_enabled)
         if used_enhancer:
@@ -895,7 +964,8 @@ def process_swap(
             "X-Retake-Pixel-Boost": f"{identity_boost},{appearance_boost}",
             "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
-            "X-Retake-Variation": str(variation)
+            "X-Retake-Variation": str(variation),
+            "X-Retake-Real-Face": "on" if used_real_face else "off"
         }
         print(
             "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
@@ -1044,7 +1114,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
-            "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before"
+            "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

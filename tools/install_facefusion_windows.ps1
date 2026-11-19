@@ -1,4 +1,4 @@
-$ErrorActionPreference = "Stop"
+﻿$ErrorActionPreference = "Stop"
 
 $FaceFusionDir = "C:\AI\FaceFusion"
 $FaceFusionVersion = "3.9.2"

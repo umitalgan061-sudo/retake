@@ -1,11 +1,14 @@
-param(
+﻿param(
     [ValidateSet("512x512", "768x768", "1024x1024")]
     [string]$FaceSwapperPixelBoost = "1024x1024",
     [switch]$EnableFaceEnhancer,
     # Telefon / tablet / PWA'dan kullanmak için: eşleştirme kodunu zorunlu kılar.
     [switch]$EnablePairing,
     # Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, 0.7 varsayılan, 1.2 en çok).
-    [double]$ShadingStrength = -1
+    [double]$ShadingStrength = -1,
+    # Fotoğraf gerçekçiliği katmanını (tools\install_realism.ps1) kurulu olsa bile kapat.
+    [switch]$DisableRealism,
+    [string]$RealismDir = "C:\AI\RetakeRealism"
 )
 
 $ErrorActionPreference = "Stop"
@@ -40,6 +43,16 @@ if ($EnableFaceEnhancer) {
 if ($ShadingStrength -ge 0) {
     $ServerArgs += @("--shading-strength", $ShadingStrength.ToString([System.Globalization.CultureInfo]::InvariantCulture))
     Write-Host "Gölgelendirme aktarımı gücü: $ShadingStrength" -ForegroundColor Yellow
+}
+$RealismPython = Join-Path $RealismDir "python.txt"
+if (-not $DisableRealism -and (Test-Path $RealismPython)) {
+    $ServerArgs += @(
+        "--realism-python", (Get-Content $RealismPython -Raw).Trim(),
+        "--realism-models", (Join-Path $RealismDir "models")
+    )
+    Write-Host "Fotoğraf gerçekçiliği katmanı açık (difüzyon + kimlik yönlendirmesi)." -ForegroundColor Green
+} elseif (-not $DisableRealism) {
+    Write-Host "İpucu: gerçekçi cilt/dudak/göz için tek seferlik kurulum: .\tools\install_realism.ps1" -ForegroundColor Yellow
 }
 if ($EnablePairing) {
     $ServerArgs += "--enable-pairing"

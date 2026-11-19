@@ -87,8 +87,8 @@ test("head fit shortens and widens for a rounder reference face", () => {
 
 test("head fit is capped and neutral without measurements", () => {
   const extreme = estimateHeadFit(2.0, 1.0);
-  assert.equal(extreme.scaleY, 1.08);
-  assert.equal(extreme.scaleX, 0.92);
+  assert.equal(extreme.scaleY, 1.15);
+  assert.equal(extreme.scaleX, 0.85);
   assert.deepEqual(estimateHeadFit(null, 1.4), { scaleX: 1, scaleY: 1 });
   assert.deepEqual(estimateHeadFit(1.4, NaN), { scaleX: 1, scaleY: 1 });
   assert.deepEqual(estimateHeadFit(1.4, 1.4), { scaleX: 1, scaleY: 1 });

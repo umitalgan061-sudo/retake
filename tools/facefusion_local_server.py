@@ -37,14 +37,20 @@ JOB_STAGES = (
     "Kimlik geçişi (AlphaFace)",
     "Görünüm ve sakal geçişi (UniFace)",
     "Dikişsiz birleştirme ve kafa oranı",
+    "Fotoğraf gerçekçiliği (difüzyon)",
     "Kimlik benzerliği ölçülüyor",
 )
+REALISM_STAGE = 4
+SCORING_STAGE = 5
+# A realism render may cost at most this much ArcFace similarity to be used.
+REALISM_MAX_IDENTITY_LOSS = 0.01
+REALISM_TIMEOUT_SECONDS = 900
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
 IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v8"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v9"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -58,8 +64,8 @@ DEFAULT_TARGET_HEIGHT = 1024
 MIN_TARGET_EDGE = 256
 MAX_TARGET_WIDTH = 1600
 MAX_TARGET_HEIGHT = 2048
-HEAD_FIT_MIN = 0.90
-HEAD_FIT_MAX = 1.12
+HEAD_FIT_MIN = 0.85
+HEAD_FIT_MAX = 1.18
 # (swapper weight, lower-face detail strength, head-fit strength).
 # Head-fit strength scales the head reshape measured by the browser from the
 # 25 references: 1 = measured fit, 0 = keep the photo's own head proportions.
@@ -663,6 +669,115 @@ def fit_head_to_face(
         raise RuntimeError("Kafa oranı düzeltmesi uygulanmış PNG yazılamadı.")
 
 
+def run_realism(
+    realism: dict[str, Any],
+    final_output: Path,
+    target_path: Path,
+    face_bounds: dict[str, float],
+    centroid: list[float],
+    temp_dir: Path
+) -> list[Path]:
+    """Render photographic versions of the face in the realism environment.
+
+    Informative only: any failure returns [] and the FaceFusion result stays.
+    """
+    worker = Path(__file__).with_name("retake_realism_worker.py")
+    identity_file = temp_dir / "retake-realism-identity.json"
+    identity_file.write_text(json.dumps(centroid), encoding="utf-8")
+    command = [
+        str(realism["python"]), str(worker),
+        "--models-dir", str(realism["models"]),
+        "--swapped", str(final_output),
+        "--target", str(target_path),
+        "--bounds", json.dumps(face_bounds),
+        "--identity-file", str(identity_file),
+        "--out-dir", str(temp_dir / "realism"),
+    ]
+    try:
+        completed = subprocess.run(
+            command, cwd=str(worker.parent), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=REALISM_TIMEOUT_SECONDS, check=False
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        print(f"[Gerçekçilik] Çalıştırılamadı: {error}", flush=True)
+        return []
+    marker = "RETAKE_REALISM_REPORT="
+    report = None
+    for line in reversed(completed.stdout.splitlines()):
+        if line.startswith(marker):
+            try:
+                report = json.loads(line[len(marker):])
+            except json.JSONDecodeError:
+                report = None
+            break
+    if completed.returncode != 0 or not report or not report.get("ok"):
+        detail = (completed.stderr or completed.stdout or "").strip().splitlines()[-3:]
+        print(f"[Gerçekçilik] Başarısız (kod {completed.returncode}): {' | '.join(detail)}", flush=True)
+        return []
+    print(
+        f"[Gerçekçilik] {len(report['outputs'])} sürüm üretildi ({report.get('device')}, "
+        f"yükleme {report.get('load_seconds')} sn, işleme {report.get('render_seconds')} sn).",
+        flush=True
+    )
+    return [Path(item["path"]) for item in report["outputs"] if Path(item["path"]).is_file()]
+
+
+def choose_realism_render(
+    base_similarity: float | None,
+    renders: list[Path],
+    similarities: list[float | None]
+) -> tuple[Path, float] | None:
+    """The render closest to the person, if it keeps (or improves) the identity.
+
+    Without a score for the FaceFusion result nothing can be verified, so no
+    render is used.
+    """
+    if base_similarity is None:
+        return None
+    scored = [(value, path) for path, value in zip(renders, similarities) if value is not None]
+    if not scored:
+        return None
+    best_value, best_path = max(scored, key=lambda item: item[0])
+    if best_value < base_similarity - REALISM_MAX_IDENTITY_LOSS:
+        return None
+    return best_path, best_value
+
+
+def apply_realism_render(final_output: Path, render_path: Path) -> None:
+    """Put the render's colour into the RGBA result; its matte covers every changed pixel."""
+    import cv2
+    import numpy as np
+    final = cv2.imread(str(final_output), cv2.IMREAD_UNCHANGED)
+    render = cv2.imread(str(render_path), cv2.IMREAD_COLOR)
+    if final is None or render is None or final.shape[:2] != render.shape[:2] or final.ndim != 3 or final.shape[2] != 4:
+        raise RuntimeError("Gerçekçilik sonucu hibrit PNG ile birleştirilemedi.")
+    changed = (np.max(cv2.absdiff(render, final[:, :, :3]), axis=2) >= 2).astype(np.float32)
+    changed = cv2.GaussianBlur(cv2.dilate(changed, np.ones((5, 5), np.uint8)), (0, 0), 2.0) * 255.0
+    alpha = np.maximum(final[:, :, 3].astype(np.float32), changed)
+    merged = cv2.merge((*cv2.split(render), np.clip(np.rint(alpha), 0, 255).astype(np.uint8)))
+    if not cv2.imwrite(str(final_output), merged):
+        raise RuntimeError("Gerçekçilik sonucu yazılamadı.")
+
+
+def find_realism(python: Path | None, models: Path | None) -> dict[str, Any] | None:
+    """The realism environment, if it is installed (tools/install_realism.ps1)."""
+    if python is None or models is None:
+        return None
+    python, models = python.expanduser(), models.expanduser()
+    if not python.is_file() or not models.is_dir():
+        return None
+    try:
+        from .retake_realism_worker import model_paths
+    except ImportError:
+        try:
+            from retake_realism_worker import model_paths
+        except ImportError:  # its imports need numpy/cv2, which the engine has
+            return None
+    if not all(path.exists() for path in model_paths(models).values()):
+        return None
+    return {"python": python, "models": models}
+
+
 def apply_real_face(result, target, real_face: dict[str, Any], face_width: float):
     """Replace the swap's face with the person's own photo, warped onto the target.
 
@@ -882,10 +997,10 @@ def process_swap(
         head_fit = metadata["headFit"]
         jaw_warp = metadata.get("jawWarp")
         # The jaw warp already reshapes the lower face; the global head fit then
-        # only adds half of its proportion change, so length is not counted twice.
+        # adds three quarters of its proportion change, so length is not counted twice.
         jaw_scale = min(1.25, max(0.0, head_fit_strength)) if jaw_warp else 0.0
         if jaw_scale > 0:
-            head_fit_strength *= 0.5
+            head_fit_strength *= 0.75
         face_width_scale = min(HEAD_FIT_MAX, max(
             HEAD_FIT_MIN, 1.0 + (head_fit["scaleX"] - 1.0) * head_fit_strength
         ))
@@ -969,12 +1084,37 @@ def process_swap(
             face_width_scale,
             face_height_scale
         )
-        # How close is the result to the person? Score it and the untouched
+        # Photographic realism (optional): re-render the face with a diffusion
+        # model steered by the person's ArcFace identity.
+        centroid = identity_report.get("centroid")
+        realism = caches.get("realism")
+        renders: list[Path] = []
+        if realism and centroid:
+            progress(REALISM_STAGE)
+            renders = run_realism(realism, final_output, target_path, metadata["faceBounds"], centroid, temp_dir)
+        # How close is each result to the person? Score them and the untouched
         # crop against the references' identity centroid in one worker run.
-        progress(4)
-        result_similarity, before_similarity = score_identity(
-            facefusion_dir, identity_report.get("centroid"), [final_output, target_path]
-        )
+        progress(SCORING_STAGE)
+        scores = score_identity(facefusion_dir, centroid, [final_output, *renders, target_path])
+        result_similarity, before_similarity = scores[0], scores[-1]
+        used_realism = False
+        chosen = choose_realism_render(result_similarity, renders, scores[1:-1])
+        if chosen is not None:
+            render_path, render_similarity = chosen
+            apply_realism_render(final_output, render_path)
+            print(
+                f"Fotoğraf gerçekçiliği uygulandı: kimlik benzerliği {result_similarity:.3f} → {render_similarity:.3f}.",
+                flush=True
+            )
+            result_similarity = render_similarity
+            used_realism = True
+        elif renders:
+            listed = ", ".join("—" if value is None else f"{value:.3f}" for value in scores[1:-1])
+            print(
+                "Fotoğraf gerçekçiliği kullanılmadı: kimlik benzerliği FaceFusion sonucunun altında kaldı "
+                f"({listed}; FaceFusion {result_similarity if result_similarity is not None else '—'}).",
+                flush=True
+            )
         if result_similarity is not None:
             print(
                 f"Kimlik benzerliği: sonuç {result_similarity:.3f}"
@@ -991,7 +1131,8 @@ def process_swap(
             "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
             "X-Retake-Variation": str(variation),
-            "X-Retake-Real-Face": "on" if used_real_face else "off"
+            "X-Retake-Real-Face": "on" if used_real_face else "off",
+            "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
         print(
             "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
@@ -1032,6 +1173,9 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         now = time.time()
         if step != job.get("step") and job.get("stage_started"):
             close_stage(now)
+        # Stages jumped over (e.g. realism when it is not installed) were skipped.
+        for skipped in range(int(job.get("step") or 0) + 1, step):
+            job["skipped"].add(skipped)
         if cached:
             job["skipped"].add(step)
         job["step"] = step
@@ -1046,7 +1190,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
             {
                 "identity": getattr(server, "identity_cache", None),
                 "passes": getattr(server, "pass_cache", None),
-                "shading": getattr(server, "shading_strength", None)
+                "shading": getattr(server, "shading_strength", None),
+                "realism": getattr(server, "realism", None)
             }
         )
         close_stage(time.time())
@@ -1074,10 +1219,13 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
     return timings.remaining(pending, 0, in_current)
 
 
-def create_job() -> dict[str, Any]:
+def create_job(realism: bool = False) -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": JOB_STAGES[0], "created": time.time(), "skipped": set()
+        "stage": JOB_STAGES[0], "created": time.time(),
+        # Without the realism environment that stage never runs; the time
+        # estimate must not wait for it.
+        "skipped": set() if realism else {REALISM_STAGE}
     }
     with JOBS_LOCK:
         JOBS[job["id"]] = job
@@ -1140,7 +1288,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
-            "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face"
+            "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
+            "X-Retake-Realism"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -1212,6 +1361,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "paired": bool(self.server.pairing_token),  # type: ignore[attr-defined]
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
+            "realism": bool(getattr(self.server, "realism", None)),
             "provider_error": provider_error,
             "error": None if script.is_file() else f"FaceFusion dosyası bulunamadı: {script}"
         })
@@ -1289,7 +1439,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self._send_json(503, {"ok": False, "error": "FaceFusion kurulumu bulunamadı. Kurulum betiğini çalıştır."})
                 return
 
-            job = create_job()
+            job = create_job(bool(getattr(self.server, "realism", None)))
             threading.Thread(
                 target=run_job, args=(job, self.server, parsed), daemon=True,
                 name=f"retake-job-{job['id'][:6]}"
@@ -1337,6 +1487,14 @@ def parse_args() -> argparse.Namespace:
         help="Eşleştirme kodunun saklandığı dosya; yoksa oluşturulur."
     )
     parser.add_argument("--origin", action="append", default=[], help="İzin verilen web origin'i; birden çok kez verilebilir.")
+    parser.add_argument(
+        "--realism-python", type=Path, default=None,
+        help="Fotoğraf gerçekçiliği ortamının Python'u (tools/install_realism.ps1 kurar)."
+    )
+    parser.add_argument(
+        "--realism-models", type=Path, default=None,
+        help="Fotoğraf gerçekçiliği modellerinin klasörü (tools/install_realism.ps1 indirir)."
+    )
     return parser.parse_args()
 
 
@@ -1387,6 +1545,15 @@ def main() -> int:
         print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
         return 2
     server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
+    server.realism = find_realism(args.realism_python, args.realism_models)  # type: ignore[attr-defined]
+    if server.realism:  # type: ignore[attr-defined]
+        print(f"Fotoğraf gerçekçiliği AÇIK (difüzyon + kimlik yönlendirmesi): {args.realism_models}", flush=True)
+    elif args.realism_python or args.realism_models:
+        print(
+            "Fotoğraf gerçekçiliği kullanılamıyor: ortam veya modeller eksik. "
+            "Kurmak için: .\\tools\\install_realism.ps1",
+            flush=True
+        )
     print(
         f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
         f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "

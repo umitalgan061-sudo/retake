@@ -291,7 +291,10 @@ async function checkFaceFusionStatus() {
         configured: true,
         model: health.model || "uniface_256",
         pixelBoost: health.pixel_boost || "768x768",
-        message: "FaceFusion 3.9.2 ve CUDA hazır."
+        realism: Boolean(health.realism),
+        message: health.realism
+          ? "FaceFusion 3.9.2, CUDA ve fotoğraf gerçekçiliği katmanı hazır."
+          : "FaceFusion 3.9.2 ve CUDA hazır. Gerçekçi cilt/dudak için: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -619,8 +622,11 @@ function selectResult(index) {
   elements.outputSymbol.hidden = true;
   elements.outputTitle.textContent = "Görünüm " + (index + 1);
   elements.outputStatus.textContent = item.label;
-  const quality = [describeSimilarity(item.similarity, item.before), item.realFace ? "gerçek fotoğraf dokusu" : ""]
-    .filter(Boolean).join(" · ");
+  const quality = [
+    describeSimilarity(item.similarity, item.before),
+    item.realism ? "fotoğraf gerçekçiliği" : "",
+    item.realFace ? "gerçek fotoğraf dokusu" : ""
+  ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
   elements.qualityBadge.hidden = !quality;
   updateResultView();
@@ -635,7 +641,8 @@ function addResult(blob, label, scores = {}) {
     label,
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
-    realFace: scores.realFace === true
+    realFace: scores.realFace === true,
+    realism: scores.realism === true
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -1653,17 +1660,19 @@ async function buildLocalFaceFusionInputs() {
   };
 }
 
-const REAL_FACE_STORAGE_KEY = "retake-real-face";
+// Off by default: pasting another photo's face reads as a mask; the engine's
+// identity-guided realism layer is the default way to a photographic face.
+const REAL_FACE_STORAGE_KEY = "retake-real-face-v2";
 
 function isRealFaceEnabled() {
-  return elements.realFaceToggle ? elements.realFaceToggle.checked : true;
+  return elements.realFaceToggle ? elements.realFaceToggle.checked : false;
 }
 
 function restoreRealFacePreference() {
   if (!elements.realFaceToggle) return;
   try {
-    elements.realFaceToggle.checked = window.localStorage.getItem(REAL_FACE_STORAGE_KEY) !== "off";
-  } catch { /* storage unavailable: keep the default (on) */ }
+    elements.realFaceToggle.checked = window.localStorage.getItem(REAL_FACE_STORAGE_KEY) === "on";
+  } catch { /* storage unavailable: keep the default (off) */ }
   elements.realFaceToggle.addEventListener("change", () => {
     try {
       window.localStorage.setItem(REAL_FACE_STORAGE_KEY, elements.realFaceToggle.checked ? "on" : "off");
@@ -1972,7 +1981,8 @@ async function runFaceFusionEdit() {
     const scores = {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
-      realFace: response.headers.get("X-Retake-Real-Face") === "on"
+      realFace: response.headers.get("X-Retake-Real-Face") === "on",
+      realism: response.headers.get("X-Retake-Realism") === "on"
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),

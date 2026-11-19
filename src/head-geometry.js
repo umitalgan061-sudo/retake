@@ -4,10 +4,10 @@
 export const MIN_TARGET_HEIGHT = 1024;
 export const MAX_TARGET_HEIGHT = 2048;
 export const MAX_TARGET_WIDTH = 1600;
-export const MAX_HEAD_FIT_CHANGE = 0.08;
+export const MAX_HEAD_FIT_CHANGE = 0.15;
 export const MIN_SHAPE_REFERENCES = 5;
 // Differences below this are within the mesh's measurement noise.
-export const HEAD_FIT_DEAD_ZONE = 0.02;
+export const HEAD_FIT_DEAD_ZONE = 0.015;
 
 const FOREHEAD = 10;
 const CHIN = 152;
@@ -69,7 +69,7 @@ export function summarizeReferenceShape(samples) {
 export function estimateHeadFit(
   referenceRatio,
   targetRatio,
-  { damping = 0.8, maxChange = MAX_HEAD_FIT_CHANGE, deadZone = HEAD_FIT_DEAD_ZONE } = {}
+  { damping = 1.0, maxChange = MAX_HEAD_FIT_CHANGE, deadZone = HEAD_FIT_DEAD_ZONE } = {}
 ) {
   if (!(referenceRatio > 0) || !(targetRatio > 0) ||
       !Number.isFinite(referenceRatio) || !Number.isFinite(targetRatio)) {

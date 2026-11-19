@@ -485,3 +485,30 @@ class RealismChoiceTest(unittest.TestCase):
                     {"python": Path("py"), "models": temp}, temp / "f.png", temp / "t.png",
                     {"x": 1, "y": 1, "width": 10, "height": 10}, [1.0, 0.0], temp
                 ), [render])
+
+
+class CompositeChoiceTest(unittest.TestCase):
+    blends = [(Path("seamless.png"), 0.30), (Path("middle.png"), 0.45), (Path("faithful.png"), 0.90)]
+
+    def test_closest_to_the_person_wins_among_invisible_borders(self):
+        calls = []
+
+        def fake_score(facefusion_dir, centroid, probes):
+            calls.append([path.name for path in probes])
+            return [0.74, 0.78][:len(probes)]
+
+        with patch.object(srv, "score_identity", fake_score):
+            chosen = srv.choose_composite(Path("ff"), [1.0, 0.0], self.blends)
+        self.assertEqual(chosen, Path("middle.png"))
+        self.assertEqual(calls, [["seamless.png", "middle.png"]], "a visible border is never scored")
+
+    def test_without_a_measurement_the_most_seamless_blend_is_kept(self):
+        with patch.object(srv, "score_identity", lambda *args: [None, None]):
+            self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends), Path("seamless.png"))
+        self.assertEqual(srv.choose_composite(Path("ff"), None, self.blends), Path("seamless.png"))
+        self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends[:1]), Path("seamless.png"))
+
+    def test_engine_and_compositor_agree_on_the_default_shading(self):
+        from tools import retake_compositing as rc
+        self.assertEqual(srv.DEFAULT_SHADING_STRENGTH, rc.SHADING_STRENGTH)
+        self.assertEqual(srv.COMPOSITE_VARIANTS[0][0], rc.HARMONIZE_STRENGTH)

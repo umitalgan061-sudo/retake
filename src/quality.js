@@ -21,11 +21,24 @@ export function similarityVerdict(score) {
   return "Zayıf";
 }
 
-export function describeSimilarity(after, before) {
+// How the result compares with the person's own photos: their typical
+// similarity to each other is the realistic ceiling for "looks like them".
+export function referenceComparison(after, referenceMedian) {
+  const score = similarityScore(after);
+  const level = similarityScore(parseSimilarity(referenceMedian));
+  if (score === null || level === null || level <= 0) return "";
+  if (score >= level - 2) return `fotoğraflarınla aynı düzeyde (${level})`;
+  return `fotoğraflarının düzeyi ${level}`;
+}
+
+export function describeSimilarity(after, before, referenceMedian = null) {
   const score = similarityScore(after);
   if (score === null) return "";
   const previous = similarityScore(before);
-  return `Kimlik benzerliği ${score} · ${similarityVerdict(score)}` + (previous === null ? "" : ` · orijinal ${previous}`);
+  const comparison = referenceComparison(after, referenceMedian);
+  return `Kimlik benzerliği ${score} · ${similarityVerdict(score)}` +
+    (comparison ? ` · ${comparison}` : "") +
+    (previous === null ? "" : ` · orijinal ${previous}`);
 }
 
 /** Index of the most similar result, or -1 when none has a score. */

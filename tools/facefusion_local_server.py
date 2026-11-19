@@ -5,6 +5,7 @@ import hmac
 import json
 import math
 import secrets
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -47,6 +48,15 @@ SCORING_STAGE = 6
 # A realism render may cost at most this much ArcFace similarity to be used.
 REALISM_MAX_IDENTITY_LOSS = 0.01
 REALISM_TIMEOUT_SECONDS = 900
+# (tone harmonization, shading cap) per compositing variant; the first is the
+# most seamless. Measured on the user's photos (ArcFace to the references):
+# 0.9 -> 0.743, 0.6 -> 0.765, 0.35 -> 0.782, borders invisible in all three.
+COMPOSITE_VARIANTS = ((0.9, None), (0.6, 0.25), (0.35, 0.15))
+DEFAULT_SHADING_STRENGTH = 0.35
+# A variant may show at most this much more border than the most seamless
+# one (per 100 px of face width), and always this much.
+BORDER_STEP_RATIO = 2.0
+BORDER_STEP_FLOOR = 0.6
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
 IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
@@ -57,7 +67,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v10"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v11"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -208,6 +218,21 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
     return {"targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
+def _validate_target_landmarks(value: Any, size: dict[str, int]) -> list[list[float]] | None:
+    """Optional 478-point mesh of the face in the target crop (crop pixels)."""
+    if value is None:
+        return None
+    try:
+        from .retake_detail import validate_mesh
+    except ImportError:
+        from retake_detail import validate_mesh
+    try:
+        points = validate_mesh(value, size["width"], size["height"], 0.25 * max(size["width"], size["height"]))
+    except (ValueError, TypeError) as error:
+        raise ValueError(f"Hedef yüz ağı geçersiz: {error}") from error
+    return points.tolist()
+
+
 def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ValueError("Profil metadata alanı geçerli JSON nesnesi olmalı.")
@@ -266,7 +291,9 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
         raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
     jaw_warp = _validate_jaw_warp(metadata.get("jawWarp"), target_size, bounds)
     real_face = _validate_real_face(metadata.get("realFace"), target_size)
+    target_landmarks = _validate_target_landmarks(metadata.get("targetLandmarks"), target_size)
     return {
+        "targetLandmarks": target_landmarks,
         "jawWarp": jaw_warp,
         "realFace": real_face,
         "referenceWeights": normalized_weights,
@@ -676,6 +703,54 @@ def fit_head_to_face(
         raise RuntimeError("Kafa oranı düzeltmesi uygulanmış PNG yazılamadı.")
 
 
+def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None) -> dict[str, Any] | None:
+    """The person's beard/stubble tone relation from the 25-photo profile, if usable."""
+    if not target_landmarks:
+        return None
+    try:
+        import cv2
+        try:
+            from .retake_appearance import profile_beard_offset
+        except ImportError:
+            from retake_appearance import profile_beard_offset
+        profile = cv2.imread(str(profile_path), cv2.IMREAD_COLOR)
+        if profile is None:
+            return None
+        offset = profile_beard_offset(profile)
+    except Exception as error:  # informative only
+        print(f"Sakal profili ölçülemedi: {error}", flush=True)
+        return None
+    print(f"Kişinin sakal/yanak ton farkı (Lab): {', '.join(f'{v:.1f}' for v in offset)}.", flush=True)
+    return {"points": target_landmarks, "offset": offset.tolist()}
+
+
+def choose_composite(
+    facefusion_dir: Path,
+    centroid: list[float] | None,
+    blends: list[tuple[Path, float]]
+) -> Path:
+    """The blend closest to the person among those with an invisible border.
+
+    `blends` is (path, border step) with the most seamless one first; it is
+    the fallback when nothing can be measured.
+    """
+    if len(blends) == 1 or not centroid:
+        return blends[0][0]
+    limit = max(BORDER_STEP_FLOOR, BORDER_STEP_RATIO * min(border for _, border in blends))
+    allowed = [(path, border) for path, border in blends if border <= limit]
+    scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
+    scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
+    if not scored:
+        return blends[0][0]
+    value, path, border = max(scored, key=lambda item: item[0])
+    listed = ", ".join(
+        f"{index + 1}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
+        for index, (item, score) in enumerate(zip(allowed, scores))
+    )
+    print(f"Kimlik öncelikli birleştirme: {listed}; seçilen benzerlik {value:.3f}.", flush=True)
+    return path
+
+
 def run_realism(
     realism: dict[str, Any],
     final_output: Path,
@@ -835,15 +910,18 @@ def blend_lower_face(
     detail_transfer_strength: float = DETAIL_TRANSFER_STRENGTH,
     expected_size: dict[str, int] | None = None,
     shading_strength: float | None = None,
-    real_face: dict[str, Any] | None = None
+    real_face: dict[str, Any] | None = None,
+    harmonize_strength: float | None = None,
+    report: dict[str, Any] | None = None,
+    beard: dict[str, Any] | None = None
 ) -> bool:
     try:
         import cv2
         import numpy as np
         try:
-            from .retake_compositing import seamless_face_composite
+            from .retake_compositing import HARMONIZE_STRENGTH, matte_border_step, seamless_face_composite
         except ImportError:
-            from retake_compositing import seamless_face_composite
+            from retake_compositing import HARMONIZE_STRENGTH, matte_border_step, seamless_face_composite
     except Exception as error:
         raise RuntimeError(f"Alt yüz harmanlama için OpenCV/NumPy yüklenemedi: {error}") from error
 
@@ -918,11 +996,21 @@ def blend_lower_face(
     used_real_face = False
     if real_face is not None:
         result, used_real_face = apply_real_face(result, target, real_face, face_width)
-    composite, alpha = (
-        seamless_face_composite(target, result, face_bounds)
-        if shading_strength is None
-        else seamless_face_composite(target, result, face_bounds, shading_strength)
-    )
+    options: dict[str, float] = {}
+    if shading_strength is not None:
+        options["shading_strength"] = shading_strength
+    options["harmonize_strength"] = HARMONIZE_STRENGTH if harmonize_strength is None else harmonize_strength
+    composite, alpha = seamless_face_composite(target, result, face_bounds, **options)
+    if beard is not None:
+        try:
+            from .retake_appearance import match_beard
+        except ImportError:
+            from retake_appearance import match_beard
+        composite = match_beard(
+            composite, alpha, np.asarray(beard["points"], np.float32), np.asarray(beard["offset"], np.float32), face_width
+        )
+    if report is not None:
+        report["border"] = matte_border_step(composite, target, alpha, face_width)
     rgba = cv2.cvtColor(composite, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 
@@ -1080,20 +1168,33 @@ def process_swap(
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
         progress(4)
-        used_real_face = blend_lower_face(
-            target_path,
-            identity_source,
-            appearance_output,
-            hybrid_output,
-            metadata["faceBounds"],
-            detail_transfer_strength,
-            metadata["targetSize"],
-            caches.get("shading"),
-            (
-                {**metadata["realFace"], "images": metadata["realReferenceBytes"]}
-                if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
-            )
+        # Identity-first compositing: a few blends from seamless (photo's skin
+        # tone pulled in) to faithful (the swap's own skin kept). Those whose
+        # border stays invisible are scored with ArcFace; the one closest to
+        # the person is used.
+        real_face = (
+            {**metadata["realFace"], "images": metadata["realReferenceBytes"]}
+            if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
         )
+        user_shading = caches.get("shading")
+        beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
+        blends: list[tuple[Path, float]] = []
+        used_real_face = False
+        for index, (harmonize, shading_cap) in enumerate(COMPOSITE_VARIANTS):
+            shading = user_shading if user_shading is not None else None
+            if index > 0:
+                base_shading = user_shading if user_shading is not None else DEFAULT_SHADING_STRENGTH
+                shading = min(base_shading, shading_cap)
+            report: dict[str, Any] = {}
+            path = hybrid_output if index == 0 else temp_dir / f"retake-hybrid-{index}.png"
+            used_real_face = blend_lower_face(
+                target_path, identity_source, appearance_output, path, metadata["faceBounds"],
+                detail_transfer_strength, metadata["targetSize"], shading, real_face, harmonize, report, beard
+            ) or used_real_face
+            blends.append((path, float(report.get("border", 0.0))))
+        chosen_blend = choose_composite(facefusion_dir, centroid, blends)
+        if chosen_blend != hybrid_output:
+            shutil.copyfile(chosen_blend, hybrid_output)
         used_enhancer = bool(enhancer_enabled)
         if used_enhancer:
             print(

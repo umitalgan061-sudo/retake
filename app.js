@@ -31,6 +31,7 @@ import {
   mapLandmarksFromRegion,
   measureFaceShapeRatio,
   rectIoU,
+  orderDetectedFaces,
   rectOverlap,
   summarizeReferenceShape
 } from "./src/head-geometry.js";
@@ -439,24 +440,36 @@ async function detectFaces(image) {
     .map((landmarks) => faceFromLandmarks(landmarks, sourceWidth, sourceHeight))
     .filter(Boolean);
 
-  // Second pass: small, distant, turned or partly covered faces.
+  // Second pass: small, distant, turned or partly covered faces. It also
+  // confirms the mesh faces: the mesh model sometimes "sees" a face in rust,
+  // foliage or a pattern, which a second detector rarely agrees with.
+  let confirmationRan = false;
   for (const range of ["full", "short"]) {
     try {
       const detector = await getReferenceFaceDetector(range);
       const candidates = (detector.detect(image).detections || [])
         .map((item) => normalizeFallbackFace(item, sourceWidth, sourceHeight))
         .filter((item) => item && item.confidence >= 0.5);
+      confirmationRan = true;
       for (const candidate of candidates) {
-        if (faces.some((face) => isSameFace(face, candidate.bounds))) continue;
+        const known = faces.filter((face) => isSameFace(face, candidate.bounds));
+        known.forEach((face) => { face.confirmed = true; });
+        if (known.length) continue;
         const refined = refineFaceInRegion(image, candidate.bounds, sourceWidth, sourceHeight);
-        if (refined && faces.some((face) => isSameFace(face, refined))) continue;
-        faces.push(refined || { ...candidate.bounds, shapeRatio: null, jaw: null, mesh: null, pose: null });
+        const same = refined ? faces.filter((face) => isSameFace(face, refined)) : [];
+        same.forEach((face) => { face.confirmed = true; });
+        if (same.length) continue;
+        faces.push({
+          ...(refined || { ...candidate.bounds, shapeRatio: null, jaw: null, mesh: null, pose: null }),
+          confirmed: true
+        });
       }
     } catch (error) {
       console.info(`Ek yüz taraması (${range}) kullanılamadı.`, error);
     }
   }
-  return faces.sort((a, b) => (b.width * b.height) - (a.width * a.height));
+  if (!confirmationRan) faces.forEach((face) => { face.confirmed = true; });
+  return orderDetectedFaces(faces);
 }
 
 function drawTargetPreview() {

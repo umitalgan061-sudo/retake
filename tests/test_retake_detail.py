@@ -12,6 +12,8 @@ from tools.retake_detail import (
     MESH_POINTS,
     RIGHT_BROW,
     choose_and_transplant,
+    match_broad_light,
+    mouth_is_open,
     reference_skin,
     transplant_reference_face,
     transplant_region,
@@ -92,8 +94,10 @@ class TransplantTest(unittest.TestCase):
             self.swapped, self.target, self.reference, self.points, self.points, face_width=140
         )
         self.assertEqual(result.dtype, np.uint8)
-        cheek = (slice(115, 130), slice(75, 90))
-        self.assertLess(np.abs(result[cheek].astype(int) - self.reference[cheek].astype(int)).mean(), 2.0)
+        # The fine detail is the real photo's (its broad light follows the swap).
+        cheek = (slice(110, 135), slice(70, 95))
+        detail = lambda image: image[cheek].astype(np.float32) - cv2.GaussianBlur(image, (0, 0), 8)[cheek]
+        self.assertGreater(np.corrcoef(detail(result).ravel(), detail(self.reference).ravel())[0, 1], 0.9)
         # Outside the oval and above the brows the swap is untouched.
         self.assertTrue(np.array_equal(result[:20], self.swapped[:20]))
         self.assertTrue(np.array_equal(result[:, :30], self.swapped[:, :30]))
@@ -109,6 +113,15 @@ class TransplantTest(unittest.TestCase):
         self.assertLess(np.abs(result[hand].astype(int) - self.target[hand].astype(int)).mean(), 1.0)
         mouth = (slice(168, 172), slice(115, 125))
         self.assertTrue(np.array_equal(result[mouth], swapped[mouth]))
+
+    def test_closed_lips_come_from_the_photo_an_open_mouth_does_not(self):
+        open_mouth = synthetic_mesh()
+        self.assertTrue(mouth_is_open(open_mouth))
+        closed = open_mouth.copy()
+        closed[13] = closed[14] = (120.0, 170.0)
+        self.assertFalse(mouth_is_open(closed))
+        region = transplant_region(open_mouth, (SIZE, SIZE), 140, keep_mouth=False)
+        self.assertGreater(float(region[170, 120]), 0.99)
 
     def test_region_fades_in_below_the_forehead(self):
         region = transplant_region(self.points, (SIZE, SIZE), face_width=140)
@@ -196,7 +209,8 @@ class RealFaceRequestTest(unittest.TestCase):
         )
         self.assertFalse(used)
         self.assertIs(result, swapped)
-        photo = cv2.imencode(".png", textured(9))[1].tobytes()
+        # The person's photo: same features as the face, other light.
+        photo = cv2.imencode(".png", np.clip(target.astype(np.int16) - 25, 0, 255).astype(np.uint8))[1].tobytes()
         # A broken candidate is skipped; the readable one is used.
         result, used = srv.apply_real_face(
             swapped, target,
@@ -204,6 +218,12 @@ class RealFaceRequestTest(unittest.TestCase):
         )
         self.assertTrue(used)
         self.assertFalse(np.array_equal(result, swapped))
+        # A photo whose features do not line up with the face is refused.
+        stranger = cv2.imencode(".png", textured(9))[1].tobytes()
+        result, used = srv.apply_real_face(
+            swapped, target, {"images": [stranger], "references": references, "targetLandmarks": mesh}, 140
+        )
+        self.assertFalse(used)
 
 
 class CandidateChoiceTest(unittest.TestCase):
@@ -218,8 +238,34 @@ class CandidateChoiceTest(unittest.TestCase):
         )
         self.assertEqual(chosen, 1)
         self.assertGreater(fits[1]["structure"], fits[0]["structure"] + 0.3)
+        # Its detail is the photo's; its broad light is the swap's.
         cheek = (slice(115, 130), slice(75, 90))
-        self.assertLess(np.abs(result[cheek].astype(int) - aligned[cheek].astype(int)).mean(), 2.0)
+        detail = lambda image: image[cheek].astype(np.float32) - cv2.GaussianBlur(image, (0, 0), 8)[cheek]
+        self.assertGreater(np.corrcoef(detail(result).ravel(), detail(aligned).ravel())[0, 1], 0.9)
+        self.assertLess(abs(float(result[cheek].mean()) - float(swapped[cheek].mean())), 6.0)
+
+    def test_light_and_colour_are_matched_but_detail_is_kept(self):
+        points = synthetic_mesh()
+        target = textured(5)
+        swapped = np.clip(target.astype(np.float32) * (1.15, 1.0, 0.85), 0, 255).astype(np.uint8)  # warm scene
+        cool_photo = np.clip(target.astype(np.float32) * (0.8, 0.85, 1.1) - 20, 0, 255).astype(np.uint8)
+        warped, coverage = warp_piecewise_affine(cool_photo, points, points, (SIZE, SIZE))
+        weight = transplant_region(points, (SIZE, SIZE), 140) * coverage
+        matched = match_broad_light(warped, swapped, weight, 140)
+        inside = weight > 0.99
+        for channel in range(3):
+            self.assertLess(abs(float(matched[:, :, channel][inside].mean()) - float(swapped[:, :, channel][inside].mean())), 3.0)
+        self.assertGreater(np.corrcoef(matched[:, :, 1][inside], cool_photo[:, :, 1][inside])[0, 1], 0.95)
+
+    def test_downscaled_photo_does_not_alias(self):
+        points = synthetic_mesh()
+        rng = np.random.default_rng(1)
+        stubble = (rng.uniform(0, 1, (SIZE * 6, SIZE * 6)) > 0.5).astype(np.uint8) * 255   # pixel-fine detail
+        big = np.dstack([stubble] * 3)
+        warped, coverage = warp_piecewise_affine(big, points * 6, points, (SIZE, SIZE))
+        inner = cv2.erode((coverage > 0).astype(np.uint8), np.ones((9, 9), np.uint8)).astype(bool)
+        # Area-averaged it is a flat grey; sampled it would be salt and pepper.
+        self.assertLess(float(warped[:, :, 0][inner].std()), 30.0)
 
     def test_forehead_comes_from_the_photo_only_where_it_is_skin(self):
         points = synthetic_mesh()

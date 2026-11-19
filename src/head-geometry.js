@@ -117,6 +117,16 @@ export function rectIoU(a, b) {
   return union > 0 ? intersection / union : 0;
 }
 
+/**
+ * Faces for the picker: those both detectors agree on first (a lone mesh
+ * "face" in a texture should not be preselected), then the largest.
+ */
+export function orderDetectedFaces(faces) {
+  return [...faces].sort((a, b) =>
+    (Number(Boolean(b.confirmed)) - Number(Boolean(a.confirmed))) ||
+    ((b.width * b.height) - (a.width * a.height)));
+}
+
 /** Share of the smaller rectangle covered by the other (1 = one inside the other). */
 export function rectOverlap(a, b) {
   const left = Math.max(a.x, b.x);

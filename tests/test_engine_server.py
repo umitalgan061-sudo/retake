@@ -254,9 +254,30 @@ class CachedPipelineTest(unittest.TestCase):
         self.arcface_calls += 1
         return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
 
+    render_scores: list = []
+
+    reinforce_scores = (0.70, 0.60)
+
     def fake_score(self, facefusion_dir, centroid, probes):
-        self.scored = (centroid, [path.name for path in probes])
-        return [0.74, 0.21]
+        names = [path.name for path in probes]
+        if "retake-identity-reinforced.png" in names:
+            self.reinforce_probes = names
+            return list(self.reinforce_scores)
+        self.scored = (centroid, names)
+        return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
+
+    def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir):
+        """Two 'renders': the result with a visibly re-rendered face."""
+        self.realism_calls = getattr(self, "realism_calls", 0) + 1
+        image = cv2.imread(str(final_output), cv2.IMREAD_COLOR)
+        paths = []
+        for index, shade in enumerate((40, 60), start=1):
+            render = image.copy()
+            cv2.circle(render, (195, 250), 30, (shade, shade, shade), -1)
+            path = temp_dir / f"realism-{index}.png"
+            cv2.imwrite(str(path), render)
+            paths.append(path)
+        return paths
 
     def fake_facefusion(self, facefusion_dir, target_path, sources, output, model, boost, weight):
         self.facefusion_calls.append((model, weight))
@@ -265,7 +286,7 @@ class CachedPipelineTest(unittest.TestCase):
         cv2.imwrite(str(output), image)
         return boost
 
-    def run_swap(self, variation, stages, jaw_warp=None):
+    def run_swap(self, variation, stages, jaw_warp=None, realism=None):
         metadata = {
             "jawWarp": jaw_warp,
             "referenceWeights": [1] * srv.MAX_REFERENCES,
@@ -278,11 +299,13 @@ class CachedPipelineTest(unittest.TestCase):
                   self.reference, ".png", metadata)
         with patch.object(srv, "verify_reference_identity", self.fake_arcface), \
                 patch.object(srv, "run_with_memory_fallback", self.fake_facefusion), \
-                patch.object(srv, "score_identity", self.fake_score):
+                patch.object(srv, "score_identity", self.fake_score), \
+                patch.object(srv, "run_realism", self.fake_realism):
             result, headers = srv.process_swap(
                 Path(self.temp.name), "1024x1024", False, parsed,
-                lambda step, cached=False: stages.append((step, cached)), self.caches
+                lambda step, cached=False: stages.append((step, cached)), {**self.caches, "realism": realism}
             )
+        self.last_result = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
         self.assertEqual(cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED).shape[:2], (512, 391))
         return headers
 
@@ -290,13 +313,27 @@ class CachedPipelineTest(unittest.TestCase):
         first, second = [], []
         self.run_swap(0, first)
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual(len(self.facefusion_calls), 2)
-        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False)])
+        self.assertEqual([model for model, _ in self.facefusion_calls], ["alphaface_256", "inswapper_128", "uniface_256"])
+        # Stage 5 (photographic realism) is not installed here and is skipped.
+        self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False), (6, False)])
 
         self.run_swap(1, second)  # same swapper weight, different head fit
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
-        self.assertEqual(len(self.facefusion_calls), 2, "both FaceFusion passes reused")
-        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, False), (4, False)])
+        self.assertEqual(len(self.facefusion_calls), 3, "all FaceFusion passes reused")
+        self.assertEqual(second, [(0, True), (1, True), (2, True), (3, True), (4, False), (6, False)])
+
+    def test_identity_reinforcement_is_kept_only_when_it_is_closer_to_the_person(self):
+        self.reinforce_scores = (0.70, 0.78)
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Reinforced"], "on")
+        self.assertEqual(self.reinforce_probes, ["retake-identity-alpha.png", "retake-identity-reinforced.png"])
+        self.reinforce_scores = (0.70, 0.66)
+        self.assertEqual(self.run_swap(2, [])["X-Retake-Identity-Reinforced"], "off")
+
+    def test_softer_variant_is_not_reinforced(self):
+        headers = self.run_swap(3, [])
+        self.assertEqual(headers["X-Retake-Identity-Reinforced"], "off")
+        self.assertNotIn("inswapper_128", [model for model, _ in self.facefusion_calls])
 
     def test_jaw_warp_runs_in_the_pipeline_and_respects_the_variant(self):
         jaw = {"controls": [{"from": [195.0, 370.0], "to": [195.0, 388.0]}], "anchors": [[195.0, 200.0]]}
@@ -307,6 +344,30 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(moved["X-Retake-Similarity-Before"], "0.2100")
         self.assertEqual(self.scored[0], [1.0, 0.0], "scored against the cached centroid")
         self.assertEqual(kept["X-Retake-Variation"], "1")
+
+    def test_realism_render_is_used_when_it_keeps_the_identity(self):
+        stages = []
+        self.render_scores = [0.70, 0.79]
+        headers = self.run_swap(0, stages, realism={"python": Path("py"), "models": Path("m")})
+        self.assertEqual([step for step, _ in stages][-2:], [srv.REALISM_STAGE, srv.SCORING_STAGE])
+        self.assertEqual(headers["X-Retake-Realism"], "on")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.7900", "the closer render is reported")
+        self.assertEqual(self.scored[1][1:3], ["realism-1.png", "realism-2.png"])
+        # Its re-rendered face is in the result, and covered by the matte.
+        self.assertTrue(np.all(self.last_result[250, 195, :3] == 60))
+        self.assertEqual(int(self.last_result[250, 195, 3]), 255)
+
+    def test_realism_render_that_loses_the_person_is_not_used(self):
+        self.render_scores = [0.61, 0.70]
+        headers = self.run_swap(0, [], realism={"python": Path("py"), "models": Path("m")})
+        self.assertEqual(headers["X-Retake-Realism"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.7400")
+        self.assertFalse(np.all(self.last_result[250, 195, :3] == 60))
+
+    def test_without_the_realism_environment_nothing_changes(self):
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Realism"], "unavailable")
+        self.assertEqual(getattr(self, "realism_calls", 0), 0)
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])
@@ -321,14 +382,20 @@ class RemainingTimeTest(unittest.TestCase):
         from tools.retake_cache import StageTimings
         with tempfile.TemporaryDirectory() as directory:
             timings = StageTimings(Path(directory) / "t.json")
-            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 90, 5, 8)):
+            for stage, seconds in zip(srv.JOB_STAGES, (40, 120, 30, 90, 5, 60, 8)):
                 timings.record(stage, seconds)
             job = {"status": "running", "step": 0, "skipped": set(), "stage_started": time.time()}
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 263, delta=1)
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 353, delta=1)
             job.update(step=1, skipped={0}, stage_started=time.time() - 20)
-            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 203, delta=1)
-            job.update(step=3, skipped={0, 1, 2}, stage_started=time.time())
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 293, delta=1)
+            job.update(step=4, skipped={0, 1, 2, 3}, stage_started=time.time())
+            self.assertAlmostEqual(srv.estimate_remaining(job, timings), 73, delta=1)
+            # Without the realism environment its stage is not waited for.
+            job.update(skipped={0, 1, 2, 3, srv.REALISM_STAGE})
             self.assertAlmostEqual(srv.estimate_remaining(job, timings), 13, delta=1)
+            fresh = srv.create_job()
+            self.assertIn(srv.REALISM_STAGE, fresh["skipped"])
+            self.assertNotIn(srv.REALISM_STAGE, srv.create_job(realism=True)["skipped"])
             self.assertIsNone(srv.estimate_remaining({**job, "status": "done"}, timings))
             self.assertIsNone(srv.estimate_remaining(job, None))
 
@@ -364,3 +431,57 @@ class ScoreIdentityTest(unittest.TestCase):
                     self.assertEqual(srv.score_identity(Path(directory), [1.0], probes), [None, None])
             with patch.object(srv.subprocess, "run", side_effect=srv.subprocess.TimeoutExpired("x", 1)):
                 self.assertEqual(srv.score_identity(Path(directory), [1.0], probes), [None, None])
+
+
+class RealismChoiceTest(unittest.TestCase):
+    def test_choice_needs_a_verified_identity(self):
+        renders = [Path("a.png"), Path("b.png")]
+        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.38, 0.51]), (Path("b.png"), 0.51))
+        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.395, None]), (Path("a.png"), 0.395))
+        self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.30, 0.38]))
+        self.assertIsNone(srv.choose_realism_render(None, renders, [0.9, 0.9]), "unverifiable")
+        self.assertIsNone(srv.choose_realism_render(0.40, renders, [None, None]))
+        self.assertIsNone(srv.choose_realism_render(0.40, [], []))
+
+    def test_realism_is_found_only_when_fully_installed(self):
+        from tools.retake_realism_worker import model_paths
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            python = root / "python.exe"
+            python.write_text("")
+            models = root / "models"
+            models.mkdir()
+            self.assertIsNone(srv.find_realism(python, models))
+            self.assertIsNone(srv.find_realism(None, None))
+            for path in model_paths(models).values():
+                if path.suffix:
+                    path.write_bytes(b"x")
+                else:
+                    path.mkdir()
+            self.assertEqual(srv.find_realism(python, models), {"python": python, "models": models})
+            self.assertIsNone(srv.find_realism(root / "missing.exe", models))
+
+    def test_a_failing_worker_never_breaks_the_swap(self):
+        with tempfile.TemporaryDirectory() as directory:
+            temp = Path(directory)
+            failed = SimpleNamespace(returncode=1, stdout="", stderr="CUDA out of memory")
+            with patch.object(srv.subprocess, "run", return_value=failed):
+                self.assertEqual(srv.run_realism(
+                    {"python": Path("py"), "models": temp}, temp / "f.png", temp / "t.png",
+                    {"x": 1, "y": 1, "width": 10, "height": 10}, [1.0, 0.0], temp
+                ), [])
+            with patch.object(srv.subprocess, "run", side_effect=OSError("no python")):
+                self.assertEqual(srv.run_realism(
+                    {"python": Path("py"), "models": temp}, temp / "f.png", temp / "t.png",
+                    {"x": 1, "y": 1, "width": 10, "height": 10}, [1.0, 0.0], temp
+                ), [])
+            render = temp / "realism-1.png"
+            render.write_bytes(b"png")
+            report = 'RETAKE_REALISM_REPORT={"ok": true, "device": "cuda", "outputs": [{"path": "%s"}]}' % (
+                str(render).replace("\\", "\\\\"))
+            done = SimpleNamespace(returncode=0, stdout="loading\n" + report + "\n", stderr="")
+            with patch.object(srv.subprocess, "run", return_value=done):
+                self.assertEqual(srv.run_realism(
+                    {"python": Path("py"), "models": temp}, temp / "f.png", temp / "t.png",
+                    {"x": 1, "y": 1, "width": 10, "height": 10}, [1.0, 0.0], temp
+                ), [render])

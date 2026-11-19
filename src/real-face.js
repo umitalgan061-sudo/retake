@@ -9,7 +9,10 @@ export const MESH_POINTS = 478;
 // warped onto another face without distortion.
 export const POSE_KEY_POINTS = [1, 4, 6, 10, 33, 133, 152, 159, 145, 263, 362, 386, 374, 61, 291, 0, 17, 13, 14,
   78, 308, 234, 454, 58, 288, 105, 334, 98, 327, 168, 197, 195, 5, 2, 94];
-export const MAX_POSE_DISTANCE = 0.09;
+// Generous: the mesh warp absorbs expression differences (a frown, a tilt),
+// and the engine measures how well each candidate actually fits and drops
+// those that do not.
+export const MAX_POSE_DISTANCE = 0.13;
 export const REFERENCE_CROP_MAX_EDGE = 1024;
 
 /** Pose/expression signature: key points in the eye frame (position, size and roll free). */

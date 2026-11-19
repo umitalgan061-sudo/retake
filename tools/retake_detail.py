@@ -50,6 +50,11 @@ def triangulate(points: np.ndarray, shape: tuple[int, int]) -> list[tuple[int, i
     return triangles
 
 
+def _mesh_size(points: np.ndarray) -> float:
+    span = np.asarray(points, np.float64).max(axis=0) - np.asarray(points, np.float64).min(axis=0)
+    return float(np.sqrt(max(span[0], 0.0) * max(span[1], 0.0)))
+
+
 def warp_piecewise_affine(
     source: np.ndarray,
     source_points: np.ndarray,
@@ -64,6 +69,15 @@ def warp_piecewise_affine(
     channels = 1 if source.ndim == 2 else source.shape[2]
     warped = np.zeros((height, width, channels), np.float32)
     coverage = np.zeros((height, width), np.float32)
+    # Shrinking with bilinear sampling skips pixels: hair, stubble and pores
+    # alias into speckle and stripes. Bring the source to the target's scale
+    # first with area averaging.
+    source_points = np.asarray(source_points, np.float32)
+    ratio = _mesh_size(target_points) / max(_mesh_size(source_points), 1e-6)
+    if ratio < 0.9:
+        size = (max(1, int(round(source.shape[1] * ratio))), max(1, int(round(source.shape[0] * ratio))))
+        source = cv2.resize(source, size, interpolation=cv2.INTER_AREA)
+        source_points = source_points * np.float32(ratio)
     src = source.astype(np.float32).reshape(source.shape[0], source.shape[1], channels)
     for a, b, c in triangulate(target_points, shape):
         dst_tri = target_points[[a, b, c]].astype(np.float32)
@@ -145,13 +159,25 @@ def reference_skin(warped: np.ndarray, points: np.ndarray, coverage: np.ndarray,
     return cv2.GaussianBlur(skin.astype(np.float32), (0, 0), max(1.0, face_width * 0.008))
 
 
+MOUTH_OPEN_RATIO = 0.12   # inner-lip gap / mouth width
+
+
+def mouth_is_open(points: np.ndarray) -> bool:
+    """Teeth or a dark mouth show: the inner lips are apart."""
+    width = float(np.hypot(*(points[308] - points[78])))
+    gap = float(np.hypot(*(points[14] - points[13])))
+    return width > 1e-6 and gap / width > MOUTH_OPEN_RATIO
+
+
 def transplant_region(
     points: np.ndarray,
     shape: tuple[int, int],
     face_width: float,
-    forehead_skin: np.ndarray | None = None
+    forehead_skin: np.ndarray | None = None,
+    keep_mouth: bool = True
 ) -> np.ndarray:
-    """0..1 region for the transplant: the face oval minus the open mouth.
+    """0..1 region for the transplant: the face oval, minus the mouth opening
+    when `keep_mouth` (an open mouth cannot be warped from a closed one).
 
     Above the brows (where hair often falls) the reference is only used where
     `forehead_skin` says it is skin; without it the forehead is left out.
@@ -166,9 +192,10 @@ def transplant_region(
     if forehead_skin is not None:
         below_brows = below_brows + (1.0 - below_brows) * np.clip(forehead_skin, 0.0, 1.0)
     mouth = np.zeros_like(oval)
-    cv2.fillPoly(mouth, [np.round(points[INNER_MOUTH]).astype(np.int32)], 255)
-    grow = int(max(3, face_width * 0.01)) | 1
-    mouth = cv2.dilate(mouth, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
+    if keep_mouth:
+        cv2.fillPoly(mouth, [np.round(points[INNER_MOUTH]).astype(np.int32)], 255)
+        grow = int(max(3, face_width * 0.01)) | 1
+        mouth = cv2.dilate(mouth, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (grow, grow)))
     region = (oval > 0) & (mouth == 0)
     # A soft edge: the real beard and skin fade into the swap instead of
     # ending on the jaw contour.
@@ -232,13 +259,47 @@ def candidate_fit(
     return {"structure": structure, "light": light, "score": structure + 0.2 * light}
 
 
+LIGHT_MATCH_SIGMA_RATIO = 0.1
+LIGHT_GAIN_RANGE = (0.5, 2.0)
+
+
+def match_broad_light(warped: np.ndarray, swapped: np.ndarray, weight: np.ndarray, face_width: float) -> np.ndarray:
+    """Give the real photo the scene's broad light and colour, keep its detail.
+
+    The reference was taken in other light (indoor, other white balance).
+    Per channel, its large-scale level is scaled to the swap's (which already
+    sits in the photo's light) with a smooth gain field, so pores, hairs and
+    creases stay the reference's own while the cheek, forehead and jaw edges
+    meet the surrounding skin without a colour step.
+    """
+    mask = (weight > 0.05).astype(np.float32)
+    if float(mask.sum()) < 16:
+        return warped
+    sigma = max(2.0, face_width * LIGHT_MATCH_SIGMA_RATIO)
+    norm = np.maximum(cv2.GaussianBlur(mask, (0, 0), sigma), 1e-4)
+    swap_f = swapped.astype(np.float32) + 1.0
+    warp_f = np.clip(warped, 0, 255) + 1.0
+    gains = []
+    for channel in range(3):
+        swap_level = cv2.GaussianBlur(swap_f[:, :, channel] * mask, (0, 0), sigma) / norm
+        warp_level = cv2.GaussianBlur(warp_f[:, :, channel] * mask, (0, 0), sigma) / norm
+        gains.append(np.clip(swap_level / np.maximum(warp_level, 1.0), *LIGHT_GAIN_RANGE))
+    return np.clip(warp_f * np.dstack(gains) - 1.0, 0, 255).astype(np.float32)
+
+
 def _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed):
     image, reference_points = candidate
     shape = target.shape[:2]
     warped, coverage = warp_piecewise_affine(image, reference_points, target_points, shape)
     skin = reference_skin(warped, target_points, coverage, face_width)
-    weight = transplant_region(target_points, shape, face_width, skin) * coverage * allowed
+    # Closed lips come from the real photo too; an open mouth (in either)
+    # keeps the swap's mouth.
+    keep_mouth = mouth_is_open(target_points) or mouth_is_open(np.asarray(reference_points, np.float32))
+    weight = transplant_region(target_points, shape, face_width, skin, keep_mouth) * coverage * allowed
     return warped, coverage, weight
+
+
+MIN_REAL_FACE_FIT = 0.3   # feature agreement below which a warp looks wrong
 
 
 def choose_and_transplant(
@@ -246,12 +307,15 @@ def choose_and_transplant(
     target: np.ndarray,
     candidates: list[tuple[np.ndarray, np.ndarray]],
     target_points: np.ndarray,
-    face_width: float
+    face_width: float,
+    min_fit: float | None = MIN_REAL_FACE_FIT
 ) -> tuple[np.ndarray, int, list[dict[str, float]]]:
     """Warp each (image, mesh) candidate onto the face, keep the one that fits best.
 
     Candidates arrive best pose match first; a later one must fit clearly
-    better to win. Returns (uint8 BGR result, chosen index, per-candidate fit).
+    better to win. If even the best one's features do not line up with the
+    photo (`min_fit`), ValueError: the AI swap is better than a wrong face.
+    Returns (uint8 BGR result, chosen index, per-candidate fit).
     """
     if not candidates:
         raise ValueError("gerçek fotoğraf adayı yok")
@@ -269,6 +333,10 @@ def choose_and_transplant(
         if best is None or fit["score"] > best[0]:
             best = (fit["score"], index, warped, weight)
     _, index, warped, weight = best
+    if min_fit is not None and fits[index]["structure"] < min_fit:
+        scores = ", ".join(f"{fit['structure']:.2f}" for fit in fits)
+        raise ValueError(f"hiçbir aday yüze yeterince oturmadı (uyum {scores})")
+    warped = match_broad_light(warped, swapped, weight, face_width)
     blended = swapped.astype(np.float32) * (1.0 - weight[:, :, None]) + warped * weight[:, :, None]
     return np.clip(np.rint(blended), 0, 255).astype(np.uint8), index, fits
 
@@ -283,6 +351,6 @@ def transplant_reference_face(
 ) -> np.ndarray:
     """The swap with its face replaced by one real photo (warped). Returns uint8 BGR."""
     result, _, _ = choose_and_transplant(
-        swapped, target, [(reference_image, reference_points)], target_points, face_width
+        swapped, target, [(reference_image, reference_points)], target_points, face_width, min_fit=None
     )
     return result

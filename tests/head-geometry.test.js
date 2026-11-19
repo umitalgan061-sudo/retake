@@ -5,6 +5,7 @@ import {
   getTargetRenderSize,
   mapLandmarksFromRegion,
   measureFaceShapeRatio,
+  orderDetectedFaces,
   rectIoU,
   rectOverlap,
   summarizeReferenceShape,
@@ -86,8 +87,8 @@ test("head fit shortens and widens for a rounder reference face", () => {
 
 test("head fit is capped and neutral without measurements", () => {
   const extreme = estimateHeadFit(2.0, 1.0);
-  assert.equal(extreme.scaleY, 1.08);
-  assert.equal(extreme.scaleX, 0.92);
+  assert.equal(extreme.scaleY, 1.15);
+  assert.equal(extreme.scaleX, 0.85);
   assert.deepEqual(estimateHeadFit(null, 1.4), { scaleX: 1, scaleY: 1 });
   assert.deepEqual(estimateHeadFit(1.4, NaN), { scaleX: 1, scaleY: 1 });
   assert.deepEqual(estimateHeadFit(1.4, 1.4), { scaleX: 1, scaleY: 1 });
@@ -231,4 +232,14 @@ test("small jaw differences within pose noise are ignored", () => {
   const target = jawPointsFromMesh(faceMesh(), 1000, 1000);
   // 0.32 → 0.328: an 8 px chin difference on a 440 px wide face.
   assert.equal(planJawWarp(target, canonicalJaw(faceMesh({ jawH: 0.328 }), 1000, 1000)), null);
+});
+
+test("a face both detectors agree on is preselected over a larger lone mesh 'face'", () => {
+  const rust = { x: 0.58, y: 0.32, width: 0.23, height: 0.22, confirmed: false };
+  const person = { x: 0.15, y: 0.45, width: 0.12, height: 0.12, confirmed: true };
+  const small = { x: 0.7, y: 0.7, width: 0.05, height: 0.05, confirmed: true };
+  assert.deepEqual(orderDetectedFaces([rust, small, person]), [person, small, rust]);
+  const a = { x: 0, y: 0, width: 0.1, height: 0.1, confirmed: true };
+  const b = { x: 0.5, y: 0, width: 0.2, height: 0.2, confirmed: true };
+  assert.deepEqual(orderDetectedFaces([a, b]), [b, a]);
 });

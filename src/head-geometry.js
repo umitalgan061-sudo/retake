@@ -4,10 +4,10 @@
 export const MIN_TARGET_HEIGHT = 1024;
 export const MAX_TARGET_HEIGHT = 2048;
 export const MAX_TARGET_WIDTH = 1600;
-export const MAX_HEAD_FIT_CHANGE = 0.08;
+export const MAX_HEAD_FIT_CHANGE = 0.15;
 export const MIN_SHAPE_REFERENCES = 5;
 // Differences below this are within the mesh's measurement noise.
-export const HEAD_FIT_DEAD_ZONE = 0.02;
+export const HEAD_FIT_DEAD_ZONE = 0.015;
 
 const FOREHEAD = 10;
 const CHIN = 152;
@@ -69,7 +69,7 @@ export function summarizeReferenceShape(samples) {
 export function estimateHeadFit(
   referenceRatio,
   targetRatio,
-  { damping = 0.8, maxChange = MAX_HEAD_FIT_CHANGE, deadZone = HEAD_FIT_DEAD_ZONE } = {}
+  { damping = 1.0, maxChange = MAX_HEAD_FIT_CHANGE, deadZone = HEAD_FIT_DEAD_ZONE } = {}
 ) {
   if (!(referenceRatio > 0) || !(targetRatio > 0) ||
       !Number.isFinite(referenceRatio) || !Number.isFinite(targetRatio)) {
@@ -115,6 +115,16 @@ export function rectIoU(a, b) {
   const intersection = Math.max(0, right - left) * Math.max(0, bottom - top);
   const union = a.width * a.height + b.width * b.height - intersection;
   return union > 0 ? intersection / union : 0;
+}
+
+/**
+ * Faces for the picker: those both detectors agree on first (a lone mesh
+ * "face" in a texture should not be preselected), then the largest.
+ */
+export function orderDetectedFaces(faces) {
+  return [...faces].sort((a, b) =>
+    (Number(Boolean(b.confirmed)) - Number(Boolean(a.confirmed))) ||
+    ((b.width * b.height) - (a.width * a.height)));
 }
 
 /** Share of the smaller rectangle covered by the other (1 = one inside the other). */

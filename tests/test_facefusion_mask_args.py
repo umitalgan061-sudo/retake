@@ -162,3 +162,9 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HeadFitLimitsTest(unittest.TestCase):
+    def test_the_engine_accepts_no_head_fit_the_compositor_would_refuse(self):
+        from tools import retake_compositing as rc
+        self.assertEqual((HEAD_FIT_MIN, HEAD_FIT_MAX), (rc.HEAD_SCALE_MIN, rc.HEAD_SCALE_MAX))

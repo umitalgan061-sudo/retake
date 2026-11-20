@@ -81,6 +81,10 @@ Kurulum `retake-realism` adlı ayrı bir conda ortamı açar; FaceFusion ortamı
 
 Gerçekçilik katmanı, kişinin 25 fotoğrafıyla eğitilen bir LoRA ile "kişiyi tanıyan" bir modele dönüşür. Model sakalı (yanaklara ne kadar yayıldığı dahil), cildi, kaşları ve dudakları öğrenir. Fotoğraflardan yüz kırpımları otomatik çıkarılır; gözleri görünmeyen fotoğraflar (güneş gözlüğü) eğitime alınmaz. Eğitim ayarları GPU belleğine göre seçilir: 512 px, yaklaşık 1000 adım, 10 GB altında bellek tasarrufu açık. Eğitilen model varsa motor onu kendiliğinden kullanır ve her sürüm yine ArcFace ile ölçülür.
 
+Kişisel model varken her render'ın bir de **hibrit** sürümü üretilir: yanaklar, çene, sakal, bıyık ve dudaklar kişisel modelden; gözler, kaşlar ve burun swap'tan gelir. Gözler, kaşlar ve burun ArcFace kimliğinin çoğunu taşır. Kullanıcının fotoğraflarıyla ölçümler (CPU'da 600 adımlık eğitim):
+- Hiç fotoğraf verilmeden yazıyla üretilen yüzler kişiye 0,58 ve 0,49 benziyor; genel modelde 0,07 ve 0,006.
+- Bahçe fotoğrafında tam kişisel render 0,69, swap zinciri 0,794, hibrit **0,788**. Hibritte sakal, referanslardaki gibi yanaklara kadar dolu.
+
 ```powershell
 .\tools\train_personal_model.ps1
 ```

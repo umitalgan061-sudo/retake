@@ -88,6 +88,34 @@ class RealismGeometryTest(unittest.TestCase):
 
 
 
+def face_points(cx=200.0, cy=220.0, half=80.0):
+    """478 points with the face oval, nose and nose tip where they belong."""
+    points = np.tile(np.float32([[cx, cy]]), (478, 1))
+    for order, index in enumerate(rr.FACE_OVAL):
+        theta = -np.pi / 2 + 2 * np.pi * order / len(rr.FACE_OVAL)
+        points[index] = (cx + half * np.cos(theta), cy + half * 1.25 * np.sin(theta))
+    for order, index in enumerate(rr.NOSE):
+        theta = 2 * np.pi * order / len(rr.NOSE)
+        points[index] = (cx + 14 * np.cos(theta), cy - 10 + 22 * np.sin(theta))
+    points[1] = (cx, cy + 8)       # nose tip
+    return points
+
+
+class LowerFaceHybridTest(unittest.TestCase):
+    def test_lower_face_comes_from_the_render_eyes_and_nose_from_the_swap(self):
+        points = face_points()
+        weight = rr.lower_face_weight(points, (480, 400))
+        self.assertGreater(float(weight[290, 160]), 0.95)     # cheek / jaw
+        self.assertLess(float(weight[180, 170]), 0.05)        # eye level
+        self.assertLess(float(weight[215, 200]), 0.3)         # nose
+        self.assertEqual(float(weight[20, 20]), 0.0)
+        swap = np.full((480, 400, 3), 100, np.uint8)
+        render = np.full((480, 400, 3), 30, np.uint8)
+        hybrid = rr.lower_face_hybrid(swap, render, points)
+        self.assertLess(int(hybrid[290, 160, 0]), 35)
+        self.assertEqual(int(hybrid[180, 170, 0]), 100)
+
+
 class PersonalModelTest(unittest.TestCase):
     def test_training_plan_follows_the_hardware(self):
         from tools import retake_personal_model as pm

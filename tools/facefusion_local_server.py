@@ -757,7 +757,8 @@ def run_realism(
     target_path: Path,
     face_bounds: dict[str, float],
     centroid: list[float],
-    temp_dir: Path
+    temp_dir: Path,
+    landmarks: list[list[float]] | None = None
 ) -> list[Path]:
     """Render photographic versions of the face in the realism environment.
 
@@ -775,6 +776,10 @@ def run_realism(
         "--identity-file", str(identity_file),
         "--out-dir", str(temp_dir / "realism"),
     ]
+    if landmarks:
+        landmarks_file = temp_dir / "retake-realism-landmarks.json"
+        landmarks_file.write_text(json.dumps(landmarks), encoding="utf-8")
+        command += ["--landmarks", str(landmarks_file)]
     try:
         completed = subprocess.run(
             command, cwd=str(worker.parent), capture_output=True, text=True,
@@ -803,6 +808,20 @@ def run_realism(
         flush=True
     )
     return [Path(item["path"]) for item in report["outputs"] if Path(item["path"]).is_file()]
+
+
+def head_fitted_landmarks(
+    landmarks: list[list[float]] | None,
+    face_bounds: dict[str, float],
+    scale_x: float,
+    scale_y: float
+) -> list[list[float]] | None:
+    """The face mesh after the head fit (a scale about the face centre there)."""
+    if not landmarks:
+        return None
+    cx = face_bounds["x"] + face_bounds["width"] / 2.0
+    cy = face_bounds["y"] + face_bounds["height"] / 2.0
+    return [[cx + (x - cx) * scale_x, cy + (y - cy) * scale_y] for x, y in landmarks]
 
 
 def choose_realism_render(
@@ -1223,7 +1242,11 @@ def process_swap(
         renders: list[Path] = []
         if realism and centroid:
             progress(REALISM_STAGE)
-            renders = run_realism(realism, final_output, target_path, metadata["faceBounds"], centroid, temp_dir)
+            renders = run_realism(
+                realism, final_output, target_path, metadata["faceBounds"], centroid, temp_dir,
+                head_fitted_landmarks(metadata.get("targetLandmarks"), metadata["faceBounds"],
+                                      face_width_scale, face_height_scale)
+            )
         # How close is each result to the person? Score them and the untouched
         # crop against the references' identity centroid in one worker run.
         progress(SCORING_STAGE)

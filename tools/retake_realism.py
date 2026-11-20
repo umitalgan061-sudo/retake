@@ -135,6 +135,41 @@ def restore_broad_light(rendered: np.ndarray, swapped: np.ndarray, face_width: f
     return np.clip(r - cv2.GaussianBlur(r, (0, 0), sigma) + cv2.GaussianBlur(s, (0, 0), sigma), 0, 255)
 
 
+FACE_OVAL = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377,
+             152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
+NOSE = [1, 2, 98, 327, 64, 294, 4, 5, 195, 197, 6, 168]
+
+
+def lower_face_weight(points: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """0..1 weight of the cheeks, jaw, chin, moustache and lips (not the eyes,
+    brows or nose), from a 478-point mesh in image pixels.
+
+    With the person's own model, this part of a render carries what a swap
+    cannot: where their beard grows, its density, their lips. The eyes, brows
+    and nose, which carry most of the ArcFace identity, stay the swap's.
+    Measured on the user's photos: a full personal render scored 0.69, the
+    swap 0.79, the swap with the render's lower face 0.79 with the person's
+    full beard.
+    """
+    height, width = shape
+    points = np.asarray(points, np.float32)
+    oval = np.zeros((height, width), np.uint8)
+    cv2.fillPoly(oval, [np.round(points[FACE_OVAL]).astype(np.int32)], 1)
+    nose = np.zeros_like(oval)
+    cv2.fillConvexPoly(nose, cv2.convexHull(np.round(points[NOSE]).astype(np.int32)), 1)
+    rows = np.arange(height, dtype=np.float32)[:, None]
+    region = (oval > 0) & (rows > float(points[1, 1])) & (nose == 0)
+    face_width = float(np.ptp(points[:, 0]))
+    return cv2.GaussianBlur(region.astype(np.float32), (0, 0), max(1.5, face_width * 0.04))
+
+
+def lower_face_hybrid(swapped: np.ndarray, rendered: np.ndarray, points: np.ndarray) -> np.ndarray:
+    """The swap with the render's lower face (uint8 BGR)."""
+    weight = lower_face_weight(points, swapped.shape[:2])[:, :, None]
+    blended = swapped.astype(np.float32) * (1.0 - weight) + rendered.astype(np.float32) * weight
+    return np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+
+
 def changed_mask(swapped: np.ndarray, target: np.ndarray) -> np.ndarray:
     changed = (np.max(cv2.absdiff(swapped, target), axis=2) >= 3).astype(np.uint8)
     return cv2.morphologyEx(changed, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))

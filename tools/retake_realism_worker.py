@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cv2  # noqa: E402
 import numpy as np  # noqa: E402
 
-from retake_realism import PERSONAL_PLANS, PLANS, PERSONAL_WEIGHTS, Renderer, refine_face  # noqa: E402
+from retake_realism import (  # noqa: E402
+    PERSONAL_PLANS, PERSONAL_WEIGHTS, PLANS, Renderer, lower_face_hybrid, refine_face
+)
 
 CHECKPOINT = "Realistic_Vision_V6.0_NV_B1_inpainting_fp16.safetensors"
 VAE_DIR = "sd-vae-ft-mse"
@@ -51,6 +53,7 @@ def main() -> int:
     parser.add_argument("--bounds", required=True)
     parser.add_argument("--identity-file", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
+    parser.add_argument("--landmarks", type=Path, default=None, help="478-point mesh of the face (JSON, image px)")
     parser.add_argument("--check", action="store_true", help="only load the models")
     args = parser.parse_args()
 
@@ -78,6 +81,11 @@ def main() -> int:
     bounds = json.loads(args.bounds)
     identity = np.asarray(json.loads(args.identity_file.read_text(encoding="utf-8")), np.float32)
     args.out_dir.mkdir(parents=True, exist_ok=True)
+    points = None
+    if args.landmarks is not None and args.landmarks.is_file():
+        points = np.asarray(json.loads(args.landmarks.read_text(encoding="utf-8")), np.float32)
+        if points.shape != (478, 2):
+            points = None
     outputs = []
     for index, (identity_scale, strength) in enumerate(PERSONAL_PLANS if renderer.personal else PLANS, start=1):
         rendered = refine_face(
@@ -88,6 +96,12 @@ def main() -> int:
         if not cv2.imwrite(str(path), rendered):
             raise SystemExit(f"Gerçekçilik sonucu yazılamadı: {path}")
         outputs.append({"path": str(path), "identity_scale": identity_scale, "strength": strength})
+        if renderer.personal and points is not None:
+            hybrid = args.out_dir / f"realism-{index}-lower.png"
+            if not cv2.imwrite(str(hybrid), lower_face_hybrid(swapped, rendered, points)):
+                raise SystemExit(f"Gerçekçilik sonucu yazılamadı: {hybrid}")
+            outputs.append({"path": str(hybrid), "identity_scale": identity_scale, "strength": strength,
+                            "lower_face_only": True})
     print("RETAKE_REALISM_REPORT=" + json.dumps({
         "ok": True,
         "device": renderer.device,

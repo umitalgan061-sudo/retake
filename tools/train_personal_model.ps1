@@ -57,6 +57,12 @@ if (-not (Test-Path $Base)) {
     Save-Model "https://huggingface.co/SG161222/Realistic_Vision_V6.0_B1_noVAE/resolve/main/Realistic_Vision_V6.0_NV_B1_fp16.safetensors" $Base
 }
 
+# OpenCV 5 dropped the classic face detector the trainer uses; also make
+# sure the packages added after the first install are there.
+Write-Host "Paketler kontrol ediliyor..." -ForegroundColor Cyan
+& $Python -m pip install --quiet "opencv-python-headless<5" "peft==0.13.2" "truststore"
+if ($LASTEXITCODE -ne 0) { throw "Gerekli paketler kurulamadi." }
+
 $Trainer = Join-Path $PSScriptRoot "retake_personal_model.py"
 $TrainArgs = @("--models-dir", $Models, "--references", $References)
 if ($Steps -gt 0) { $TrainArgs += @("--steps", $Steps) }

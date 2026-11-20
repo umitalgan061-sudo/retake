@@ -53,6 +53,11 @@ def use_system_certificates() -> None:
 
 def face_crops(paths: list[Path], resolution: int) -> list[np.ndarray]:
     """Square crops around the largest face of each photo (RGB, resolution²)."""
+    if not hasattr(cv2, "CascadeClassifier"):  # OpenCV 5 moved it out of the main package
+        raise SystemExit(
+            "Bu OpenCV sürümünde yüz algılayıcı yok. Şunu çalıştır: "
+            "python -m pip install \"opencv-python-headless<5\" (tools\\train_personal_model.ps1 bunu kendisi yapar)."
+        )
     detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     eyes = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye.xml")
     crops = []

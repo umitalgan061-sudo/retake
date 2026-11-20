@@ -67,7 +67,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v11"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v12"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -727,7 +727,8 @@ def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None)
 def choose_composite(
     facefusion_dir: Path,
     centroid: list[float] | None,
-    blends: list[tuple[Path, float]]
+    blends: list[tuple[Path, float]],
+    labels: list[str] | None = None
 ) -> Path:
     """The blend closest to the person among those with an invisible border.
 
@@ -737,6 +738,8 @@ def choose_composite(
     if len(blends) == 1 or not centroid:
         return blends[0][0]
     limit = max(BORDER_STEP_FLOOR, BORDER_STEP_RATIO * min(border for _, border in blends))
+    names = {path: (labels[index] if labels and index < len(labels) else str(index + 1))
+             for index, (path, _) in enumerate(blends)}
     allowed = [(path, border) for path, border in blends if border <= limit]
     scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
     scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
@@ -744,8 +747,8 @@ def choose_composite(
         return blends[0][0]
     value, path, border = max(scored, key=lambda item: item[0])
     listed = ", ".join(
-        f"{index + 1}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
-        for index, (item, score) in enumerate(zip(allowed, scores))
+        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
+        for item, score in zip(allowed, scores)
     )
     print(f"Kimlik öncelikli birleştirme: {listed}; seçilen benzerlik {value:.3f}.", flush=True)
     return path
@@ -1199,20 +1202,29 @@ def process_swap(
         user_shading = caches.get("shading")
         beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
         blends: list[tuple[Path, float]] = []
-        used_real_face = False
+        labels: list[str] = []
+        transplanted: set[Path] = set()
+        # The experimental photo transplant is a candidate, never forced: on a
+        # night photo it cost ArcFace similarity (0.853 raw swap -> 0.639).
+        transplant_options = [None, real_face] if real_face else [None]
         for index, (harmonize, shading_cap) in enumerate(COMPOSITE_VARIANTS):
             shading = user_shading if user_shading is not None else None
             if index > 0:
                 base_shading = user_shading if user_shading is not None else DEFAULT_SHADING_STRENGTH
                 shading = min(base_shading, shading_cap)
-            report: dict[str, Any] = {}
-            path = hybrid_output if index == 0 else temp_dir / f"retake-hybrid-{index}.png"
-            used_real_face = blend_lower_face(
-                target_path, identity_source, appearance_output, path, metadata["faceBounds"],
-                detail_transfer_strength, metadata["targetSize"], shading, real_face, harmonize, report, beard
-            ) or used_real_face
-            blends.append((path, float(report.get("border", 0.0))))
-        chosen_blend = choose_composite(facefusion_dir, centroid, blends)
+            for transplant in transplant_options:
+                report: dict[str, Any] = {}
+                number = len(blends)
+                path = hybrid_output if number == 0 else temp_dir / f"retake-hybrid-{number}.png"
+                if blend_lower_face(
+                    target_path, identity_source, appearance_output, path, metadata["faceBounds"],
+                    detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
+                ):
+                    transplanted.add(path)
+                blends.append((path, float(report.get("border", 0.0))))
+                labels.append(f"ton {harmonize:g}" + (" + doku nakli" if path in transplanted else ""))
+        chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
+        used_real_face = chosen_blend in transplanted
         if chosen_blend != hybrid_output:
             shutil.copyfile(chosen_blend, hybrid_output)
         used_enhancer = bool(enhancer_enabled)

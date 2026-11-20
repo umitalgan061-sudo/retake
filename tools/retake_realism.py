@@ -224,8 +224,13 @@ class Renderer:
         self.dtype = dtype
         self.pipe = pipe.to(self.device)
         if self.device == "cuda":
+            # Attention slicing swaps in attention processors that cannot take
+            # IP-Adapter's (text, identity) input: the render fails with
+            # "'tuple' object has no attribute 'shape'". Slice the VAE only.
             try:
-                self.pipe.enable_attention_slicing()
+                if not self.identity:
+                    self.pipe.enable_attention_slicing()
+                self.pipe.enable_vae_slicing()
             except Exception:  # memory saving is optional
                 pass
 

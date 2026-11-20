@@ -42,6 +42,31 @@ def use_system_certificates() -> None:
         pass
 
 
+def prepare_windows_huggingface_cache() -> None:
+    """Probe cache symlink permissions BEFORE Diffusers' parallel downloads.
+
+    huggingface_hub==0.26.2 lazily populates its symlink-support cache. If
+    snapshot_download() starts several worker threads simultaneously, a
+    Windows non-admin process can race and attempt os.symlink even though
+    symlinks require Developer Mode or elevated privileges (WinError 1314).
+
+    Calling the official probe once on this thread makes the unsupported
+    result available to all download threads. Existing HF cache files stay
+    intact; the library falls back to ordinary files without admin rights.
+    """
+    if sys.platform != "win32":
+        return
+    from huggingface_hub.file_download import are_symlinks_supported
+
+    if not are_symlinks_supported():
+        print(
+            "Hugging Face cache: Windows symlink izni yok; normal dosya "
+            "kopyalari kullanilacak (WinError 1314 onlemi).",
+            file=sys.stderr,
+            flush=True,
+        )
+
+
 def personal_model(models_dir: Path) -> Path | None:
     """The person's trained LoRA folder, if tools/train_personal_model.ps1 made one."""
     folder = models_dir / PERSONAL_DIR
@@ -68,6 +93,7 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="only load the models")
     args = parser.parse_args()
     use_system_certificates()
+    prepare_windows_huggingface_cache()
 
     started = time.time()
     paths = model_paths(args.models_dir)

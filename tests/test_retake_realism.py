@@ -87,5 +87,39 @@ class RealismGeometryTest(unittest.TestCase):
             self.assertTrue(0.5 <= identity_scale <= 2.0)
 
 
+
+class PersonalModelTest(unittest.TestCase):
+    def test_training_plan_follows_the_hardware(self):
+        from tools import retake_personal_model as pm
+        small = pm.plan("cuda", 8.0, 25, None)
+        self.assertEqual((small["resolution"], small["steps"], small["checkpointing"], small["fp16"]), (512, 1000, True, True))
+        big = pm.plan("cuda", 24.0, 25, None)
+        self.assertFalse(big["checkpointing"])
+        self.assertEqual(pm.plan("cuda", 24.0, 80, None)["steps"], pm.MAX_STEPS)
+        self.assertEqual(pm.plan("cuda", 24.0, 6, None)["steps"], 400)
+        self.assertEqual(pm.plan("cuda", 24.0, 25, 300)["steps"], 300)
+        self.assertEqual(pm.plan("cpu", None, 25, None)["resolution"], 256)
+
+    def test_the_personal_model_is_used_only_when_complete(self):
+        import tempfile
+        from pathlib import Path
+        from tools.retake_realism_worker import personal_model
+        with tempfile.TemporaryDirectory() as directory:
+            models = Path(directory)
+            self.assertIsNone(personal_model(models))
+            folder = models / "personal-lora"
+            folder.mkdir()
+            (folder / rr.PERSONAL_WEIGHTS).write_bytes(b"x")
+            self.assertIsNone(personal_model(models), "person.json missing")
+            (folder / "person.json").write_text('{"trigger": "rtkperson"}')
+            self.assertEqual(personal_model(models), folder)
+
+    def test_personal_prompt_names_the_trained_person(self):
+        prompt = rr.personal_prompt("rtkperson")
+        self.assertIn("rtkperson person's face", prompt)
+        self.assertNotIn("a real person's face", prompt)
+        self.assertGreaterEqual(len(rr.PERSONAL_PLANS), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

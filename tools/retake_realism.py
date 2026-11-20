@@ -32,6 +32,9 @@ CROP_SCALE = 1.55             # crop side ÷ larger face side
 # (usually raises) ArcFace similarity; at 0.65 the score can still rise while
 # the nose and cheeks start to look swollen, so the engine never goes there.
 PLANS = ((1.2, 0.45), (1.3, 0.55), (1.3, 0.55))
+# With the person's own model the render knows their face, beard and skin,
+# so it can go a little further; ArcFace still decides per photo.
+PERSONAL_PLANS = ((1.0, 0.45), (1.0, 0.55), (1.1, 0.62))
 STEPS = 30
 GUIDANCE = 4.5
 LIGHT_SIGMA_RATIO = 0.045     # broader than this comes back from the swap (light, colour, shading)
@@ -44,6 +47,15 @@ PROMPT = (
     "fine vellus hair, natural lips with fine creases, detailed eyes with natural catchlights, "
     "natural light, sharp focus, shot on a DSLR, subtle film grain"
 )
+PERSONAL_WEIGHTS = "pytorch_lora_weights.safetensors"
+PERSONAL_LORA_SCALE = 0.8
+
+
+def personal_prompt(trigger: str) -> str:
+    """The realism prompt naming the person the LoRA was trained on."""
+    return PROMPT.replace("a real person's face", f"{trigger} person's face")
+
+
 NEGATIVE_PROMPT = (
     "cgi, 3d render, painting, illustration, cartoon, anime, airbrushed, smooth plastic skin, "
     "waxy skin, beauty filter, makeup, lipstick, glossy lips, blurry, out of focus, deformed, "
@@ -137,7 +149,8 @@ class Renderer:
         vae: str | None = None,
         device: str | None = None,
         faceid_dir: str | None = None,
-        identity_scale: float = IDENTITY_SCALE
+        identity_scale: float = IDENTITY_SCALE,
+        personal_dir: str | None = None
     ):
         import torch
         from diffusers import AutoencoderKL, DPMSolverMultistepScheduler, StableDiffusionInpaintPipeline
@@ -161,6 +174,18 @@ class Renderer:
             pipe.load_ip_adapter(faceid_dir, subfolder="", weight_name=FACEID_WEIGHTS, image_encoder_folder=None)
             pipe.set_ip_adapter_scale(identity_scale)
             self.identity = True
+        self.prompt = PROMPT
+        self.personal = False
+        if personal_dir:
+            # The person's own LoRA (tools/retake_personal_model.py), trained on
+            # the base model; its attention layers fit the inpainting UNet too.
+            import json
+            from pathlib import Path
+            info = json.loads((Path(personal_dir) / "person.json").read_text(encoding="utf-8"))
+            pipe.load_lora_weights(personal_dir, weight_name=PERSONAL_WEIGHTS, adapter_name="person")
+            pipe.set_adapters(["person"], adapter_weights=[PERSONAL_LORA_SCALE])
+            self.prompt = personal_prompt(info.get("trigger", "rtkperson"))
+            self.personal = True
         self.dtype = dtype
         self.pipe = pipe.to(self.device)
         if self.device == "cuda":
@@ -199,7 +224,7 @@ class Renderer:
             extra["ip_adapter_image_embeds"] = [stacked.to(device=self.device, dtype=self.dtype)]
         result = self.pipe(
             **extra,
-            prompt=PROMPT,
+            prompt=self.prompt,
             negative_prompt=NEGATIVE_PROMPT,
             image=image,
             mask_image=mask_image,

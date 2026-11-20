@@ -798,6 +798,7 @@ def run_realism(
         return []
     print(
         f"[Gerçekçilik] {len(report['outputs'])} sürüm üretildi ({report.get('device')}, "
+        f"{'kişisel model' if report.get('personal') else 'genel model + kimlik'}, "
         f"yükleme {report.get('load_seconds')} sn, işleme {report.get('render_seconds')} sn).",
         flush=True
     )

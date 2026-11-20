@@ -37,7 +37,7 @@ conda run --no-capture-output -n $EnvName python -m pip install "torch==2.5.1" -
 if ($LASTEXITCODE -ne 0) { throw "PyTorch kurulamadi." }
 conda run --no-capture-output -n $EnvName python -m pip install `
     "diffusers==0.31.0" "transformers==4.46.3" "accelerate==1.1.1" "huggingface_hub==0.26.2" `
-    "safetensors" "opencv-python-headless" "numpy<2.2" "pillow"
+    "peft==0.13.2" "safetensors" "opencv-python-headless" "numpy<2.2" "pillow"
 if ($LASTEXITCODE -ne 0) { throw "diffusers kurulamadi." }
 
 Write-Host "3/4 Modeller indiriliyor (~2,6 GB)..." -ForegroundColor Cyan

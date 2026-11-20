@@ -77,6 +77,16 @@ Motor her işte üç sürüm üretir, hepsini ArcFace ile ölçer ve kişiye en 
 
 Kurulum `retake-realism` adlı ayrı bir conda ortamı açar; FaceFusion ortamına dokunmaz. Modeller `C:\AI\RetakeRealism\models` altına iner (~2,6 GB). NVIDIA GPU (~4 GB bellek) gerekir. Kurulumdan sonra `start_facefusion_retake.ps1` katmanı kendiliğinden açar; kapatmak için `-DisableRealism` kullanılır.
 
+### Kişisel model (en yüksek benzerlik için, tek seferlik eğitim)
+
+Gerçekçilik katmanı, kişinin 25 fotoğrafıyla eğitilen bir LoRA ile "kişiyi tanıyan" bir modele dönüşür. Model sakalı (yanaklara ne kadar yayıldığı dahil), cildi, kaşları ve dudakları öğrenir. Fotoğraflardan yüz kırpımları otomatik çıkarılır; gözleri görünmeyen fotoğraflar (güneş gözlüğü) eğitime alınmaz. Eğitim ayarları GPU belleğine göre seçilir: 512 px, yaklaşık 1000 adım, 10 GB altında bellek tasarrufu açık. Eğitilen model varsa motor onu kendiliğinden kullanır ve her sürüm yine ArcFace ile ölçülür.
+
+```powershell
+.\tools\train_personal_model.ps1
+```
+
+Önce `install_realism.ps1` kurulmuş olmalı. Temel model (~2,1 GB) ilk seferde iner. Fotoğraflar değişirse eğitim yeniden çalıştırılır.
+
 ## Web uygulaması
 
 - `index.html` statik web arayüzüdür.

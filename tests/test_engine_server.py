@@ -258,11 +258,16 @@ class CachedPipelineTest(unittest.TestCase):
 
     reinforce_scores = (0.70, 0.60)
 
+    blend_scores = None
+
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)
+        if self.blend_scores is not None and "retake-hybrid-1.png" in names:
+            self.blend_probes = names
+            return [self.blend_scores[int(name.split("-")[-1][:-4]) if name[-5].isdigit() else 0] for name in names]
         self.scored = (centroid, names)
         return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
 
@@ -286,7 +291,12 @@ class CachedPipelineTest(unittest.TestCase):
         cv2.imwrite(str(output), image)
         return boost
 
-    def run_swap(self, variation, stages, jaw_warp=None, realism=None):
+    def fake_transplant(self, result, target, real_face, face_width):
+        painted = result.copy()
+        cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
+        return painted, True
+
+    def run_swap(self, variation, stages, jaw_warp=None, realism=None, real_face=False):
         metadata = {
             "jawWarp": jaw_warp,
             "referenceWeights": [1] * srv.MAX_REFERENCES,
@@ -295,12 +305,16 @@ class CachedPipelineTest(unittest.TestCase):
             "targetSize": {"width": 391, "height": 512},
             "headFit": {"scaleX": 0.97, "scaleY": 1.04}
         }
+        if real_face:
+            metadata["realFace"] = {"targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
+            metadata["realReferenceBytes"] = [b"photo"]
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
         with patch.object(srv, "verify_reference_identity", self.fake_arcface), \
                 patch.object(srv, "run_with_memory_fallback", self.fake_facefusion), \
                 patch.object(srv, "score_identity", self.fake_score), \
-                patch.object(srv, "run_realism", self.fake_realism):
+                patch.object(srv, "run_realism", self.fake_realism), \
+                patch.object(srv, "apply_real_face", self.fake_transplant):
             result, headers = srv.process_swap(
                 Path(self.temp.name), "1024x1024", False, parsed,
                 lambda step, cached=False: stages.append((step, cached)), {**self.caches, "realism": realism}
@@ -368,6 +382,20 @@ class CachedPipelineTest(unittest.TestCase):
         headers = self.run_swap(0, [])
         self.assertEqual(headers["X-Retake-Realism"], "unavailable")
         self.assertEqual(getattr(self, "realism_calls", 0), 0)
+
+    def test_photo_transplant_is_a_candidate_not_forced(self):
+        # Order: tone 0.9 plain, + transplant, tone 0.6 plain, + transplant, ...
+        self.blend_scores = [0.70, 0.60, 0.72, 0.61, 0.69, 0.62]
+        guard = patch.object(srv, "BORDER_STEP_FLOOR", 1e9)   # the selection is what is tested here
+        guard.start()
+        self.addCleanup(guard.stop)
+        headers = self.run_swap(0, [], real_face=True)
+        self.assertEqual(len(self.blend_probes), 6)
+        self.assertEqual(headers["X-Retake-Real-Face"], "off", "the transplant lost identity: not used")
+        self.assertFalse(np.all(self.last_result[230, 195, :3] == (10, 200, 10)))
+        self.blend_scores = [0.60, 0.80, 0.61, 0.70, 0.62, 0.71]
+        headers = self.run_swap(1, [], real_face=True)
+        self.assertEqual(headers["X-Retake-Real-Face"], "on")
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])

@@ -623,7 +623,7 @@ function selectResult(index) {
   elements.outputTitle.textContent = "Görünüm " + (index + 1);
   elements.outputStatus.textContent = item.label;
   const quality = [
-    describeSimilarity(item.similarity, item.before),
+    describeSimilarity(item.similarity, item.before, item.referenceMedian),
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : ""
   ].filter(Boolean).join(" · ");
@@ -642,7 +642,8 @@ function addResult(blob, label, scores = {}) {
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
-    realism: scores.realism === true
+    realism: scores.realism === true,
+    referenceMedian: scores.referenceMedian ?? null
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -1643,6 +1644,11 @@ async function buildLocalFaceFusionInputs() {
   const realFace = isRealFaceEnabled()
     ? await prepareRealFace(face, profile, readyReferences, toCanvas)
     : null;
+  // The face's mesh in crop pixels: the engine finds the beard and cheeks
+  // with it to give the person's own facial-hair tone.
+  const targetLandmarks = face.mesh
+    ? meshToPixels(face.mesh, state.target.image.naturalWidth, state.target.image.naturalHeight, toCanvas)
+    : null;
 
   return {
     targetCanvas,
@@ -1656,6 +1662,7 @@ async function buildLocalFaceFusionInputs() {
     headFit,
     jawWarp,
     realFace,
+    targetLandmarks,
     crop
   };
 }
@@ -1939,6 +1946,7 @@ async function runFaceFusionEdit() {
       headFit,
       jawWarp,
       realFace,
+      targetLandmarks,
       crop
     } = await buildLocalFaceFusionInputs();
     const targetBlob = await canvasToBlob(targetCanvas);
@@ -1950,6 +1958,7 @@ async function runFaceFusionEdit() {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
     const metadata = { referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation };
+    if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {
         form.append("real_reference", candidate.blob, `retake-real-reference-${index + 1}.png`);
@@ -1982,7 +1991,8 @@ async function runFaceFusionEdit() {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
-      realism: response.headers.get("X-Retake-Realism") === "on"
+      realism: response.headers.get("X-Retake-Realism") === "on",
+      referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -2003,7 +2013,7 @@ async function runFaceFusionEdit() {
     state.nextVariation = (variation + 1) % 4;
     addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex], scores);
     elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
-    const scoreText = describeSimilarity(scores.similarity, scores.before);
+    const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
     showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}` + (scoreText ? ` · ${scoreText}` : "") + ".");
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {

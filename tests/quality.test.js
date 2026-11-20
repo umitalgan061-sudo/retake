@@ -37,3 +37,13 @@ test("profile health names the references that do not match", () => {
   assert.equal(describeProfileHealth("0.7", "").text, "Referans uyumu 70 · Çok güçlü · Aykırı fotoğraf yok");
   assert.equal(describeProfileHealth("", ""), null);
 });
+
+test("the result is compared with the person's own photos", async () => {
+  const { describeSimilarity, referenceComparison } = await import("../src/quality.js");
+  assert.equal(referenceComparison(0.80, 0.766), "fotoğraflarınla aynı düzeyde (77)");
+  assert.equal(referenceComparison(0.76, 0.766), "fotoğraflarınla aynı düzeyde (77)");
+  assert.equal(referenceComparison(0.62, 0.766), "fotoğraflarının düzeyi 77");
+  assert.equal(referenceComparison(0.62, null), "");
+  assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
+  assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80 · Çok güçlü");
+});

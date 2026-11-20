@@ -313,7 +313,8 @@ def seamless_face_composite(
     target: np.ndarray,
     swapped: np.ndarray,
     face_bounds: dict[str, float],
-    shading_strength: float = SHADING_STRENGTH
+    shading_strength: float = SHADING_STRENGTH,
+    harmonize_strength: float = HARMONIZE_STRENGTH
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return (composite BGR uint8, alpha uint8) for a swapped face.
 
@@ -326,7 +327,7 @@ def seamless_face_composite(
 
     target_f = target.astype(np.float32)
     difference = swapped.astype(np.float32) - target_f
-    difference = difference - membrane_correction(difference, mask, face_width) * HARMONIZE_STRENGTH
+    difference = difference - membrane_correction(difference, mask, face_width) * harmonize_strength
 
     feather = min(INNER_FEATHER_MAX, max(INNER_FEATHER_MIN, face_width * INNER_FEATHER_RATIO))
     inward = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
@@ -355,6 +356,19 @@ def seamless_face_composite(
     composite_u8 = np.clip(np.rint(composite), 0, 255).astype(np.uint8)
     composite_u8[alpha == 0] = target[alpha == 0]
     return composite_u8, alpha
+
+
+def matte_border_step(composite: np.ndarray, target: np.ndarray, alpha: np.ndarray, face_width: float) -> float:
+    """How visible the face's border is: the 95th percentile jump of the
+    smoothed change across the matte edge, per 100 px of face width (so it
+    reads the same for small and large faces)."""
+    change = cv2.GaussianBlur(composite.astype(np.float32) - target.astype(np.float32), (0, 0), 3.0).mean(axis=2)
+    edge = cv2.Canny((alpha > 127).astype(np.uint8) * 255, 50, 150)
+    band = cv2.dilate(edge, np.ones((9, 9), np.uint8)) > 0
+    if not band.any():
+        return 0.0
+    gradient = np.hypot(cv2.Sobel(change, cv2.CV_32F, 1, 0), cv2.Sobel(change, cv2.CV_32F, 0, 1))
+    return float(np.percentile(gradient[band], 95)) * 100.0 / max(face_width, 1.0)
 
 
 def head_fit_maps(

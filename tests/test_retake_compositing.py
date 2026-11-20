@@ -53,6 +53,15 @@ class SeamlessCompositeTest(unittest.TestCase):
         after = np.abs(composite[centre].astype(np.float32) - target[centre]).mean()
         self.assertLess(after, before * 0.4)
 
+    def test_border_measure_tells_a_pasted_face_from_a_blended_one(self):
+        target, swapped = synthetic_swap()
+        composite, alpha = rc.seamless_face_composite(target, swapped, FACE)
+        blended = rc.matte_border_step(composite, target, alpha, FACE["width"])
+        pasted = rc.matte_border_step(swapped, target, alpha, FACE["width"])
+        self.assertLess(blended, pasted * 0.5)
+        faithful, alpha2 = rc.seamless_face_composite(target, swapped, FACE, harmonize_strength=0.35)
+        self.assertGreater(rc.matte_border_step(faithful, target, alpha2, FACE["width"]), blended)
+
     def test_pixels_outside_the_matte_are_byte_identical(self):
         target, swapped = synthetic_swap()
         composite, alpha = rc.seamless_face_composite(target, swapped, FACE)

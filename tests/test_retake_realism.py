@@ -87,5 +87,67 @@ class RealismGeometryTest(unittest.TestCase):
             self.assertTrue(0.5 <= identity_scale <= 2.0)
 
 
+
+def face_points(cx=200.0, cy=220.0, half=80.0):
+    """478 points with the face oval, nose and nose tip where they belong."""
+    points = np.tile(np.float32([[cx, cy]]), (478, 1))
+    for order, index in enumerate(rr.FACE_OVAL):
+        theta = -np.pi / 2 + 2 * np.pi * order / len(rr.FACE_OVAL)
+        points[index] = (cx + half * np.cos(theta), cy + half * 1.25 * np.sin(theta))
+    for order, index in enumerate(rr.NOSE):
+        theta = 2 * np.pi * order / len(rr.NOSE)
+        points[index] = (cx + 14 * np.cos(theta), cy - 10 + 22 * np.sin(theta))
+    points[1] = (cx, cy + 8)       # nose tip
+    return points
+
+
+class LowerFaceHybridTest(unittest.TestCase):
+    def test_lower_face_comes_from_the_render_eyes_and_nose_from_the_swap(self):
+        points = face_points()
+        weight = rr.lower_face_weight(points, (480, 400))
+        self.assertGreater(float(weight[290, 160]), 0.95)     # cheek / jaw
+        self.assertLess(float(weight[180, 170]), 0.05)        # eye level
+        self.assertLess(float(weight[215, 200]), 0.3)         # nose
+        self.assertEqual(float(weight[20, 20]), 0.0)
+        swap = np.full((480, 400, 3), 100, np.uint8)
+        render = np.full((480, 400, 3), 30, np.uint8)
+        hybrid = rr.lower_face_hybrid(swap, render, points)
+        self.assertLess(int(hybrid[290, 160, 0]), 35)
+        self.assertEqual(int(hybrid[180, 170, 0]), 100)
+
+
+class PersonalModelTest(unittest.TestCase):
+    def test_training_plan_follows_the_hardware(self):
+        from tools import retake_personal_model as pm
+        small = pm.plan("cuda", 8.0, 25, None)
+        self.assertEqual((small["resolution"], small["steps"], small["checkpointing"], small["fp16"]), (512, 1000, True, True))
+        big = pm.plan("cuda", 24.0, 25, None)
+        self.assertFalse(big["checkpointing"])
+        self.assertEqual(pm.plan("cuda", 24.0, 80, None)["steps"], pm.MAX_STEPS)
+        self.assertEqual(pm.plan("cuda", 24.0, 6, None)["steps"], 400)
+        self.assertEqual(pm.plan("cuda", 24.0, 25, 300)["steps"], 300)
+        self.assertEqual(pm.plan("cpu", None, 25, None)["resolution"], 256)
+
+    def test_the_personal_model_is_used_only_when_complete(self):
+        import tempfile
+        from pathlib import Path
+        from tools.retake_realism_worker import personal_model
+        with tempfile.TemporaryDirectory() as directory:
+            models = Path(directory)
+            self.assertIsNone(personal_model(models))
+            folder = models / "personal-lora"
+            folder.mkdir()
+            (folder / rr.PERSONAL_WEIGHTS).write_bytes(b"x")
+            self.assertIsNone(personal_model(models), "person.json missing")
+            (folder / "person.json").write_text('{"trigger": "rtkperson"}')
+            self.assertEqual(personal_model(models), folder)
+
+    def test_personal_prompt_names_the_trained_person(self):
+        prompt = rr.personal_prompt("rtkperson")
+        self.assertIn("rtkperson person's face", prompt)
+        self.assertNotIn("a real person's face", prompt)
+        self.assertGreaterEqual(len(rr.PERSONAL_PLANS), 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,8 +37,34 @@ conda run --no-capture-output -n $EnvName python -m pip install "torch==2.5.1" -
 if ($LASTEXITCODE -ne 0) { throw "PyTorch kurulamadi." }
 conda run --no-capture-output -n $EnvName python -m pip install `
     "diffusers==0.31.0" "transformers==4.46.3" "accelerate==1.1.1" "huggingface_hub==0.26.2" `
-    "safetensors" "opencv-python-headless" "numpy<2.2" "pillow"
+    "peft==0.13.2" "truststore" "safetensors" "opencv-python-headless" "numpy<2.2" "pillow"
 if ($LASTEXITCODE -ne 0) { throw "diffusers kurulamadi." }
+
+function Save-Model([string]$Url, [string]$Target) {
+    # Windows curl (schannel) refuses when the certificate revocation list
+    # cannot be reached (CRYPT_E_NO_REVOCATION_CHECK, common behind company
+    # networks); --ssl-no-revoke skips only that check. PowerShell's own
+    # downloader is the fallback. The file must really arrive.
+    $part = "$Target.part"
+    Remove-Item -Force -ErrorAction SilentlyContinue $part
+    curl.exe -L --fail --retry 3 --ssl-no-revoke -o $part $Url
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $part) -or (Get-Item $part).Length -eq 0) {
+        Write-Host "   curl ile indirilemedi, PowerShell ile deneniyor..." -ForegroundColor Yellow
+        Remove-Item -Force -ErrorAction SilentlyContinue $part
+        $previous = $ProgressPreference
+        $ProgressPreference = "SilentlyContinue"
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -Uri $Url -OutFile $part -UseBasicParsing
+        } catch {
+            throw "Indirilemedi: $Url ($($_.Exception.Message))"
+        } finally {
+            $ProgressPreference = $previous
+        }
+    }
+    if (-not (Test-Path $part) -or (Get-Item $part).Length -eq 0) { throw "Indirilemedi: $Url" }
+    Move-Item -Force $part $Target
+}
 
 Write-Host "3/4 Modeller indiriliyor (~2,6 GB)..." -ForegroundColor Cyan
 $Downloads = @(
@@ -59,9 +85,7 @@ foreach ($item in $Downloads) {
         continue
     }
     Write-Host "   indiriliyor: $($item.Path)"
-    curl.exe -L --fail --retry 3 -o "$target.part" $item.Url
-    if ($LASTEXITCODE -ne 0) { throw "Indirilemedi: $($item.Url)" }
-    Move-Item -Force "$target.part" $target
+    Save-Model $item.Url $target
 }
 
 Write-Host "4/4 Model yukleme denemesi (GPU)..." -ForegroundColor Cyan

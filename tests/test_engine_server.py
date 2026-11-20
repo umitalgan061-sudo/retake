@@ -266,7 +266,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.scored = (centroid, names)
         return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
 
-    def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir):
+    def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir, landmarks=None):
         """Two 'renders': the result with a visibly re-rendered face."""
         self.realism_calls = getattr(self, "realism_calls", 0) + 1
         image = cv2.imread(str(final_output), cv2.IMREAD_COLOR)
@@ -512,3 +512,14 @@ class CompositeChoiceTest(unittest.TestCase):
         from tools import retake_compositing as rc
         self.assertEqual(srv.DEFAULT_SHADING_STRENGTH, rc.SHADING_STRENGTH)
         self.assertEqual(srv.COMPOSITE_VARIANTS[0][0], rc.HARMONIZE_STRENGTH)
+
+
+class HeadFittedLandmarksTest(unittest.TestCase):
+    def test_mesh_follows_the_head_fit(self):
+        bounds = {"x": 100.0, "y": 100.0, "width": 200.0, "height": 200.0}
+        points = [[200.0, 200.0], [300.0, 100.0]]
+        self.assertEqual(srv.head_fitted_landmarks(points, bounds, 1.0, 1.0), points)
+        fitted = srv.head_fitted_landmarks(points, bounds, 0.9, 1.1)
+        for got, want in zip(sum(fitted, []), [200.0, 200.0, 290.0, 90.0]):
+            self.assertAlmostEqual(got, want)
+        self.assertIsNone(srv.head_fitted_landmarks(None, bounds, 0.9, 1.1))

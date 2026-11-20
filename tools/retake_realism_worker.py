@@ -31,6 +31,17 @@ FACEID_DIR = "ip-adapter-faceid"
 PERSONAL_DIR = "personal-lora"
 
 
+def use_system_certificates() -> None:
+    """Trust what Windows trusts. Behind a company proxy or antivirus that
+    inspects HTTPS, Python's own certificate list rejects Hugging Face (model
+    configs are fetched on first use); the system store has their root."""
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception:  # optional: plain networks work without it
+        pass
+
+
 def personal_model(models_dir: Path) -> Path | None:
     """The person's trained LoRA folder, if tools/train_personal_model.ps1 made one."""
     folder = models_dir / PERSONAL_DIR
@@ -56,6 +67,7 @@ def main() -> int:
     parser.add_argument("--landmarks", type=Path, default=None, help="478-point mesh of the face (JSON, image px)")
     parser.add_argument("--check", action="store_true", help="only load the models")
     args = parser.parse_args()
+    use_system_certificates()
 
     started = time.time()
     paths = model_paths(args.models_dir)

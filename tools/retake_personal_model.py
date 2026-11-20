@@ -40,6 +40,17 @@ STEPS_PER_IMAGE = 40       # 25 photos -> 1000 steps
 MAX_STEPS = 1500
 
 
+def use_system_certificates() -> None:
+    """Trust what Windows trusts. Behind a company proxy or antivirus that
+    inspects HTTPS, Python's own certificate list rejects Hugging Face (model
+    configs are fetched on first use); the system store has their root."""
+    try:
+        import truststore
+        truststore.inject_into_ssl()
+    except Exception:  # optional: plain networks work without it
+        pass
+
+
 def face_crops(paths: list[Path], resolution: int) -> list[np.ndarray]:
     """Square crops around the largest face of each photo (RGB, resolution²)."""
     detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
@@ -221,6 +232,7 @@ def main() -> int:
     parser.add_argument("--steps", type=int, default=None)
     parser.add_argument("--resolution", type=int, default=None, choices=(256, 384, 512, 640))
     args = parser.parse_args()
+    use_system_certificates()
     train(args.models_dir, args.references, args.steps, resolution=args.resolution)
     return 0
 

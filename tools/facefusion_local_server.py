@@ -21,10 +21,12 @@ try:
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
+    from .photo_realism_gate import check_render_file
 except ImportError:
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
+    from photo_realism_gate import check_render_file
 
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
@@ -1408,7 +1410,24 @@ def process_swap(
         result_similarity = best_score
         used_realism = False
         render_scores = scores[len(rescue_candidates):-1]
-        chosen = choose_realism_render(result_similarity, renders, render_scores)
+        # ArcFace alone can reward an uncanny, waxy, over-sharpened or clipped
+        # diffusion face. Retain only candidates that preserve natural cheek
+        # microtexture relative to the original FaceFusion composite.
+        acceptable_renders: list[Path] = []
+        acceptable_scores: list[float | None] = []
+        for render_path, render_score in zip(renders, render_scores):
+            try:
+                accepted, reason = check_render_file(
+                    final_output, render_path, metadata["faceBounds"]
+                )
+            except Exception as error:
+                accepted, reason = False, f"kontrol hatası: {error}"
+            if accepted:
+                acceptable_renders.append(render_path)
+                acceptable_scores.append(render_score)
+            else:
+                print(f"Gerçekçilik adayı elendi ({render_path.name}): {reason}.", flush=True)
+        chosen = choose_realism_render(result_similarity, acceptable_renders, acceptable_scores)
         if chosen is not None:
             render_path, render_similarity = chosen
             apply_realism_render(final_output, render_path)

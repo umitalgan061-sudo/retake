@@ -36,7 +36,7 @@ import {
   summarizeReferenceShape
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
-import { meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
+import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
   describeProfileHealth,
@@ -1655,6 +1655,15 @@ async function buildLocalFaceFusionInputs() {
     referenceBlobs: profile.referenceBlobs,
     referenceWeights: profile.weights,
     appearanceProfileBlob: profile.appearanceProfileBlob,
+    // Only scalar pose distances leave the device: each reference's mesh
+    // signature stays in the local profile; the server can try a smaller
+    // pose-matched identity pool as well as the full 25-photo mean.
+    poseDistances: Array.isArray(profile.poseDescriptors) && face.pose
+      ? profile.poseDescriptors.map((descriptor) => {
+          const distance = descriptorDistance(descriptor, face.pose);
+          return Number.isFinite(distance) ? Math.round(distance * 10000) / 10000 : null;
+        })
+      : null,
     profileCount: profile.validCount,
     totalProfileWeight: profile.totalWeight,
     faceBounds,
@@ -1940,6 +1949,7 @@ async function runFaceFusionEdit() {
       referenceBlobs,
       referenceWeights,
       appearanceProfileBlob,
+      poseDistances,
       faceBounds,
       targetSize,
       headFit,
@@ -1956,7 +1966,7 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    const metadata = { referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation };
+    const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {

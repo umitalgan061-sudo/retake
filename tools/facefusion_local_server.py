@@ -20,11 +20,11 @@ from typing import Any
 try:
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from .identity_selection import plan_identity_source_sets
+    from .identity_selection import plan_identity_source_sets, select_texture_reference
 except ImportError:
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from identity_selection import plan_identity_source_sets
+    from identity_selection import plan_identity_source_sets, select_texture_reference
 
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
@@ -1247,6 +1247,21 @@ def process_swap(
         appearance_boost = cached_pass(3, [appearance_path], appearance_output, APPEARANCE_MODEL)
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
 
+        # The 25-image pixel mean can look waxy: aligned eyes and facial hair
+        # rarely land on identical pixels. Try a crisp real reference as an
+        # optional UniFace *detail* source, not as a replacement for identity.
+        texture_reference_index = select_texture_reference(
+            weights, identity_report, metadata.get("poseDistances")
+        )
+        texture_output: Path | None = None
+        if texture_reference_index is not None:
+            alternative = temp_dir / "retake-appearance-single.png"
+            try:
+                cached_pass(3, [reference_paths[texture_reference_index]], alternative, APPEARANCE_MODEL)
+                texture_output = alternative
+            except Exception as error:
+                print(f"Tek fotoğraftan doku adayı atlandı: {error}", flush=True)
+
         progress(4)
         # Identity-first compositing: a few blends from seamless (photo's skin
         # tone pulled in) to faithful (the swap's own skin kept). Those whose
@@ -1280,8 +1295,31 @@ def process_swap(
                     transplanted.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
                 labels.append(f"ton {harmonize:g}" + (" + doku nakli" if path in transplanted else ""))
+        texture_blends: set[Path] = set()
+        if texture_output is not None:
+            for harmonize in (0.60, 0.35):
+                report = {}
+                path = temp_dir / f"retake-texture-{len(texture_blends)}.png"
+                try:
+                    blend_lower_face(
+                        target_path, identity_source, texture_output, path,
+                        metadata["faceBounds"], detail_transfer_strength,
+                        metadata["targetSize"], min(DEFAULT_SHADING_STRENGTH, 0.20),
+                        None, harmonize, report, beard
+                    )
+                except Exception as error:
+                    print(f"Gerçek referans dokusu adayı atlandı: {error}", flush=True)
+                    continue
+                texture_blends.add(path)
+                blends.append((path, float(report.get("border", 0.0))))
+                labels.append(f"gerçek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
+        chosen_texture = (
+            f"reference-{texture_reference_index + 1:02d}"
+            if chosen_blend in texture_blends and texture_reference_index is not None
+            else "average"
+        )
         if chosen_blend != hybrid_output:
             shutil.copyfile(chosen_blend, hybrid_output)
         used_enhancer = bool(enhancer_enabled)
@@ -1415,6 +1453,7 @@ def process_swap(
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
+            "X-Retake-Texture-Source": chosen_texture,
             "X-Retake-Compositing": "preblended",
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
@@ -1574,7 +1613,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
-            "X-Retake-Identity-Source"
+            "X-Retake-Identity-Source, X-Retake-Texture-Source"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

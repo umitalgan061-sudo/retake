@@ -48,6 +48,25 @@ class IdentitySourcePlanTests(unittest.TestCase):
         self.assertEqual([name for name, _ in pools], ["all-25", "consensus", "pose-match"])
         self.assertNotIn(0, pools[-1][1])
 
+    def test_single_texture_is_a_real_photo_with_identity_and_sharpness(self):
+        from tools.identity_selection import select_texture_reference
+        report = self.report()
+        weights = [1] * 25
+        weights[7] = 3
+        self.assertEqual(select_texture_reference(weights, report), 7)
+        report["outlier_indices"] = [7]
+        self.assertNotEqual(select_texture_reference(weights, report), 7)
+
+    def test_single_texture_can_match_target_pose_instead_of_global_best(self):
+        from tools.identity_selection import select_texture_reference
+        report = self.report()
+        weights = [1] * 25
+        weights[23] = 3
+        poses = [0.2 + i * 0.01 for i in range(25)]
+        poses[:8] = [0.02 + i * 0.01 for i in range(8)]
+        self.assertEqual(select_texture_reference(weights, report, poses), 7)
+        self.assertIsNone(select_texture_reference(weights, {"outlier_indices": []}))
+
     def test_old_report_uses_full_set_and_invalid_weights_fail(self):
         self.assertEqual(
             plan_identity_source_sets([1] * 25, {"centroid": [1.0]}),

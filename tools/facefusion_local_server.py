@@ -1705,6 +1705,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
             "realism": bool(getattr(self.server, "realism", None)),
+            "personal_model": bool(
+                getattr(self.server, "realism", None)
+                and (self.server.realism["models"] / "personal-lora" / "pytorch_lora_weights.safetensors").is_file()
+                and (self.server.realism["models"] / "personal-lora" / "person.json").is_file()
+            ),
             "provider_error": provider_error,
             "error": None if script.is_file() else f"FaceFusion dosyası bulunamadı: {script}"
         })

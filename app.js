@@ -292,9 +292,12 @@ async function checkFaceFusionStatus() {
         model: health.model || "uniface_256",
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
-        message: health.realism
-          ? "FaceFusion 3.9.2, CUDA ve fotoğraf gerçekçiliği katmanı hazır."
-          : "FaceFusion 3.9.2 ve CUDA hazır. Gerçekçi cilt/dudak için: tools\\install_realism.ps1"
+        personalModel: Boolean(health.personal_model),
+        message: health.personal_model
+          ? "FaceFusion, CUDA ve kişisel fotoğraf modelin hazır. Doku ve kimlik filtreleri açık."
+          : health.realism
+            ? "FaceFusion, CUDA ve gerçekçilik katmanı hazır. Yüzünü daha iyi öğrenmesi için: tools\\train_personal_model.ps1"
+            : "FaceFusion ve CUDA hazır. Gerçekçi cilt/dudak için: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -625,6 +628,7 @@ function selectResult(index) {
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
     item.realism ? "fotoğraf gerçekçiliği" : "",
+    item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
@@ -643,6 +647,7 @@ function addResult(blob, label, scores = {}) {
     before: scores.before ?? null,
     realFace: scores.realFace === true,
     realism: scores.realism === true,
+    texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null
   };
   state.results.push(item);
@@ -2001,6 +2006,7 @@ async function runFaceFusionEdit() {
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
       realism: response.headers.get("X-Retake-Realism") === "on",
+      texture: response.headers.get("X-Retake-Texture-Source") || "average",
       referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
     };
     showProfileHealth(

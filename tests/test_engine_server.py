@@ -202,6 +202,25 @@ class PairedEngineTest(EngineServerTest):
         self.assertEqual(response.getheader("Access-Control-Allow-Origin"), ORIGIN)
 
 
+class PoseMetadataValidationTests(unittest.TestCase):
+    def test_pose_distances_are_typed_and_optional(self):
+        metadata = {
+            "referenceWeights": [1] * 25,
+            "faceBounds": {"x": 12, "y": 10, "width": 140, "height": 160},
+            "poseDistances": [0.04] * 20 + [None] * 5
+        }
+        checked = srv._validate_metadata(metadata, 25)
+        self.assertEqual(checked["poseDistances"][0], 0.04)
+        self.assertIsNone(checked["poseDistances"][24])
+        self.assertIsNone(srv._validate_metadata({
+            "referenceWeights": [1] * 25,
+            "faceBounds": metadata["faceBounds"]
+        }, 25)["poseDistances"])
+        for bad in ([0.1] * 24, [float("nan")] * 25, [True] * 25, [-1] * 25):
+            with self.assertRaisesRegex(ValueError, "poz mesafeleri"):
+                srv._validate_metadata({**metadata, "poseDistances": bad}, 25)
+
+
 class AllowedOriginsTest(unittest.TestCase):
     def test_new_and_old_sites_are_allowed_by_default(self):
         source = Path(srv.__file__).read_text(encoding="utf-8")
@@ -252,7 +271,10 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_arcface(self, facefusion_dir, reference_paths):
         self.arcface_calls += 1
-        return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
+        report = {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
+        if getattr(self, "enable_quality_candidates", False):
+            report["reference_median_similarities"] = [0.55 + index * 0.01 for index in range(srv.MAX_REFERENCES)]
+        return report
 
     render_scores: list = []
 
@@ -299,6 +321,8 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_facefusion(self, facefusion_dir, target_path, sources, output, model, boost, weight):
         self.facefusion_calls.append((model, weight))
+        self.source_sizes = getattr(self, "source_sizes", [])
+        self.source_sizes.append((model, len(sources)))
         image = cv2.imread(str(target_path))
         cv2.ellipse(image, (195, 260), (85, 110), 0, 0, 360, (90, 110, 170), -1)
         cv2.imwrite(str(output), image)
@@ -425,6 +449,28 @@ class CachedPipelineTest(unittest.TestCase):
         }
         with self.assertRaisesRegex(srv.IdentityConflictError, "düşük"):
             self.run_swap(0, [])
+
+    def test_consensus_identity_uses_reference_agreement_when_it_improves_arcface(self):
+        self.enable_quality_candidates = True
+        self.candidate_scores = {
+            "retake-identity-alpha.png": 0.73,
+            "retake-identity-consensus.png": 0.85
+        }
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Source"], "consensus")
+        self.assertIn(("alphaface_256", 25), self.source_sizes)
+        self.assertIn(("alphaface_256", 12), self.source_sizes)
+        self.assertEqual(headers["X-Retake-Compositing"], "preblended")
+
+    def test_real_reference_texture_can_win_over_a_blurred_mean(self):
+        self.enable_quality_candidates = True
+        self.candidate_scores = {"retake-texture-0.png": 0.91, "retake-texture-1.png": 0.89}
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Texture-Source"], "reference-25")
+        self.assertIn(("uniface_256", 1), self.source_sizes)
+        self.assertEqual(headers["X-Retake-Similarity"], "0.7400",
+                         "post-processing score is evaluated separately from blend candidate score")
 
     def test_without_the_realism_environment_nothing_changes(self):
         headers = self.run_swap(0, [])

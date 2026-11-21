@@ -20,9 +20,13 @@ from typing import Any
 try:
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from .identity_selection import plan_identity_source_sets, select_texture_reference
+    from .photo_realism_gate import check_render_file
 except ImportError:
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from identity_selection import plan_identity_source_sets, select_texture_reference
+    from photo_realism_gate import check_render_file
 
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
@@ -67,7 +71,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v13"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v14"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -292,7 +296,23 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     jaw_warp = _validate_jaw_warp(metadata.get("jawWarp"), target_size, bounds)
     real_face = _validate_real_face(metadata.get("realFace"), target_size)
     target_landmarks = _validate_target_landmarks(metadata.get("targetLandmarks"), target_size)
+    pose_distances = metadata.get("poseDistances")
+    if pose_distances is not None:
+        if (
+            not isinstance(pose_distances, list) or len(pose_distances) != reference_count
+            or any(
+                value is not None and (
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not math.isfinite(value)
+                    or not 0 <= value <= 10
+                )
+                for value in pose_distances
+            )
+        ):
+            raise ValueError("Referans poz mesafeleri 25 adet geçerli sayı veya null içermeli.")
     return {
+        "poseDistances": pose_distances,
         "targetLandmarks": target_landmarks,
         "jawWarp": jaw_warp,
         "realFace": real_face,
@@ -1094,14 +1114,14 @@ def process_swap(
             "Aykırı referanslar çıkarılmadı; kimlik ağırlıkları 1 oya indirildi.",
             flush=True
         )
-        # Repeating paths makes FaceFusion's source-face embedding mean
-        # quality-weighted. Every reference remains in the profile and
-        # every accepted reference receives at least one identity vote.
-        weighted_identity_paths = [
-            path
-            for path, weight in zip(reference_paths, weights)
-            for _ in range(weight)
-        ]
+        # All 25 photographs must be checked, but averaging all of their
+        # embeddings can wash out distinctive facial traits. Create bounded
+        # alternative pools: full / most self-consistent / closest target pose.
+        # Actual generated output is ArcFace-scored before selecting a pool.
+        source_plans = plan_identity_source_sets(
+            weights, identity_report, metadata.get("poseDistances")
+        )
+        weighted_identity_paths = [reference_paths[i] for i in source_plans[0][1]]
         identity_output = temp_dir / "retake-identity-alpha.png"
         appearance_output = temp_dir / "retake-appearance-uniface.png"
         hybrid_output = temp_dir / "retake-hybrid-profile.png"
@@ -1165,17 +1185,56 @@ def process_swap(
         identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
-        # Identity reinforcement: a second swapper over the first result, kept
-        # only if ArcFace confirms it is closer to the person.
-        identity_source = identity_output
-        reinforced = False
         centroid = identity_report.get("centroid")
+        identity_source_paths = weighted_identity_paths
+        identity_source = identity_output
+        identity_pool = "all-25"
+        if centroid and len(source_plans) > 1:
+            candidates: list[tuple[str, Path, list[Path], str]] = [
+                ("all-25", identity_output, weighted_identity_paths, identity_boost)
+            ]
+            for name, pool in source_plans[1:]:
+                source_subset = [reference_paths[i] for i in pool]
+                alternative_output = temp_dir / f"retake-identity-{name}.png"
+                try:
+                    boost = cached_pass(1, source_subset, alternative_output, IDENTITY_MODEL)
+                    candidates.append((name, alternative_output, source_subset, boost))
+                except Exception as error:
+                    # The original full-25 pass remains usable if an optional
+                    # candidate runs out of VRAM or fails face detection.
+                    print(f"Ek {name} kimlik adayı atlandı: {error}", flush=True)
+            if len(candidates) > 1:
+                candidate_scores = score_identity(
+                    facefusion_dir, centroid, [path for _, path, _, _ in candidates]
+                )
+                best_index = 0
+                best_value = candidate_scores[0]
+                for i, value in enumerate(candidate_scores[1:], start=1):
+                    # Require an observable improvement, not a tiny change
+                    # from embedding / image-encoding measurement noise.
+                    if value is not None and (
+                        best_value is None or value > best_value + 0.012
+                    ):
+                        best_index, best_value = i, value
+                identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
+                print(
+                    "Kaynak havuzu karşılaştırması: "
+                    + ", ".join(
+                        f"{entry[0]}={'—' if value is None else f'{value:.3f}'}"
+                        for entry, value in zip(candidates, candidate_scores)
+                    )
+                    + f"; seçilen {identity_pool}.",
+                    flush=True
+                )
+
+        # Identity reinforcement: a second swapper over the selected output.
+        reinforced = False
         if centroid and face_swapper_weight >= 1.0:
             reinforced_output = temp_dir / "retake-identity-reinforced.png"
             try:
-                cached_pass(REINFORCE_STAGE, weighted_identity_paths, reinforced_output, REINFORCE_MODEL, identity_output)
-                single, double = score_identity(facefusion_dir, centroid, [identity_output, reinforced_output])
-                if single is not None and double is not None and double > single:
+                cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
+                single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
+                if single is not None and double is not None and double > single + 0.012:
                     identity_source = reinforced_output
                     reinforced = True
                 print(
@@ -1189,6 +1248,21 @@ def process_swap(
 
         appearance_boost = cached_pass(3, [appearance_path], appearance_output, APPEARANCE_MODEL)
         print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
+
+        # The 25-image pixel mean can look waxy: aligned eyes and facial hair
+        # rarely land on identical pixels. Try a crisp real reference as an
+        # optional UniFace *detail* source, not as a replacement for identity.
+        texture_reference_index = select_texture_reference(
+            weights, identity_report, metadata.get("poseDistances")
+        )
+        texture_output: Path | None = None
+        if texture_reference_index is not None:
+            alternative = temp_dir / "retake-appearance-single.png"
+            try:
+                cached_pass(3, [reference_paths[texture_reference_index]], alternative, APPEARANCE_MODEL)
+                texture_output = alternative
+            except Exception as error:
+                print(f"Tek fotoğraftan doku adayı atlandı: {error}", flush=True)
 
         progress(4)
         # Identity-first compositing: a few blends from seamless (photo's skin
@@ -1223,8 +1297,31 @@ def process_swap(
                     transplanted.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
                 labels.append(f"ton {harmonize:g}" + (" + doku nakli" if path in transplanted else ""))
+        texture_blends: set[Path] = set()
+        if texture_output is not None:
+            for harmonize in (0.60, 0.35):
+                report = {}
+                path = temp_dir / f"retake-texture-{len(texture_blends)}.png"
+                try:
+                    blend_lower_face(
+                        target_path, identity_source, texture_output, path,
+                        metadata["faceBounds"], detail_transfer_strength,
+                        metadata["targetSize"], min(DEFAULT_SHADING_STRENGTH, 0.20),
+                        None, harmonize, report, beard
+                    )
+                except Exception as error:
+                    print(f"Gerçek referans dokusu adayı atlandı: {error}", flush=True)
+                    continue
+                texture_blends.add(path)
+                blends.append((path, float(report.get("border", 0.0))))
+                labels.append(f"gerçek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
+        chosen_texture = (
+            f"reference-{texture_reference_index + 1:02d}"
+            if chosen_blend in texture_blends and texture_reference_index is not None
+            else "average"
+        )
         if chosen_blend != hybrid_output:
             shutil.copyfile(chosen_blend, hybrid_output)
         used_enhancer = bool(enhancer_enabled)
@@ -1313,7 +1410,24 @@ def process_swap(
         result_similarity = best_score
         used_realism = False
         render_scores = scores[len(rescue_candidates):-1]
-        chosen = choose_realism_render(result_similarity, renders, render_scores)
+        # ArcFace alone can reward an uncanny, waxy, over-sharpened or clipped
+        # diffusion face. Retain only candidates that preserve natural cheek
+        # microtexture relative to the original FaceFusion composite.
+        acceptable_renders: list[Path] = []
+        acceptable_scores: list[float | None] = []
+        for render_path, render_score in zip(renders, render_scores):
+            try:
+                accepted, reason = check_render_file(
+                    final_output, render_path, metadata["faceBounds"]
+                )
+            except Exception as error:
+                accepted, reason = False, f"kontrol hatası: {error}"
+            if accepted:
+                acceptable_renders.append(render_path)
+                acceptable_scores.append(render_score)
+            else:
+                print(f"Gerçekçilik adayı elendi ({render_path.name}): {reason}.", flush=True)
+        chosen = choose_realism_render(result_similarity, acceptable_renders, acceptable_scores)
         if chosen is not None:
             render_path, render_similarity = chosen
             apply_realism_render(final_output, render_path)
@@ -1357,6 +1471,8 @@ def process_swap(
             "X-Retake-Real-Face": "on" if used_real_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,
+            "X-Retake-Identity-Source": identity_pool,
+            "X-Retake-Texture-Source": chosen_texture,
             "X-Retake-Compositing": "preblended",
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
@@ -1515,7 +1631,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
-            "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection"
+            "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
+            "X-Retake-Identity-Source, X-Retake-Texture-Source"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -1588,6 +1705,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
             "realism": bool(getattr(self.server, "realism", None)),
+            "personal_model": bool(
+                getattr(self.server, "realism", None)
+                and (self.server.realism["models"] / "personal-lora" / "pytorch_lora_weights.safetensors").is_file()
+                and (self.server.realism["models"] / "personal-lora" / "person.json").is_file()
+            ),
             "provider_error": provider_error,
             "error": None if script.is_file() else f"FaceFusion dosyası bulunamadı: {script}"
         })

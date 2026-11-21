@@ -202,6 +202,25 @@ class PairedEngineTest(EngineServerTest):
         self.assertEqual(response.getheader("Access-Control-Allow-Origin"), ORIGIN)
 
 
+class PoseMetadataValidationTests(unittest.TestCase):
+    def test_pose_distances_are_typed_and_optional(self):
+        metadata = {
+            "referenceWeights": [1] * 25,
+            "faceBounds": {"x": 12, "y": 10, "width": 140, "height": 160},
+            "poseDistances": [0.04] * 20 + [None] * 5
+        }
+        checked = srv._validate_metadata(metadata, 25)
+        self.assertEqual(checked["poseDistances"][0], 0.04)
+        self.assertIsNone(checked["poseDistances"][24])
+        self.assertIsNone(srv._validate_metadata({
+            "referenceWeights": [1] * 25,
+            "faceBounds": metadata["faceBounds"]
+        }, 25)["poseDistances"])
+        for bad in ([0.1] * 24, [float("nan")] * 25, [True] * 25, [-1] * 25):
+            with self.assertRaisesRegex(ValueError, "poz mesafeleri"):
+                srv._validate_metadata({**metadata, "poseDistances": bad}, 25)
+
+
 class AllowedOriginsTest(unittest.TestCase):
     def test_new_and_old_sites_are_allowed_by_default(self):
         source = Path(srv.__file__).read_text(encoding="utf-8")

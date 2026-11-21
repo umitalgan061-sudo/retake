@@ -74,7 +74,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v13, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v14, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 
@@ -139,6 +139,18 @@ Hedef fotoğrafın tamamı gönderilmez; seçilen yüz crop'u gönderilir. Refer
 - FaceFusion motorunun döndürdüğü RGBA görüntünün RGB pikselleri, yüz kompoziti içinde zaten birleştirilmiştir. `X-Retake-Compositing: preblended` bilgisi geldiğinde tarayıcı, alfa kanalını yalnızca **değiştirilen bölgenin kapsamı** olarak kullanır; aynı görüntüyü ikinci kez alfa ile harmanlamaz. Aksi hâlde yüz değişimi yumuşak kenarlarda gereksiz yere seyrelir.
 - Yerel motor v13 son çıktı, kafa/çene şekillendirmesi uygulanmamış çıktı ve yalnızca kimlik aktarılmış alternatifi ArcFace ile karşılaştırır. Kimlik benzerliği anlamlı ölçüde artıyorsa daha sadık aday seçilir. ArcFace skoru alınamazsa güvenilir sonuç üretilemediği belirtilir; referans kimliğine göre orijinalden belirgin kötü aday geri verilmez.
 - Yeni akış bir **kalite önlemi**dir; fotoğraflardan birebir yüz üretimini veya kişiye özel eğitilmiş model edinilmesini garanti etmez. Özellikle ağır profil, düşük ışık, ağız/göz örtülmesi ve farklı yaş/sakal görünümleri için gerçek hedef fotoğraflarla gözle test yapılmalıdır.
-- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_v13` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
+- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_v14` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
 - Web sürümünü ayrıca Firebase Hosting'e yayımla. Yeni web koduyla eski motorun çalışması mümkündür, fakat yeni `preblended` düzeltmesinden yararlanmak için **web ve yerel motorun ikisinin de güncel olması gerekir**.
 - Sunucunun yanıtında `X-Retake-Identity-Selection` (head-fit / no-head-warp / identity-only) ve `X-Retake-Similarity` bulunur. ArcFace cosine değeri bir kimlik garantisi veya kullanıcının yüzde yüz benzerliği değildir. Motorun testlerinde yüz aktarımı modelleri taklit edilir; gerçek NVIDIA/FaceFusion GPU ve kullanıcı fotoğraflarıyla karşılaştırmalı manuel değerlendirme ayrıca yapılmalıdır.
+
+
+## 9. Retake v14 — kimlik ve fotoğraf gerçekçiliği öncelikli işlem
+
+- **25 fotoğrafın tamamı ArcFace ile taranır.** Sonra tek bir ortalama yüzü zorlamak yerine üç kimlik kaynağı denenebilir: 25'inin tamamı, kimlik açısından en tutarlı 12 referans ve hedef yüzün açısına/ifadesine en yakın 8 referans. Poz eşlemesi yalnızca tarayıcının yüz ağı yeterli olduğunda kullanılır.
+- Her havuzdan üretilen yüzün **gerçek FaceFusion çıktısı** aynı ArcFace kimlik vektörüne göre karşılaştırılır. Bir aday yalnızca ölçülebilir iyileşme gösteriyorsa seçilir; tam 25'li sürüm geriye dönük temel seçenektir. Bu ilave GPU geçişleri nedeniyle ilk işlem yavaşlayabilir; önbellek tekrarları hızlandırır.
+- 25 fotoğrafın ortalaması sakal, kaş ve cilt mikro-dokusunu bulanıklaştırabilir. Bu nedenle en güvenilir ve net **tek gerçek referans fotoğrafından** ayrı UniFace ayrıntı adayı oluşturulur. Sadece yüzdeki detay bölgesi için adaydır; AlphaFace/InSwapper kimlik geometrisinin yerine geçmez. Son karar benzerlik ve birleştirme sınırına göre verilir.
+- İsteğe bağlı fotogerçekçilik/difüzyon katmanı, ArcFace skorunun yanı sıra ciltte ağır pürüzsüzleştirme, aşırı keskinlik veya siyah/beyaz kırpma göstergelerine de bakar; bozulmuş yüzü kabul etmeyip FaceFusion sonucunu korur. Bu istatistiksel test görsel gerçekliği kesin olarak ispatlamaz.
+- `/health` sonucundaki `personal_model` alanı kişisel LoRA dosyalarının bulunup bulunmadığını belirtir. **Kişisel model varsa bile** fotogerçekçilik ve kimlik aktarımı %100 aynı yüzü garanti etmez.
+- En yüksek fotoğraf gerçekçiliği için, bilgisayarında CUDA GPU varsa ilk sefer `./tools/install_realism.ps1` ve ardından `./tools/train_personal_model.ps1` komutlarını PowerShell'de çalıştır. Sonra `./tools/start_facefusion_retake.ps1` ile motoru yeniden başlat. (PowerShell'de normal kullanım: `.\\tools\\install_realism.ps1`, `.\\tools\\train_personal_model.ps1`, `.\\tools\\start_facefusion_retake.ps1`.)
+- Canlı Firebase sitesi ve kullanıcının bilgisayarında çalışan FaceFusion motoru **ayrı bileşenlerdir**: GitHub'a yeni kod eklemek, mevcut açık yerel motoru veya Firebase Hosting'i otomatik güncellemez. Her ikisini de yayımlayıp başlatmadan çıktı kalitesi değişmez.
+- `X-Retake-Identity-Source` (all-25/consensus/pose-match), `X-Retake-Texture-Source` (average/reference-NN) ve `X-Retake-Identity-Selection` yanıt başlıkları seçimi açıklar. Gerçek hedefler üzerinde görsel karşılaştırma, ağız/göz şekli ve cilt detaylarının uzman/göz değerlendirmesi hâlâ gereklidir.

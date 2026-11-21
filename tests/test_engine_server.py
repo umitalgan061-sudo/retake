@@ -259,6 +259,7 @@ class CachedPipelineTest(unittest.TestCase):
     reinforce_scores = (0.70, 0.60)
 
     blend_scores = None
+    candidate_scores = None
 
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
@@ -269,7 +270,19 @@ class CachedPipelineTest(unittest.TestCase):
             self.blend_probes = names
             return [self.blend_scores[int(name.split("-")[-1][:-4]) if name[-5].isdigit() else 0] for name in names]
         self.scored = (centroid, names)
-        return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
+        values = []
+        for name in names:
+            if self.candidate_scores and name in self.candidate_scores:
+                values.append(self.candidate_scores[name])
+            elif name == "target.png":
+                values.append(0.21)
+            elif name.startswith("realism-"):
+                values.append(self.render_scores[int(name.removeprefix("realism-").removesuffix(".png")) - 1])
+            elif name == "retake-pre-geometry.png" or name == "retake-identity-only.png":
+                values.append(0.73)
+            else:
+                values.append(0.74)
+        return values
 
     def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir, landmarks=None):
         """Two 'renders': the result with a visibly re-rendered face."""
@@ -366,7 +379,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual([step for step, _ in stages][-2:], [srv.REALISM_STAGE, srv.SCORING_STAGE])
         self.assertEqual(headers["X-Retake-Realism"], "on")
         self.assertEqual(headers["X-Retake-Similarity"], "0.7900", "the closer render is reported")
-        self.assertEqual(self.scored[1][1:3], ["realism-1.png", "realism-2.png"])
+        self.assertEqual(self.scored[1][3:5], ["realism-1.png", "realism-2.png"])
         # Its re-rendered face is in the result, and covered by the matte.
         self.assertTrue(np.all(self.last_result[250, 195, :3] == 60))
         self.assertEqual(int(self.last_result[250, 195, 3]), 255)
@@ -377,6 +390,41 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Realism"], "off")
         self.assertEqual(headers["X-Retake-Similarity"], "0.7400")
         self.assertFalse(np.all(self.last_result[250, 195, :3] == 60))
+
+    def test_chooses_unwarped_face_when_head_fit_damages_identity(self):
+        self.candidate_scores = {"retake-pre-geometry.png": 0.88}
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "no-head-warp")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8800")
+        self.assertEqual(headers["X-Retake-Compositing"], "preblended")
+
+    def test_falls_back_to_identity_only_when_beautifying_loses_resemblance(self):
+        self.candidate_scores = {"retake-identity-only.png": 0.89}
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-only")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8900")
+
+    def test_refuses_to_claim_success_when_arcface_cannot_verify_any_result(self):
+        with patch.object(self, "fake_score") as mocked:
+            def fake_score(facefusion_dir, centroid, probes):
+                if any(path.name == "retake-identity-reinforced.png" for path in probes):
+                    return [None] * len(probes)
+                if any(path.name.startswith("retake-hybrid") for path in probes):
+                    return [None] * len(probes)
+                return [None] * len(probes)
+            mocked.side_effect = fake_score
+            with self.assertRaisesRegex(srv.IdentityVerificationError, "doğrulanamadı"):
+                self.run_swap(0, [])
+
+    def test_refuses_output_if_identity_regresses_below_original(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.35,
+            "retake-pre-geometry.png": 0.36,
+            "retake-identity-only.png": 0.38,
+            "target.png": 0.50,
+        }
+        with self.assertRaisesRegex(srv.IdentityConflictError, "düşük"):
+            self.run_swap(0, [])
 
     def test_without_the_realism_environment_nothing_changes(self):
         headers = self.run_swap(0, [])

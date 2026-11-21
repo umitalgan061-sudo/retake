@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
+import { alphaMaskFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
 
 test("copies every pixel outside the face mask byte-for-byte", () => {
   const source = new Uint8Array([
@@ -30,6 +30,35 @@ test("supports soft alpha only on the face-mask edge", () => {
   const generated = new Uint8Array([200, 100, 50, 255]);
   const output = compositeMaskedRGBA(source, generated, new Float32Array([0.5]), 1, 1);
   assert.deepEqual(Array.from(output), [100, 50, 25, 255]);
+});
+
+test("a preblended engine crop is copied once; its matte is not squared", () => {
+  const original = new Uint8ClampedArray([
+    20, 30, 40, 255, 20, 30, 40, 255, 20, 30, 40, 255
+  ]);
+  // Engine already applied its own feather: the middle face pixel is 120,
+  // not the raw swap's 220. An extra 0.5 blend would incorrectly make it 70.
+  const engine = new Uint8ClampedArray([
+    0, 0, 0, 0, 120, 130, 140, 128, 220, 230, 240, 255
+  ]);
+  const mask = alphaMaskFromRGBA(engine, 3, 1);
+  const output = compositePreblendedRGBA(original, engine, mask, 3, 1);
+  assert.deepEqual([...output], [
+    20, 30, 40, 255, 120, 130, 140, 255, 220, 230, 240, 255
+  ]);
+  assert.deepEqual(inspectOutsideMaskIntegrity(original, output, mask, 3, 1),
+    { ok: true, changedPixels: 0 });
+  const doubled = compositeMaskedRGBA(original, engine, mask, 3, 1);
+  assert.notDeepEqual([...doubled.slice(4, 7)], [...output.slice(4, 7)]);
+});
+
+test("preblended copy rejects corrupt matte and preserves untouched pixels", () => {
+  const original = new Uint8Array([10, 20, 30, 255]);
+  const composite = new Uint8Array([180, 190, 200, 128]);
+  assert.deepEqual([...compositePreblendedRGBA(original, composite, new Float32Array([0]), 1, 1)],
+    [...original]);
+  assert.throws(() => compositePreblendedRGBA(original, composite, new Float32Array([NaN]), 1, 1), /finite/);
+  assert.throws(() => compositePreblendedRGBA(original, composite, new Float32Array([0, 1]), 1, 1), /extentMask/);
 });
 
 test("rejects mismatched buffers and invalid mask values", () => {

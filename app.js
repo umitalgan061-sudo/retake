@@ -18,7 +18,7 @@ import {
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
-import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
+import { alphaMaskFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
   canonicalJaw,
@@ -1738,7 +1738,7 @@ async function cropRealReference(reference) {
   };
 }
 
-function applyGeneratedFacePatch(generatedTargetImage, crop) {
+function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false) {
   if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
   const sourceImage = state.target.image;
   const imageWidth = sourceImage.naturalWidth;
@@ -1769,13 +1769,12 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
   const alphaMask = hasTransparentPixels
     ? parserAlphaMask
     : createFaceAlphaMask(crop.width, crop.height, crop.face);
-  const blended = compositeMaskedRGBA(
-    sourceCrop.data,
-    generatedCrop.data,
-    alphaMask,
-    crop.width,
-    crop.height
-  );
+  // A local engine may deliver final, already-masked RGB + an edit-extent
+  // alpha. Never blend that image a second time: alpha squared erases identity
+  // characteristics along facial transitions.
+  const blended = preblended && hasTransparentPixels
+    ? compositePreblendedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height)
+    : compositeMaskedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height);
 
   const fullCanvas = document.createElement("canvas");
   fullCanvas.width = imageWidth;
@@ -2009,7 +2008,9 @@ async function runFaceFusionEdit() {
     }
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
-    const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
+    const resultBlob = await applyGeneratedFacePatch(
+      generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended"
+    );
     state.nextVariation = (variation + 1) % 4;
     addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex], scores);
     elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";

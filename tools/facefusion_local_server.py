@@ -67,7 +67,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v12"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v13"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1238,6 +1238,10 @@ def process_swap(
         else:
             final_output = hybrid_output
 
+        # Preserve the unwarped face. Head/jaw geometry adjustment is meant
+        # to improve resemblance, but must not silently erase a good identity.
+        pre_geometry_output = temp_dir / "retake-pre-geometry.png"
+        shutil.copyfile(final_output, pre_geometry_output)
         if jaw_scale > 0:
             reshape_jawline(final_output, jaw_warp, metadata["faceBounds"]["width"], jaw_scale)
             print(f"Çene hattı referans kişiye göre düzeltildi (güç {jaw_scale:.2f}).", flush=True)
@@ -1248,6 +1252,21 @@ def process_swap(
             face_width_scale,
             face_height_scale
         )
+        # An identity-first fallback without the appearance/beard layer or
+        # head reshaping. This is a separately masked, harmonized PNG, never
+        # an unmasked raw FaceFusion output. It can rescue cases where
+        # beautifying and geometric edits have pulled the person off-identity.
+        identity_fallback = temp_dir / "retake-identity-only.png"
+        try:
+            blend_lower_face(
+                target_path, identity_source, appearance_output, identity_fallback,
+                metadata["faceBounds"], 0.0, metadata["targetSize"],
+                shading_strength=0.0, harmonize_strength=0.35
+            )
+        except Exception as error:
+            print(f"Yedek saf kimlik bileşimi oluşturulamadı: {error}", flush=True)
+            identity_fallback = None
+
         # Photographic realism (optional): re-render the face with a diffusion
         # model steered by the person's ArcFace identity.
         realism = caches.get("realism")
@@ -1259,13 +1278,42 @@ def process_swap(
                 head_fitted_landmarks(metadata.get("targetLandmarks"), metadata["faceBounds"],
                                       face_width_scale, face_height_scale)
             )
-        # How close is each result to the person? Score them and the untouched
-        # crop against the references' identity centroid in one worker run.
+        # Measure the REAL post-processed result, a pre-geometry candidate,
+        # an identity-only candidate, and optional diffusion renders against
+        # the same ArcFace reference centroid. A nice looking render that no
+        # longer resembles the source person is not an acceptable output.
         progress(SCORING_STAGE)
-        scores = score_identity(facefusion_dir, centroid, [final_output, *renders, target_path])
-        result_similarity, before_similarity = scores[0], scores[-1]
+        rescue_candidates = [("head-fit", final_output), ("no-head-warp", pre_geometry_output)]
+        if identity_fallback is not None:
+            rescue_candidates.append(("identity-only", identity_fallback))
+        probes = [path for _, path in rescue_candidates] + [*renders, target_path]
+        scores = score_identity(facefusion_dir, centroid, probes)
+        before_similarity = scores[-1]
+        candidate_scores = scores[:len(rescue_candidates)]
+        final_score = candidate_scores[0]
+        # A rescue must improve ArcFace similarity meaningfully, not merely
+        # win on measurement noise. Keep the smoother main result on ties.
+        chosen_index = 0
+        best_score = final_score if final_score is not None else -1.0
+        for index, value in enumerate(candidate_scores[1:], start=1):
+            if value is not None and value > best_score + 0.015:
+                chosen_index, best_score = index, value
+        selected_identity = rescue_candidates[chosen_index][0]
+        if final_score is None and best_score < -0.99:
+            raise IdentityVerificationError(
+                "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
+            )
+        if chosen_index > 0:
+            print(
+                f"Kimlik koruma: {selected_identity} seçildi "
+                f"({final_score if final_score is not None else '—'} → {best_score:.3f}).",
+                flush=True
+            )
+            shutil.copyfile(rescue_candidates[chosen_index][1], final_output)
+        result_similarity = best_score
         used_realism = False
-        chosen = choose_realism_render(result_similarity, renders, scores[1:-1])
+        render_scores = scores[len(rescue_candidates):-1]
+        chosen = choose_realism_render(result_similarity, renders, render_scores)
         if chosen is not None:
             render_path, render_similarity = chosen
             apply_realism_render(final_output, render_path)
@@ -1276,18 +1324,26 @@ def process_swap(
             result_similarity = render_similarity
             used_realism = True
         elif renders:
-            listed = ", ".join("—" if value is None else f"{value:.3f}" for value in scores[1:-1])
+            listed = ", ".join("—" if value is None else f"{value:.3f}" for value in render_scores)
             print(
-                "Fotoğraf gerçekçiliği kullanılmadı: kimlik benzerliği FaceFusion sonucunun altında kaldı "
-                f"({listed}; FaceFusion {result_similarity if result_similarity is not None else '—'}).",
+                "Fotoğraf gerçekçiliği kullanılmadı: kimlik benzerliği seçilen sonucun altında kaldı "
+                f"({listed}; FaceFusion {result_similarity:.3f}).",
                 flush=True
             )
-        if result_similarity is not None:
-            print(
-                f"Kimlik benzerliği: sonuç {result_similarity:.3f}"
-                + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
-                flush=True
+        # An unverifiable or measurably worse identity is a failed edit, not
+        # a successful-looking photo. This relative guard avoids claiming a
+        # universal fixed cosine threshold for every angle and lighting.
+        if before_similarity is not None and result_similarity + 0.02 < before_similarity:
+            raise IdentityConflictError(
+                "Çıktının referans kimlik benzerliği orijinal fotoğraftan düşük "
+                f"({before_similarity:.3f} → {result_similarity:.3f}). "
+                "Başka bir hedef fotoğraf/poz veya daha net referans deneyin."
             )
+        print(
+            f"Kimlik benzerliği: sonuç {result_similarity:.3f}"
+            + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
+            flush=True
+        )
         result = final_output.read_bytes()
         headers = {
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
@@ -1300,6 +1356,8 @@ def process_swap(
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_real_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
+            "X-Retake-Identity-Selection": selected_identity,
+            "X-Retake-Compositing": "preblended",
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
         print(
@@ -1457,7 +1515,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
-            "X-Retake-Realism"
+            "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

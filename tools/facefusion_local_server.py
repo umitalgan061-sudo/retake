@@ -22,11 +22,19 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
+    from .ultra_mode import (
+        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+    )
 except ImportError:
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
+    from ultra_mode import (
+        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+    )
 
 MAX_REFERENCES = 25
 MIN_REFERENCES = MAX_REFERENCES
@@ -71,7 +79,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_v14"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v15"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1501,6 +1509,76 @@ def _swap_error(error: Exception) -> tuple[int, str]:
     return 500, f"Yerel Retake hibrit profil işlemi başarısız: {error}"
 
 
+def run_ultra_search(
+    facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
+    parsed: tuple, progress, caches: dict[str, Any] | None = None,
+    clock=None
+) -> tuple[bytes, dict[str, str]]:
+    """Quality-first iterations, each on the *original* photo and 25 references.
+
+    Intermediate results never reach the browser. Failed later candidates do
+    not destroy an already verified image. No blind recursive re-swapping.
+    """
+    clock = clock or time.monotonic
+    started = clock()
+    best_result: bytes | None = None
+    best_headers: dict[str, str] | None = None
+    best_round = 0
+    completed = 0
+    errors: list[str] = []
+
+    for index, variation in enumerate(ULTRA_VARIATIONS):
+        if not should_continue_ultra(completed, clock() - started):
+            break
+        round_number = index + 1
+        print(
+            f"[Ultra] Tur {round_number}/{len(ULTRA_VARIATIONS)}: "
+            f"orijinal hedef + 25 referans; varyasyon {variation}.",
+            flush=True
+        )
+
+        def report(step: int, cached: bool = False) -> None:
+            progress(step + index * len(JOB_STAGES), cached=cached)
+
+        try:
+            image, headers = process_swap(
+                facefusion_dir, pixel_boost, enhancer_enabled,
+                with_variation(parsed, variation), report, caches
+            )
+        except Exception as error:
+            errors.append(f"{round_number}. tur: {error}")
+            print(f"[Ultra] Aday atlandı: {error}", flush=True)
+            # The best already verified result remains usable.
+            continue
+        completed += 1
+        if prefer_ultra_candidate(headers, best_headers):
+            best_result, best_headers, best_round = image, headers, round_number
+            print(
+                f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
+                f"ArcFace={score_from_headers(headers)}.",
+                flush=True
+            )
+
+    if best_result is None or best_headers is None:
+        if errors:
+            raise IdentityVerificationError("Ultra Mod doğrulanmış sonuç üretemedi: " + " | ".join(errors[:3]))
+        raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
+
+    final = {
+        **best_headers,
+        "X-Retake-Ultra": "on",
+        "X-Retake-Ultra-Rounds": str(completed),
+        "X-Retake-Ultra-Winner": str(best_round),
+        "X-Retake-Ultra-Elapsed": str(round(clock() - started, 1)),
+    }
+    print(
+        f"[Ultra] Sonuç: {completed} doğrulanmış tur, kazanan {best_round}. tur; "
+        f"benzerlik={score_from_headers(best_headers)}; süre {final['X-Retake-Ultra-Elapsed']} sn.",
+        flush=True
+    )
+    return best_result, final
+
+
 def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     """Worker thread: long swaps must not depend on one open HTTP response
     (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
@@ -1509,7 +1587,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
         if timings is not None and current not in job["skipped"] and job.get("stage_started"):
-            timings.record(JOB_STAGES[current], now - job["stage_started"])
+            timings.record(JOB_STAGES[current % len(JOB_STAGES)], now - job["stage_started"])
 
     def progress(step: int, cached: bool = False) -> None:
         now = time.time()
@@ -1521,12 +1599,17 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         if cached:
             job["skipped"].add(step)
         job["step"] = step
-        job["stage"] = JOB_STAGES[step] + (" (önbellekten)" if cached else "")
+        job["round"] = step // len(JOB_STAGES) + 1
+        job["stage"] = (
+            f"Ultra {job['round']}/{len(ULTRA_VARIATIONS)} · "
+            + JOB_STAGES[step % len(JOB_STAGES)]
+            + (" (önbellekten)" if cached else "")
+        )
         job["stage_started"] = now
 
     try:
         job["status"] = "running"
-        result, headers = process_swap(
+        result, headers = run_ultra_search(
             server.facefusion_dir, server.face_swapper_pixel_boost,
             server.face_enhancer_enabled, parsed, progress,
             {
@@ -1539,8 +1622,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         close_stage(time.time())
         job["result"] = result
         job["headers"] = headers
-        job["step"] = len(JOB_STAGES)
-        job["stage"] = "Tamamlandı"
+        job["step"] = job["total"]
+        job["stage"] = "Ultra · en iyi sonuç seçildi"
         job["status"] = "done"
     except Exception as error:  # reported to the client through the job
         job["http_status"], job["error"] = _swap_error(error)
@@ -1553,8 +1636,12 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
 def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> float | None:
     if timings is None or job["status"] not in {"queued", "running"}:
         return None
-    step = min(job.get("step", 0), len(JOB_STAGES) - 1)
-    pending = [stage for index, stage in enumerate(JOB_STAGES) if index >= step and index not in job["skipped"]]
+    total = job.get("total", len(JOB_STAGES))
+    step = min(job.get("step", 0), total - 1)
+    pending = [
+        JOB_STAGES[index % len(JOB_STAGES)]
+        for index in range(step, total) if index not in job["skipped"]
+    ]
     if not pending:
         return 0.0
     in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
@@ -1564,10 +1651,15 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
 def create_job(realism: bool = False) -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": JOB_STAGES[0], "created": time.time(),
-        # Without the realism environment that stage never runs; the time
-        # estimate must not wait for it.
-        "skipped": set() if realism else {REALISM_STAGE}
+        "stage": "Ultra 1/4 · " + JOB_STAGES[0], "created": time.time(),
+        "total": len(JOB_STAGES) * len(ULTRA_VARIATIONS),
+        "round": 1,
+        # Without realism, each round skips that step. It must never appear
+        # in the ETA nor stall the progress display.
+        "skipped": set() if realism else {
+            REALISM_STAGE + index * len(JOB_STAGES)
+            for index in range(len(ULTRA_VARIATIONS))
+        }
     }
     with JOBS_LOCK:
         JOBS[job["id"]] = job
@@ -1632,7 +1724,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
-            "X-Retake-Identity-Source, X-Retake-Texture-Source"
+            "X-Retake-Identity-Source, X-Retake-Texture-Source, "
+            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -1699,6 +1792,9 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "face_occluder_model": FACE_OCCLUDER_MODEL,
             "face_mask_regions": list(FACE_MASK_REGIONS),
             "profile_references": MAX_REFERENCES,
+            "ultra_mode": True,
+            "ultra_rounds": len(ULTRA_VARIATIONS),
+            "ultra_search_budget_seconds": ULTRA_SEARCH_BUDGET_SECONDS,
             "async_jobs": True,
             "caches": True,
             "paired": bool(self.server.pairing_token),  # type: ignore[attr-defined]
@@ -1726,7 +1822,9 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 "ok": job["status"] != "error",
                 "status": job["status"],
                 "step": job["step"],
-                "total": len(JOB_STAGES),
+                "total": job.get("total", len(JOB_STAGES)),
+                "round": job.get("round", 1),
+                "ultra": True,
                 "stage": job["stage"],
                 "elapsed": round((job.get("finished") or time.time()) - job["created"], 1),
                 "error": job.get("error"),
@@ -1793,7 +1891,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 name=f"retake-job-{job['id'][:6]}"
             ).start()
             started = True  # the worker thread now owns INFERENCE_LOCK
-            self._send_json(202, {"ok": True, "job_id": job["id"], "total": len(JOB_STAGES)})
+            self._send_json(202, {"ok": True, "job_id": job["id"], "total": job["total"], "ultra": True})
         except ValueError as error:
             self._send_json(400, {"ok": False, "error": str(error)})
         except (BrokenPipeError, ConnectionResetError):

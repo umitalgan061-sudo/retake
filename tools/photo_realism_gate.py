@@ -65,12 +65,12 @@ def photographic_render_acceptable(
     rendered = photograph_texture_metrics(candidate, bounds)
     if original is None or rendered is None:
         return True, "doku alanı küçük; korumacı kontrol uygulanamadı"
+    if rendered["clipped"] > max(0.12, original["clipped"] + 0.08):
+        return False, "ciltte aşırı siyah/beyaz kırpılması"
     if original["detail"] >= 2.0 and rendered["detail"] < original["detail"] * 0.45:
         return False, "yüz derisi aşırı düzleştirilmiş"
     if original["detail"] >= 2.0 and rendered["detail"] > max(20.0, original["detail"] * 5.0):
         return False, "doğal olmayan aşırı keskinlik"
-    if rendered["clipped"] > max(0.12, original["clipped"] + 0.08):
-        return False, "ciltte aşırı siyah/beyaz kırpılması"
     return True, "doku korundu"
 
 

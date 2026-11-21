@@ -1525,7 +1525,7 @@ def run_ultra_search(
     best_headers: dict[str, str] | None = None
     best_round = 0
     completed = 0
-    errors: list[str] = []
+    errors: list[Exception] = []
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -1546,7 +1546,7 @@ def run_ultra_search(
                 with_variation(parsed, variation), report, caches
             )
         except Exception as error:
-            errors.append(f"{round_number}. tur: {error}")
+            errors.append(error)
             print(f"[Ultra] Aday atlandı: {error}", flush=True)
             # The best already verified result remains usable.
             continue
@@ -1561,7 +1561,9 @@ def run_ultra_search(
 
     if best_result is None or best_headers is None:
         if errors:
-            raise IdentityVerificationError("Ultra Mod doğrulanmış sonuç üretemedi: " + " | ".join(errors[:3]))
+            # Preserve the actionable HTTP status and diagnosis: no-op,
+            # invalid parameters and identity-conflict errors are distinct.
+            raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
     final = {

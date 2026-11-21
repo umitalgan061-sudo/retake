@@ -89,3 +89,41 @@ def plan_identity_source_sets(
     if pose_pool != full and all(pool != pose_pool for _, pool in pools):
         pools.append(("pose-match", pose_pool))
     return pools
+
+
+def select_texture_reference(
+    weights: Sequence[int],
+    identity_report: dict[str, Any],
+    pose_distances: Sequence[float | None] | None = None,
+) -> int | None:
+    """Choose one real (not pixel-averaged) face for optional UniFace detail.
+
+    It is a *candidate*, never the only appearance source. Weighted sharpness
+    and self-consistency provide a frontal quality anchor; a similar target
+    pose avoids copying a strongly turned face's beard / skin into the target.
+    """
+    count = len(weights)
+    medians = identity_report.get("reference_median_similarities")
+    if (
+        not isinstance(medians, list) or len(medians) != count
+        or any(not isinstance(v, (int, float)) or not math.isfinite(v) for v in medians)
+        or count < 6
+    ):
+        return None
+    outliers = set(identity_report.get("outlier_indices", ()))
+    accepted = [i for i in range(count) if i not in outliers]
+    if not accepted:
+        return None
+    poses_ok = isinstance(pose_distances, (list, tuple)) and len(pose_distances) == count
+    possible = [
+        i for i in accepted if poses_ok and isinstance(pose_distances[i], (int, float))
+        and not isinstance(pose_distances[i], bool)
+        and math.isfinite(pose_distances[i]) and pose_distances[i] >= 0
+    ]
+    if len(possible) >= 6:
+        # A pose-close but blurry photo is worse than a very sharp reference:
+        # choose the best quality/identity anchor among the top eight poses.
+        candidates = sorted(possible, key=lambda i: float(pose_distances[i]))[:8]
+    else:
+        candidates = accepted
+    return max(candidates, key=lambda i: (weights[i], float(medians[i]), -i))

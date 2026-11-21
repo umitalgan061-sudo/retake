@@ -286,6 +286,9 @@ async function checkFaceFusionStatus() {
       }
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
+      if (!health.ultra_mode) {
+        throw new Error("Retake Ultra motoru güncel değil. GitHub'daki yeni kodu çekip FaceFusion servisini yeniden başlat.");
+      }
       state.faceFusionStatus = {
         checked: true,
         configured: true,
@@ -294,10 +297,10 @@ async function checkFaceFusionStatus() {
         realism: Boolean(health.realism),
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
-          ? "FaceFusion, CUDA ve kişisel fotoğraf modelin hazır. Doku ve kimlik filtreleri açık."
+          ? "Ultra Mod · 4 varyasyon, kimlik karşılaştırması ve kişisel fotoğraf modelin hazır."
           : health.realism
-            ? "FaceFusion, CUDA ve gerçekçilik katmanı hazır. Yüzünü daha iyi öğrenmesi için: tools\\train_personal_model.ps1"
-            : "FaceFusion ve CUDA hazır. Gerçekçi cilt/dudak için: tools\\install_realism.ps1"
+            ? "Ultra Mod hazır · gerçekçilik açık. Daha iyi yüz detayları için: tools\\train_personal_model.ps1"
+            : "Ultra Mod hazır · gerçekçilik modeli için: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -1936,8 +1939,10 @@ async function runFaceFusionEdit() {
 
   state.isSwapping = true;
   updateSwapAvailability();
-  const variation = state.nextVariation;
-  elements.outputTitle.textContent = state.result ? "Yeni görünüm hazırlanıyor" : "Yüz düzenleniyor";
+  // Ultra always runs the complete bounded search on the server. No more
+  // rotating a single head-fit variation when the user taps "generate".
+  const variation = 0;
+  elements.outputTitle.textContent = "Ultra Mod · en iyi görünüm aranıyor";
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   if (!state.result) {
     elements.outputPlaceholder.hidden = false;
@@ -1945,7 +1950,7 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage(state.result ? "Yeni görünüm hazırlanıyor" : "Yüzün bilgisayarında işleniyor");
+  showWaitStage("Ultra Mod · benzerlik ve gerçekçilik optimize ediliyor");
 
   let generatedUrl = null;
   try {
@@ -2001,6 +2006,11 @@ async function runFaceFusionEdit() {
         throw new Error(payload.error || `Sonuç alınamadı (HTTP ${response.status}).`);
       }
     }
+    if (response.headers.get("X-Retake-Ultra") !== "on") {
+      throw new Error("Yerel motor Ultra Mod sonucunu doğrulamadı. Motoru güncelleyip tekrar başlat.");
+    }
+    const completedRounds = Number(response.headers.get("X-Retake-Ultra-Rounds"));
+    const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
     const scores = {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
@@ -2027,11 +2037,19 @@ async function runFaceFusionEdit() {
     const resultBlob = await applyGeneratedFacePatch(
       generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended"
     );
-    state.nextVariation = (variation + 1) % 4;
-    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex], scores);
-    elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
+    state.nextVariation = 0;
+    const ultraLabel = "Ultra · en iyi sonuç" + (
+      Number.isInteger(completedRounds) && completedRounds >= 1
+        ? ` (${completedRounds} tur)` : ""
+    );
+    addResult(resultBlob, ultraLabel, scores);
+    elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
-    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}` + (scoreText ? ` · ${scoreText}` : "") + ".");
+    showToast(
+      "Ultra sonuç hazır" +
+      (Number.isInteger(winnerRound) && winnerRound > 0 ? ` · seçilen tur ${winnerRound}` : "") +
+      (scoreText ? ` · ${scoreText}` : "") + "."
+    );
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;

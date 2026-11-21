@@ -101,6 +101,9 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(response.status, 200)
         self.assertTrue(health["async_jobs"])
         self.assertFalse(health["paired"])
+        self.assertTrue(health["ultra_mode"])
+        self.assertEqual(health["ultra_rounds"], 4)
+        self.assertEqual(health["ultra_search_budget_seconds"], 240)
 
     def test_requests_addressed_to_another_host_are_refused(self):
         response, _ = self.request("GET", "/health", host="evil.example")
@@ -113,7 +116,7 @@ class LocalEngineTest(EngineServerTest):
             for step in range(len(srv.JOB_STAGES)):
                 progress(step)
                 seen.append(step)
-            return PNG, {"X-Retake-Variation": "0"}
+            return PNG, {"X-Retake-Variation": "0", "X-Retake-Similarity": "0.80"}
 
         body, content_type = multipart_body()
         with patch.object(srv, "process_swap", fake_swap):
@@ -123,11 +126,15 @@ class LocalEngineTest(EngineServerTest):
             job = self.wait_for_job(accepted["job_id"])
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["step"], job["total"])
-        self.assertEqual(seen, list(range(len(srv.JOB_STAGES))))
+        self.assertEqual(seen, list(range(len(srv.JOB_STAGES))) * len(srv.ULTRA_VARIATIONS))
+        self.assertTrue(job["ultra"])
+        self.assertEqual(job["total"], len(srv.JOB_STAGES) * len(srv.ULTRA_VARIATIONS))
         response, payload = self.request("GET", f"/api/jobs/{accepted['job_id']}/result")
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Content-Type"), "image/png")
         self.assertEqual(response.getheader("X-Retake-Variation"), "0")
+        self.assertEqual(response.getheader("X-Retake-Ultra"), "on")
+        self.assertEqual(response.getheader("X-Retake-Ultra-Rounds"), "4")
         self.assertEqual(payload, PNG)
 
     def test_failed_swap_is_reported_through_the_job_and_frees_the_engine(self):

@@ -74,7 +74,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_v14, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_ultra_v15, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 
@@ -139,7 +139,7 @@ Hedef fotoğrafın tamamı gönderilmez; seçilen yüz crop'u gönderilir. Refer
 - FaceFusion motorunun döndürdüğü RGBA görüntünün RGB pikselleri, yüz kompoziti içinde zaten birleştirilmiştir. `X-Retake-Compositing: preblended` bilgisi geldiğinde tarayıcı, alfa kanalını yalnızca **değiştirilen bölgenin kapsamı** olarak kullanır; aynı görüntüyü ikinci kez alfa ile harmanlamaz. Aksi hâlde yüz değişimi yumuşak kenarlarda gereksiz yere seyrelir.
 - Yerel motor v13 son çıktı, kafa/çene şekillendirmesi uygulanmamış çıktı ve yalnızca kimlik aktarılmış alternatifi ArcFace ile karşılaştırır. Kimlik benzerliği anlamlı ölçüde artıyorsa daha sadık aday seçilir. ArcFace skoru alınamazsa güvenilir sonuç üretilemediği belirtilir; referans kimliğine göre orijinalden belirgin kötü aday geri verilmez.
 - Yeni akış bir **kalite önlemi**dir; fotoğraflardan birebir yüz üretimini veya kişiye özel eğitilmiş model edinilmesini garanti etmez. Özellikle ağır profil, düşük ışık, ağız/göz örtülmesi ve farklı yaş/sakal görünümleri için gerçek hedef fotoğraflarla gözle test yapılmalıdır.
-- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_v14` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
+- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_ultra_v15` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
 - Web sürümünü ayrıca Firebase Hosting'e yayımla. Yeni web koduyla eski motorun çalışması mümkündür, fakat yeni `preblended` düzeltmesinden yararlanmak için **web ve yerel motorun ikisinin de güncel olması gerekir**.
 - Sunucunun yanıtında `X-Retake-Identity-Selection` (head-fit / no-head-warp / identity-only) ve `X-Retake-Similarity` bulunur. ArcFace cosine değeri bir kimlik garantisi veya kullanıcının yüzde yüz benzerliği değildir. Motorun testlerinde yüz aktarımı modelleri taklit edilir; gerçek NVIDIA/FaceFusion GPU ve kullanıcı fotoğraflarıyla karşılaştırmalı manuel değerlendirme ayrıca yapılmalıdır.
 
@@ -154,3 +154,16 @@ Hedef fotoğrafın tamamı gönderilmez; seçilen yüz crop'u gönderilir. Refer
 - En yüksek fotoğraf gerçekçiliği için, bilgisayarında CUDA GPU varsa ilk sefer `./tools/install_realism.ps1` ve ardından `./tools/train_personal_model.ps1` komutlarını PowerShell'de çalıştır. Sonra `./tools/start_facefusion_retake.ps1` ile motoru yeniden başlat. (PowerShell'de normal kullanım: `.\\tools\\install_realism.ps1`, `.\\tools\\train_personal_model.ps1`, `.\\tools\\start_facefusion_retake.ps1`.)
 - Canlı Firebase sitesi ve kullanıcının bilgisayarında çalışan FaceFusion motoru **ayrı bileşenlerdir**: GitHub'a yeni kod eklemek, mevcut açık yerel motoru veya Firebase Hosting'i otomatik güncellemez. Her ikisini de yayımlayıp başlatmadan çıktı kalitesi değişmez.
 - `X-Retake-Identity-Source` (all-25/consensus/pose-match), `X-Retake-Texture-Source` (average/reference-NN) ve `X-Retake-Identity-Selection` yanıt başlıkları seçimi açıklar. Gerçek hedefler üzerinde görsel karşılaştırma, ağız/göz şekli ve cilt detaylarının uzman/göz değerlendirmesi hâlâ gereklidir.
+
+
+## 10. Retake v15 — Her zaman Ultra Mod
+
+**Mod seçimi yoktur.** Her üretim, varsayılan olarak kalite odaklı `Ultra` araması yapar. Dört farklı parametre seti değerlendirilir: (0) otomatik, (1) geometriyi koruyan, (2) daha güçlü oran ayarı, (3) daha yumuşak yüz dönüşümü. Bunlar farklı **orijinal-hedef** üretimleridir: bir turun ürettiği fotoğraf sonraki tura yeniden girdi olarak verilmez. Bu nedenle hatalar tekrarlanan üretimlerle artmaz.
+
+Retake her turu ArcFace ile sayısal olarak ölçer. Belirgin şekilde daha yüksek kimlik benzerliği daha doğal görüntüden önce gelir; benzerlik neredeyse eşitse kimlik korumalı fotogerçekçilik ve gerçek referans dokusunu tercih edebilir. Yerel motorun seçtiği finalist dışındaki ara sonuçlar web arayüzüne gönderilmez. İsteğin sonundaki `X-Retake-Ultra`, `X-Retake-Ultra-Rounds`, `X-Retake-Ultra-Winner`, `X-Retake-Ultra-Elapsed` başlıkları tanılama içindir.
+
+Varsayılan **240 saniye arama bütçesi** yeni tur başlatmaya devam edip etmeyeceğini belirler; bu değer ne en az 4 dakika boş bekleme ne de tam 4 dakikada bitirme garantisidir. CUDA işlemine başlandıktan sonra ilgili tur tamamlanır; dolayısıyla daha uzun çalışabilir. Birden çok tur biterse en yüksek doğrulanmış aday gösterilir; son tur daha kötüyse önceki en iyi sonuç kullanılır. İlk işlemlerde GPU kaynakları/model yüklemeleri daha fazla zaman alabilir.
+
+Sağlık denetiminde `model=retake_hybrid_25_reference_ultra_v15`, `ultra_mode=true`, `ultra_rounds=4`, `ultra_search_budget_seconds=240` görülmelidir. Güncellenmemiş motorda web arayüzü Ultra çalışıyor izlenimi vermez; önce yerel kodu güncelleyip servisi yeniden başlat. GitHub'a birleştirmek Firebase sitesini kendiliğinden yayımlamaz.
+
+Yüzün referanslarla **birebir aynı** olacağı vaat edilmez. ArcFace bir kosinüs benzerliği ölçer; fotoğrafın gerçekçiliğini, kimlik ispatını veya insan algısındaki benzerliği tek başına garanti etmez.

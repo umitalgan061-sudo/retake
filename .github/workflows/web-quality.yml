@@ -65,7 +65,7 @@ jobs:
       - name: Validate repository assets
         run: python3 tools/validate_assets.py
       - name: Check local FaceFusion server and ArcFace worker Python syntax
-        run: python3 -m py_compile tools/facefusion_local_server.py tools/facefusion_identity_worker.py tools/identity_consistency.py tools/facefusion_quality.py tools/retake_compositing.py tools/retake_cache.py
+        run: python3 -m py_compile tools/facefusion_local_server.py tools/facefusion_identity_worker.py tools/identity_consistency.py tools/identity_selection.py tools/facefusion_quality.py tools/retake_compositing.py tools/retake_cache.py
       - name: Install OpenCV and NumPy for the compositing tests
         run: python3 -m pip install --quiet numpy opencv-python-headless
       - name: Run local FaceFusion configuration tests

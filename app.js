@@ -287,9 +287,9 @@ async function checkFaceFusionStatus() {
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
-          health.model !== "retake_hybrid_25_reference_ultra_v16") {
+          !["retake_hybrid_25_reference_ultra_v16", "retake_hybrid_25_reference_ultra_v17"].includes(health.model)) {
         throw new Error(
-          "Retake Ultra-420 motoru eski. Yerel FaceFusion v11/v15 yerine v16 olmalı: git pull yapıp motoru kapat/aç."
+          "Retake Ultra-420 motoru eski. Yerel FaceFusion en az v16 olmalı: git pull yapıp motoru yeniden başlat."
         );
       }
       state.faceFusionStatus = {
@@ -635,7 +635,8 @@ function selectResult(index) {
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
-    item.realFace ? "gerçek fotoğraf dokusu" : ""
+    item.realFace ? "gerçek fotoğraf dokusu" : "",
+    item.rimCleanup ? "yüz konturu temizlendi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
   elements.qualityBadge.hidden = !quality;
@@ -652,6 +653,7 @@ function addResult(blob, label, scores = {}) {
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
+    rimCleanup: scores.rimCleanup === true,
     realism: scores.realism === true,
     texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null
@@ -2022,6 +2024,7 @@ async function runFaceFusionEdit() {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
+      rimCleanup: response.headers.get("X-Retake-Rim-Cleanup") === "on",
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
       detailScore,

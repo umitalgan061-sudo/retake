@@ -1656,7 +1656,7 @@ async function buildLocalFaceFusionInputs() {
       anchors: face.jaw.anchors.map(toCanvas),
       eyes: face.jaw.eyes.map(toCanvas),
       frontalness: face.jaw.frontalness
-    }, profile.jawContour)
+    }, profile.jawContour, { strength: 1.0, maxShift: 0.10 })
     : null;
   // Always prepare pose-matched real-reference crops for the lower-face-only
   // candidate. This does NOT activate the full-face transplant switch.

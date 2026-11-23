@@ -221,3 +221,21 @@ Set-Location "C:\\AI\\retake"
 ```
 
 Yeni yerel motorun `/health` yanıtında `model=retake_hybrid_25_reference_ultra_v18` görünmelidir. Canlı `app.js` dosyasında `X-Retake-Lower-Face-Transfer` bulunması web yayınının güncelliğine işarettir. Güncel arayüz, v18 motorunu zorunlu kılar.
+
+## Retake v19 — full-face identity reconstruction (Ultra-420)
+
+Retake v19 now compares **three distinct kinds of identity-preserving candidate** automatically: FaceFusion's original masked AI identity, a 478-point triangulated transfer of the person's own *beard/moustache/chin*, and a broader reference **full-face** transfer including visible skin, eyes, nose and lower-face detail. The reference face is warped to the target pose and lighting; the target's mouth opening, hairline, scene, clothes and outer image are preserved. Since FaceFusion's official `--face-mask-regions` choices do **not** include a beard region, the real-reference candidate explicitly covers beard pixels **even where the skin-only FaceFusion swap left the original facial hair unchanged**. Masks fade within the mesh; mismatched poses and visible seam failures are rejected.
+
+**Selection is not forced.** Every reference candidate competes against the pure AI candidate using local ArcFace, invisible seam, texture and realism gates. A near-tied complete-reference candidate can win, but never at the cost of a significant verified identity drop. The source reference shortlist now tolerates moderate pose differences, which are separately verified by the real-photo landmark fit. Some occlusions (a hand over the face) cannot be reliably detected without additional segmentation: those photos may need a different source/pose.
+
+**GPU time:** Up to 24 identity variants still use a **420-second search budget and a minimum 420-second elapsed time** for a successful result. The heavyweight diffusion/personal LoRA photographic-realism stage now runs **once, on the leading verified finalist** rather than once in each candidate. If it worsens identity/texture, the original best stays. Reference triangle warp results are cached within each round rather than computed three times for every tone setting. A running GPU pass can exceed 420 seconds; no absolute completion SLA or exact 100% identity guarantee is possible.
+
+**Activate the already-merged code on your Windows PC and Firebase site**:
+
+```powershell
+Set-Location "C:\\AI\\retake"
+Set-ExecutionPolicy -Scope Process Bypass
+.\\tools\\update_retake_ultra.ps1
+```
+
+The helper pulls main, tries `firebase deploy --only hosting:retake06 --project projelerim-8fecd` if CLI/authentication is available, and restarts only the Retake Python bridge. It **does not** magically install missing CUDA, diffusion checkpoints or train a personal LoRA. To confirm the new engine: `(Invoke-RestMethod "http://127.0.0.1:8765/health").model` must equal `retake_hybrid_25_reference_ultra_v19`. The live `app.js` should contain `X-Retake-Complete-Identity`. GitHub merge does not automatically publish or restart the user's computer.

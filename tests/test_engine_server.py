@@ -268,6 +268,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
         self.arcface_calls = 0
         self.facefusion_calls = []
+        self.transplant_modes = []
         rng = np.random.default_rng(5)
         target = np.full((512, 391, 3), (120, 150, 205), np.uint8)
         target = np.clip(target + rng.normal(0, 3, target.shape), 0, 255).astype(np.uint8)
@@ -341,6 +342,7 @@ class CachedPipelineTest(unittest.TestCase):
         return boost
 
     def fake_transplant(self, result, target, real_face, face_width):
+        self.transplant_modes.append(real_face.get("mode"))
         painted = result.copy()
         cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
         return painted, True
@@ -355,7 +357,7 @@ class CachedPipelineTest(unittest.TestCase):
             "headFit": {"scaleX": 0.97, "scaleY": 1.04}
         }
         if real_face:
-            metadata["realFace"] = {"mode": "lower" if real_face == "lower" else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
+            metadata["realFace"] = {"mode": real_face if real_face in ("lower", "full", "both") else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
             metadata["realReferenceBytes"] = [b"photo"]
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
@@ -511,6 +513,28 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Real-Face"], "off",
                          "lower-only mode must not pretend to have pasted the whole face")
         self.assertEqual(headers["X-Retake-Variation"], "2")
+
+    def test_complete_and_lower_reference_face_compete_for_identity(self):
+        # Three blends, each evaluating [model, lower reference, full photo].
+        self.blend_scores = [.70, .81, .83, .68, .80, .81, .69, .79, .80]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(len(self.blend_probes), 9)
+        self.assertEqual(headers["X-Retake-Real-Face"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "on")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
+
+    def test_lower_face_wins_when_full_reference_loses_identity(self):
+        self.blend_scores = [.70, .85, .79, .68, .83, .78, .69, .82, .77]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+
+    def test_real_reference_warp_is_cached_across_three_tone_variants(self):
+        self.run_swap(0, [], real_face="both")
+        self.assertEqual(self.transplant_modes.count("lower"), 1)
+        self.assertEqual(self.transplant_modes.count("full"), 1)
 
     def test_measured_jaw_variant_has_dedicated_header(self):
         jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}

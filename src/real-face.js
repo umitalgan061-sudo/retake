@@ -12,7 +12,11 @@ export const POSE_KEY_POINTS = [1, 4, 6, 10, 33, 133, 152, 159, 145, 263, 362, 3
 // Generous: the mesh warp absorbs expression differences (a frown, a tilt),
 // and the engine measures how well each candidate actually fits and drops
 // those that do not.
-export const MAX_POSE_DISTANCE = 0.13;
+// v19: allow moderate expression and chin-shape differences when 25 reference
+// photos are available. The local worker still rejects poor mesh fit and
+// ArcFace/seam checks must approve the completed face; a turned head remains
+// excluded. The old 0.13 ceiling often prevented any full-face candidate.
+export const MAX_POSE_DISTANCE = 0.18;
 export const REFERENCE_CROP_MAX_EDGE = 1024;
 
 /** Pose/expression signature: key points in the eye frame (position, size and roll free). */

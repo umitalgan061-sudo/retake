@@ -5,8 +5,10 @@ moves high-frequency stubble, moustache and chin detail from a real reference
 photo through its 478-point MediaPipe geometry. It intentionally leaves lips,
 eyes, hair, clothing and the original photo outside the swapped region alone.
 
-This module proposes an additional candidate; ArcFace and compositing gates
-decide whether it is suitable. It is never automatically the final result.
+The candidate is approved by subsequent ArcFace and compositing gates. In
+particular, FaceFusion's semantic parser has no dedicated "beard" choice:
+we cannot gate the transplant solely on where the FaceFusion swap already
+changed pixels, or the target person's original beard would remain.
 """
 from __future__ import annotations
 
@@ -28,7 +30,7 @@ except ImportError:
 
 # Include the upper-lip moustache without reaching the nostrils or lower nose.
 MOUSTACHE = (98, 2, 327, 425, 291, 0, 61, 205)
-MIN_LOWER_FIT = 0.02
+MIN_LOWER_FIT = -0.12
 
 
 def lower_face_mask(
@@ -76,8 +78,11 @@ def choose_and_transfer_lower_face(
     """Return an additional lower-face candidate using real photo structure.
 
     Incompatible pose or missing facial hair should not introduce an
-    unnatural face-shaped patch. FaceFusion's own occlusion/region mask is
-    honored and every resulting candidate must be ArcFace-screened upstream.
+    unnatural face-shaped patch. The landmark geometry excludes hair, eyes,
+    lips and clothing; existing FaceFusion changes guide the opacity but
+    MUST NOT be the only gate (its parser has no separate beard label).
+    The final candidate must pass ArcFace and seam screening upstream.
+    Unmodelled hands over the beard remain a limitation.
     """
     if not candidates or not 0.0 < strength <= 1.0:
         raise ValueError("Alt yüz aktarma adayı veya gücü geçersiz.")
@@ -95,11 +100,19 @@ def choose_and_transfer_lower_face(
         source_points = np.asarray(reference_points, np.float32)
         if source_points.shape != (478, 2):
             continue
+        # Do not use the swap's change mask here: FaceFusion marks only
+        # skin/eyes/nose/lips, frequently leaving original beard pixels
+        # untouched. The geometry and mouth exclusion supply the safe region.
         warped, coverage, full_weight = _prepare_candidate(
-            swapped, target, candidate, points, face_width, allowed
+            swapped, target, candidate, points, face_width,
+            np.ones_like(allowed, dtype=np.float32)
         )
         transfer = lower_face_mask(points, source_points, target.shape[:2], face_width)
-        weight = full_weight * transfer * np.clip(allowed, 0.0, 1.0)
+        # Allow substantial real reference hair transfer even where the
+        # semantic swap did not edit pixels, while preserving its evidence
+        # of trusted changed pixels and retaining a feathered jaw margin.
+        confidence = 0.80 + 0.20 * np.clip(allowed, 0.0, 1.0)
+        weight = full_weight * transfer * confidence
         if int(np.count_nonzero(weight > 0.1)) < max(64, int(face_width * face_width * 0.025)):
             continue
         filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])

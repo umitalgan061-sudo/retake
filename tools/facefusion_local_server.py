@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v18"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v19"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -254,8 +254,8 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
     except (ValueError, TypeError) as error:
         raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
     mode = value.get("mode", "full")
-    if mode not in ("full", "lower"):
-        raise ValueError("Gerçek fotoğraf aktarım modu full veya lower olmalı.")
+    if mode not in ("full", "lower", "both"):
+        raise ValueError("Gerçek fotoğraf aktarım modu full, lower veya both olmalı.")
     return {"mode": mode, "targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
@@ -813,7 +813,17 @@ def choose_composite(
         if names[item[1]].find("referans alt yüz") >= 0
         and item[0] >= value - 0.002
     ]
-    if matched_lower:
+    # User-requested complete reconstruction: a true reference image may
+    # win only after the same border threshold and within a strict ArcFace
+    # near-tie. Full-face isn't forced on incompatible pose/light/expression.
+    matched_full = [
+        item for item in scored
+        if "tam referans yüzü" in names[item[1]]
+        and item[0] >= max(score for score, _, _ in scored) - 0.002
+    ]
+    if matched_full:
+        value, path, border = max(matched_full, key=lambda item: item[0])
+    elif matched_lower:
         value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
         f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
@@ -989,7 +999,8 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
         else:
             transplanted, chosen, fits = choose_and_transplant(
                 result, target, candidates,
-                np.asarray(real_face["targetLandmarks"], np.float32), face_width
+                np.asarray(real_face["targetLandmarks"], np.float32), face_width,
+                complete_face=real_face.get("mode") == "full"
             )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
@@ -1097,7 +1108,18 @@ def blend_lower_face(
     # browser keep every other source pixel byte-for-byte.
     used_real_face = False
     if real_face is not None:
-        result, used_real_face = apply_real_face(result, target, real_face, face_width)
+        # All compositing variants in one identity round start from the same
+        # unprocessed BGR image. Real-photo triangulation is expensive:
+        # compute each lower/full transfer once, then try the different
+        # harmonisation strengths on that identical candidate.
+        cached = real_face.get("_precomposite_cache")
+        if cached is not None and cached.shape == result.shape:
+            result = cached.copy()
+            used_real_face = True
+        else:
+            result, used_real_face = apply_real_face(result, target, real_face, face_width)
+            if used_real_face:
+                real_face["_precomposite_cache"] = result.copy()
     options: dict[str, float] = {}
     if shading_strength is not None:
         options["shading_strength"] = shading_strength
@@ -1343,16 +1365,20 @@ def process_swap(
         beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
         blends: list[tuple[Path, float]] = []
         labels: list[str] = []
-        transplanted: set[Path] = set()
-        # v18 automatically tries pose-matched lower-face reference detail,
-        # but only in several targeted rounds: heavy piecewise warps in all
-        # 24 rounds would waste the 420-second search budget.
-        # Full-face transplants remain a separate explicit user choice.
+        transplanted: dict[Path, str] = {}
+        # In selected rounds compare the complete reference face, its
+        # beard/jaw-only detail, and model-only identity. Every option starts
+        # from the original target; only ArcFace-verified, seamless results
+        # are eligible to win. Restrict extra warps to budgeted rounds.
         lower_reference_rounds = (0, 2, 7, 11, 15, 19, 21, 23)
-        try_reference = bool(real_face) and (
-            real_face.get("mode") == "full" or variation in lower_reference_rounds
-        )
-        transplant_options = [None, real_face] if try_reference else [None]
+        full_reference_rounds = (0, 4, 11, 19)
+        transplant_options: list[dict[str, Any] | None] = [None]
+        if real_face:
+            mode = real_face.get("mode", "full")
+            if mode in ("lower", "both") and variation in lower_reference_rounds:
+                transplant_options.append({**real_face, "mode": "lower"})
+            if mode in ("full", "both") and (mode == "full" or variation in full_reference_rounds):
+                transplant_options.append({**real_face, "mode": "full"})
         for index, (harmonize, shading_cap) in enumerate(COMPOSITE_VARIANTS):
             shading = user_shading if user_shading is not None else None
             if index > 0:
@@ -1366,11 +1392,11 @@ def process_swap(
                     target_path, identity_source, appearance_output, path, metadata["faceBounds"],
                     detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
                 ):
-                    transplanted.add(path)
+                    transplanted[path] = transplant.get("mode", "full") if transplant else "full"
                 blends.append((path, float(report.get("border", 0.0))))
                 label = f"ton {harmonize:g}"
                 if path in transplanted:
-                    label += " + referans alt yüz" if real_face and real_face.get("mode") == "lower" else " + doku nakli"
+                    label += " + referans alt yüz" if transplanted[path] == "lower" else " + tam referans yüzü"
                 labels.append(label)
         texture_blends: set[Path] = set()
         if texture_output is not None:
@@ -1392,11 +1418,8 @@ def process_swap(
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
-        used_lower_face = (
-            used_real_face and real_face is not None
-            and real_face.get("mode") == "lower"
-        )
-        used_full_face = used_real_face and not used_lower_face
+        used_lower_face = transplanted.get(chosen_blend) == "lower"
+        used_full_face = transplanted.get(chosen_blend) == "full"
         chosen_texture = (
             f"reference-{texture_reference_index + 1:02d}"
             if chosen_blend in texture_blends and texture_reference_index is not None
@@ -1597,6 +1620,7 @@ def process_swap(
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
             "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
+            "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
@@ -1632,7 +1656,7 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
-    clock=None, sleeper=None, on_hold=None,
+    clock=None, sleeper=None, on_hold=None, on_finalist=None,
     min_duration_seconds: float | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
@@ -1649,6 +1673,13 @@ def run_ultra_search(
     best_round = 0
     completed = 0
     errors: list[Exception] = []
+    # Diffusion is expensive and stochastic. Running 2–3 diffusion renders
+    # in every one of 24 variants exhausted the seven-minute search window
+    # before Retake could actually compare different identities. Compare
+    # all feasible identity candidates first, then invest the heavy GPU
+    # realism pass in the single best validated finalist.
+    has_realism = bool(caches and caches.get("realism"))
+    search_caches = {**caches, "realism": None} if has_realism else caches
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -1666,7 +1697,7 @@ def run_ultra_search(
         try:
             image, headers = process_swap(
                 facefusion_dir, pixel_boost, enhancer_enabled,
-                with_variation(parsed, variation), report, caches
+                with_variation(parsed, variation), report, search_caches
             )
         except Exception as error:
             errors.append(error)
@@ -1689,6 +1720,27 @@ def run_ultra_search(
             raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
+    # One GPU realism investment on the best identity, not 24. This
+    # evaluation always uses the untouched original target and reference
+    # sources; it never feeds a generated face back as identity input.
+    if has_realism:
+        try:
+            if on_finalist is not None:
+                on_finalist()
+            upgraded_image, upgraded_headers = process_swap(
+                facefusion_dir, pixel_boost, enhancer_enabled,
+                with_variation(parsed, ULTRA_VARIATIONS[best_round - 1]),
+                lambda *_args, **_kwargs: None, caches
+            )
+            if prefer_ultra_candidate(upgraded_headers, best_headers):
+                best_result, best_headers = upgraded_image, upgraded_headers
+                print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
+            else:
+                print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+        except Exception as error:
+            # Realism is optional: preserve a previously verified result.
+            print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
+
     # Spend the available interval trying distinct variants; when the GPU
     # finishes them faster, honor the explicit seven-minute minimum without
     # pointlessly running the identical model again. Failed jobs return early.
@@ -1707,6 +1759,7 @@ def run_ultra_search(
         "X-Retake-Ultra-Rounds": str(completed),
         "X-Retake-Ultra-Winner": str(best_round),
         "X-Retake-Ultra-Elapsed": str(round(clock() - started, 1)),
+        "X-Retake-Ultra-Realism-Policy": "finalist-only" if has_realism else "not-installed",
     }
     print(
         f"[Ultra] Sonuç: {completed} doğrulanmış tur, kazanan {best_round}. tur; "
@@ -1727,6 +1780,13 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         # Actual inference has finished; mark 99% until requested minimum.
         job["step"] = job["total"] - 1
         job["stage_started"] = None  # do not log final waiting as GPU inference
+
+    def finalist() -> None:
+        # No false ETA: the diffusion worker's duration is GPU-dependent
+        # and not covered by the bounded 420-second candidate search.
+        job["stage"] = "Ultra · en iyi yüz için son fotogerçekçilik geçişi"
+        job["step"] = job["total"] - 1
+        job["stage_started"] = None
 
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
@@ -1762,7 +1822,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None)
             },
-            on_hold=hold
+            on_hold=hold, on_finalist=finalist
         )
         close_stage(time.time())
         job["result"] = result
@@ -1893,7 +1953,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
-            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused"
+            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
+            "X-Retake-Ultra-Realism-Policy"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

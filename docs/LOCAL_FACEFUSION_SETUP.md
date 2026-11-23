@@ -207,3 +207,20 @@ Set-Location "C:\\AI\\retake"
 ```
 
 Beklenen: `retake_hybrid_25_reference_ultra_v18`. Yeni `app.js` ve `X-Retake-Lower-Face-Transfer` başlıkları Firebase'e ancak hosting deploy ile gider. Ultra-420 minimum 420 sn kalır.
+
+## 13. Retake v19 — tam yüzün referansa göre aktarımı
+
+**Tek parça kusursuz AI vaadi yerine üç katmanlı arama:** (1) orijinal AlphaFace/InSwapper, (2) poz uyumlu gerçek referansın sakal/bıyık/çene detayı, (3) gerçek referansın tüm iç yüz hatları ve cilt ayrıntıları. `realFace.mode=both` geldiğinde v19 her iki referans adayını uygun Ultra varyasyonlarında deniyor. `lower` ve `full` geriye dönük destekleniyor. Kullanıcı ayrıca tam-yüz aktarım kutusunu seçerse `full` tek referans modu kullanılabilir. Her modda dudakların ağız açıklığı, saç çizgisi ve yüzün dışı korunur; farklı poz, el/gözlük veya ışık bazı adayları eler.
+
+**Eski modelin temel hatasının giderilmesi:** FaceFusion belgelerindeki `--face-mask-regions` seçeneklerinde `beard` yok. v18 alt yüz naklini de `_changed_mask` üzerine iki kez bağladığından orijinal sakal sıkça kalıyordu. v19, bu maske değişmemiş olsa bile *yüz ağı içindeki* gerçek referans alt yüzü taşıyabilir; dudak ve göz alanları ayrıca dışlanır. Adayların tümü gerçek ArcFace/skor ve dikiş kontrollü, görünür bozuk adaylar geri alınır. Bu yöntem her saç/sakal türünde ve el gibi örtücülerde kusursuz sonuca garanti vermez.
+
+**Verimlilik ve doğrulama:** Real photo 478 noktalı triangle warp içindeki üç ayrı ton birleşimi için önbelleklenir. 24 kimlik varyasyonu ölçülür, ağır difüzyon/kişisel LoRA yalnızca en iyi doğrulanmış finalistin yeniden işlemesinde çalışır. 420 saniye arama penceresi ve minimum başarı süresi korunur; son CUDA işlemi süreyi aşabilir. `X-Retake-Complete-Identity`, `X-Retake-Lower-Face-Transfer`, `X-Retake-Jaw-Focused`, `X-Retake-Ultra-Realism-Policy` tanısal başlıklardır.
+
+**Windows+Firebase etkinleştirmesi** (Retake depounda PowerShell):
+
+```powershell
+Set-Location "C:\\AI\\retake"
+.\\tools\\update_retake_ultra.ps1
+```
+
+Beklenen `/health.model`: `retake_hybrid_25_reference_ultra_v19`. Canlı web `app.js` içindeki `X-Retake-Complete-Identity` satırı sadece arayüz sürümünü teyit eder; FaceFusion motorunu yenilemez. GitHub CI gerçek CUDA, gerçek referans görüntüleri, model ağırlıkları ve Firebase deploy yerine geçmez. Birebir kusursuz fotoğraf garanti edilemez.

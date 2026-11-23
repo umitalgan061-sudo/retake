@@ -197,3 +197,11 @@ Set-ExecutionPolicy -Scope Process Bypass
 Bu komut `git pull --ff-only origin main` yapar, Firebase CLI mevcut ve oturum açıksa `projelerim-8fecd` projesindeki `hosting:retake06` hedefine yayınlamayı dener; yalnızca Retake'nin eski Python köprüsünü durdurup FaceFusion sunucusunu v16 ile yeniden başlatır. Eşleştirme açıksa korunmaya çalışılır. CUDA/FaceFusion ve isteğe bağlı gerçekçilik modelleri zaten kurulu olmalıdır; ilk kez kurmak için `docs/LOCAL_FACEFUSION_SETUP.md` dosyasına bak. Firebase yoksa `npm install -g firebase-tools` ve `firebase login` kullan.
 
 Güncel motorun sağlık değerleri: `model=retake_hybrid_25_reference_ultra_v16`, `ultra_mode=true`, `ultra_rounds=24`, `ultra_min_seconds=420`. ArcFace'in `0.83` değeri kalibre edilmiş %83 kimlik ihtimali değildir.
+
+## Retake v17: ince koyu yüz konturu ve Ultra zaman tahmini
+
+v16 ile yapılan gerçek fotoğraf denemesinde, aktarılan yüzün alın–yanak–çene boyunca ince koyu bir kesme çizgisi oluşabildiği gözlendi. v17, yalnızca **değişmiş yüzün kenarındaki** yeni ve belirgin kararmaları tespit ederek 5×5 medyan tabanlı dar bir kontur düzeltmesini alternatif aday olarak oluşturur (`tools/retake_rim_cleanup.py`). Fotoğrafın dışı ve PNG alfa kanalı değiştirilmez. **ArcFace** ile kişisel profil benzerliği yeniden ölçülür; 0.004 mutlak kosinüs puanından daha büyük bir kayıp varsa düzeltme atılır. Bu tek başına kişisel kimlik benzerliğinin artacağını garanti etmez; çizgi artefaktını azaltmayı amaçlar.
+
+Ultra-420 tahmini kalan süre artık teorik 24 turun tamamını (ör. 73 dakika) toplamaktan kaçınır. Yeni GPU turu 420 saniyelik arama penceresi dolduğunda başlatılmaz; devam eden CUDA geçişi bu süreyi aşabilir. Eksik hız geçmişinde veya final süre beklemesinde ETA hesabı hata vermez. Ekrandaki ArcFace sayı değeri artık 83 yerine örneğin **82,8** ya da **83,3** gibi bir ondalıkla gösterilir; bu sayı doğrulanmış kişinin kimlik olasılığı değildir.
+
+Yeni sürüme geçmek için `.\\tools\\update_retake_ultra.ps1` çalıştırılmalı ve gerekirse Firebase yayını tamamlanmalıdır. Sağlık kontrolü `model=retake_hybrid_25_reference_ultra_v17` göstermelidir. Web arayüzü geçiş süresince hem v16 hem v17 Ultra motorlarına bağlanabilir.

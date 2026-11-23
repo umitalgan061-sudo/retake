@@ -684,6 +684,24 @@ class CompositeChoiceTest(unittest.TestCase):
         self.assertEqual(chosen, Path("middle.png"))
         self.assertEqual(calls, [["seamless.png", "middle.png"]], "a visible border is never scored")
 
+    def test_real_lower_face_wins_only_within_tiny_arcface_tie(self):
+        labels = ["normal", "ton 0.6 + referans alt yüz", "ton 0.35 + doku nakli"]
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.8389]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("middle.png"),
+                         "real beard detail may win only when ArcFace is effectively equal")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.82]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("seamless.png"),
+                         "do not sacrifice meaningful global identity for any beard texture")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.839]):
+            best = srv.choose_composite(
+                Path("ff"), [1.0], self.blends,
+                ["normal", "ton 0.6 + doku nakli", "normal"]
+            )
+        self.assertEqual(best, Path("seamless.png"),
+                         "full-face transplant is not rewarded just for having a reference image")
+
     def test_without_a_measurement_the_most_seamless_blend_is_kept(self):
         with patch.object(srv, "score_identity", lambda *args: [None, None]):
             self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends), Path("seamless.png"))

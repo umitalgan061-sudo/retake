@@ -46,6 +46,6 @@ test("the result is compared with the person's own photos", async () => {
   assert.equal(referenceComparison(0.76, 0.766), "fotoğraflarınla aynı düzeyde (77)");
   assert.equal(referenceComparison(0.62, 0.766), "fotoğraflarının düzeyi 77");
   assert.equal(referenceComparison(0.62, null), "");
-  assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
-  assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80 · Çok güçlü");
+  assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80,0 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
+  assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80,0 · Çok güçlü");
 });

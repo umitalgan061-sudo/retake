@@ -22,8 +22,8 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail
-    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from .retake_rim_cleanup import repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -33,8 +33,8 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail
-    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from retake_rim_cleanup import repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -50,13 +50,13 @@ JOBS_LOCK = threading.Lock()
 JOBS: dict[str, dict[str, Any]] = {}
 MAX_KEPT_JOBS = 3
 JOB_STAGES = (
-    "25 referans ArcFace ile karşılaştırılıyor",
-    "Kimlik geçişi (AlphaFace)",
-    "Kimlik pekiştirme (InSwapper)",
-    "Görünüm ve sakal geçişi (UniFace)",
-    "Dikişsiz birleştirme ve kafa oranı",
-    "Fotoğraf gerçekçiliği (difüzyon)",
-    "Kimlik benzerliği ölçülüyor",
+    "25 referans ArcFace ile karÅŸÄ±laÅŸtÄ±rÄ±lÄ±yor",
+    "Kimlik geÃ§iÅŸi (AlphaFace)",
+    "Kimlik pekiÅŸtirme (InSwapper)",
+    "GÃ¶rÃ¼nÃ¼m ve sakal geÃ§iÅŸi (UniFace)",
+    "DikiÅŸsiz birleÅŸtirme ve kafa oranÄ±",
+    "FotoÄŸraf gerÃ§ekÃ§iliÄŸi (difÃ¼zyon)",
+    "Kimlik benzerliÄŸi Ã¶lÃ§Ã¼lÃ¼yor",
 )
 REINFORCE_STAGE = 2
 REALISM_STAGE = 5
@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v21"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -183,7 +183,7 @@ def image_extension(content_type: str, payload: bytes) -> str:
         return ".jpg"
     if normalized == "image/webp" and len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
         return ".webp"
-    raise ValueError("Yalnızca geçerli PNG, JPEG veya WebP görselleri kabul edilir.")
+    raise ValueError("YalnÄ±zca geÃ§erli PNG, JPEG veya WebP gÃ¶rselleri kabul edilir.")
 
 
 MAX_JAW_CONTROLS = 32
@@ -197,7 +197,7 @@ def _point(value: Any, size: dict[str, int], margin: float) -> list[float]:
         or not -margin <= value[0] <= size["width"] + margin
         or not -margin <= value[1] <= size["height"] + margin
     ):
-        raise ValueError("Çene hattı noktaları hedef kırpımın içinde sayı çiftleri olmalı.")
+        raise ValueError("Ã‡ene hattÄ± noktalarÄ± hedef kÄ±rpÄ±mÄ±n iÃ§inde sayÄ± Ã§iftleri olmalÄ±.")
     return [float(value[0]), float(value[1])]
 
 
@@ -206,21 +206,21 @@ def _validate_jaw_warp(value: Any, size: dict[str, int], bounds: dict[str, float
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise ValueError("Çene hattı verisi nesne olmalı.")
+        raise ValueError("Ã‡ene hattÄ± verisi nesne olmalÄ±.")
     controls, anchors = value.get("controls"), value.get("anchors", [])
     if not isinstance(controls, list) or not 1 <= len(controls) <= MAX_JAW_CONTROLS:
-        raise ValueError(f"Çene hattı 1 ile {MAX_JAW_CONTROLS} arasında kontrol noktası içermeli.")
+        raise ValueError(f"Ã‡ene hattÄ± 1 ile {MAX_JAW_CONTROLS} arasÄ±nda kontrol noktasÄ± iÃ§ermeli.")
     if not isinstance(anchors, list) or len(anchors) > MAX_JAW_ANCHORS:
-        raise ValueError(f"Çene hattı en fazla {MAX_JAW_ANCHORS} sabit nokta içerebilir.")
+        raise ValueError(f"Ã‡ene hattÄ± en fazla {MAX_JAW_ANCHORS} sabit nokta iÃ§erebilir.")
     margin = 0.25 * max(size["width"], size["height"])
     limit = bounds["width"] * 0.2
     checked = []
     for control in controls:
         if not isinstance(control, dict):
-            raise ValueError("Çene hattı kontrol noktası geçersiz.")
+            raise ValueError("Ã‡ene hattÄ± kontrol noktasÄ± geÃ§ersiz.")
         start, end = _point(control.get("from"), size, margin), _point(control.get("to"), size, margin)
         if math.hypot(end[0] - start[0], end[1] - start[1]) > limit:
-            raise ValueError("Çene hattı kaydırması izin verilen sınırı aşıyor.")
+            raise ValueError("Ã‡ene hattÄ± kaydÄ±rmasÄ± izin verilen sÄ±nÄ±rÄ± aÅŸÄ±yor.")
         checked.append({"from": start, "to": end})
     return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors]}
 
@@ -234,7 +234,7 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
     if value is None:
         return None
     if not isinstance(value, dict):
-        raise ValueError("Gerçek fotoğraf verisi nesne olmalı.")
+        raise ValueError("GerÃ§ek fotoÄŸraf verisi nesne olmalÄ±.")
     try:
         from .retake_detail import validate_mesh
     except ImportError:
@@ -246,16 +246,16 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
         if references is None and "referenceLandmarks" in value:  # single-candidate form
             references = [{"landmarks": value.get("referenceLandmarks")}]
         if not isinstance(references, list) or not 1 <= len(references) <= MAX_REAL_FACE_CANDIDATES:
-            raise ValueError(f"1–{MAX_REAL_FACE_CANDIDATES} aday olmalı.")
+            raise ValueError(f"1â€“{MAX_REAL_FACE_CANDIDATES} aday olmalÄ±.")
         meshes = [
             validate_mesh(item.get("landmarks") if isinstance(item, dict) else None, 4096, 4096, 0).tolist()
             for item in references
         ]
     except (ValueError, TypeError) as error:
-        raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
+        raise ValueError(f"GerÃ§ek fotoÄŸraf yÃ¼z aÄŸÄ± geÃ§ersiz: {error}") from error
     mode = value.get("mode", "full")
     if mode not in ("full", "lower", "both"):
-        raise ValueError("Gerçek fotoğraf aktarım modu full, lower veya both olmalı.")
+        raise ValueError("GerÃ§ek fotoÄŸraf aktarÄ±m modu full, lower veya both olmalÄ±.")
     return {"mode": mode, "targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
@@ -270,31 +270,31 @@ def _validate_target_landmarks(value: Any, size: dict[str, int]) -> list[list[fl
     try:
         points = validate_mesh(value, size["width"], size["height"], 0.25 * max(size["width"], size["height"]))
     except (ValueError, TypeError) as error:
-        raise ValueError(f"Hedef yüz ağı geçersiz: {error}") from error
+        raise ValueError(f"Hedef yÃ¼z aÄŸÄ± geÃ§ersiz: {error}") from error
     return points.tolist()
 
 
 def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if not isinstance(metadata, dict):
-        raise ValueError("Profil metadata alanı geçerli JSON nesnesi olmalı.")
+        raise ValueError("Profil metadata alanÄ± geÃ§erli JSON nesnesi olmalÄ±.")
     weights = metadata.get("referenceWeights")
     if not isinstance(weights, list) or len(weights) != reference_count:
-        raise ValueError("Referans kalite ağırlıkları, gönderilen referans sayısıyla eşleşmiyor.")
+        raise ValueError("Referans kalite aÄŸÄ±rlÄ±klarÄ±, gÃ¶nderilen referans sayÄ±sÄ±yla eÅŸleÅŸmiyor.")
     normalized_weights: list[int] = []
     for weight in weights:
         if isinstance(weight, bool) or not isinstance(weight, (int, float)) or int(weight) != weight or not 1 <= int(weight) <= 3:
-            raise ValueError("Her referans ağırlığı 1 ile 3 arasında tam sayı olmalı.")
+            raise ValueError("Her referans aÄŸÄ±rlÄ±ÄŸÄ± 1 ile 3 arasÄ±nda tam sayÄ± olmalÄ±.")
         normalized_weights.append(int(weight))
 
     face_bounds = metadata.get("faceBounds")
     if not isinstance(face_bounds, dict):
-        raise ValueError("Hedef yüz sınırları eksik.")
+        raise ValueError("Hedef yÃ¼z sÄ±nÄ±rlarÄ± eksik.")
     required = ("x", "y", "width", "height")
     if any(isinstance(face_bounds.get(key), bool) or not isinstance(face_bounds.get(key), (int, float)) for key in required):
-        raise ValueError("Hedef yüz sınırları sayısal olmalı.")
+        raise ValueError("Hedef yÃ¼z sÄ±nÄ±rlarÄ± sayÄ±sal olmalÄ±.")
     bounds = {key: float(face_bounds[key]) for key in required}
     if bounds["width"] <= 0 or bounds["height"] <= 0:
-        raise ValueError("Hedef yüz sınırları pozitif genişlik ve yüksekliğe sahip olmalı.")
+        raise ValueError("Hedef yÃ¼z sÄ±nÄ±rlarÄ± pozitif geniÅŸlik ve yÃ¼ksekliÄŸe sahip olmalÄ±.")
     target_size = metadata.get("targetSize", {"width": DEFAULT_TARGET_WIDTH, "height": DEFAULT_TARGET_HEIGHT})
     if (
         not isinstance(target_size, dict)
@@ -306,15 +306,15 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
         or not MIN_TARGET_EDGE <= target_size["height"] <= MAX_TARGET_HEIGHT
     ):
         raise ValueError(
-            f"Hedef kırpım boyutu {MIN_TARGET_EDGE} px ile "
-            f"{MAX_TARGET_WIDTH}×{MAX_TARGET_HEIGHT} px arasında tam sayı olmalı."
+            f"Hedef kÄ±rpÄ±m boyutu {MIN_TARGET_EDGE} px ile "
+            f"{MAX_TARGET_WIDTH}Ã—{MAX_TARGET_HEIGHT} px arasÄ±nda tam sayÄ± olmalÄ±."
         )
     if (
         bounds["x"] < 0 or bounds["y"] < 0
         or bounds["x"] + bounds["width"] > target_size["width"]
         or bounds["y"] + bounds["height"] > target_size["height"]
     ):
-        raise ValueError("Hedef yüz sınırları, gönderilen portre kırpımının dışında.")
+        raise ValueError("Hedef yÃ¼z sÄ±nÄ±rlarÄ±, gÃ¶nderilen portre kÄ±rpÄ±mÄ±nÄ±n dÄ±ÅŸÄ±nda.")
     head_fit = metadata.get("headFit", {"scaleX": 1.0, "scaleY": 1.0})
     if (
         not isinstance(head_fit, dict)
@@ -326,10 +326,10 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
             for key in ("scaleX", "scaleY")
         )
     ):
-        raise ValueError(f"Kafa oranı ölçekleri {HEAD_FIT_MIN} ile {HEAD_FIT_MAX} arasında sayı olmalı.")
+        raise ValueError(f"Kafa oranÄ± Ã¶lÃ§ekleri {HEAD_FIT_MIN} ile {HEAD_FIT_MAX} arasÄ±nda sayÄ± olmalÄ±.")
     variation = metadata.get("variation", 0)
     if isinstance(variation, bool) or not isinstance(variation, int) or not 0 <= variation < len(FACE_SWAP_VARIATIONS):
-        raise ValueError(f"Görünüm alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasında tam sayı olmalı.")
+        raise ValueError(f"GÃ¶rÃ¼nÃ¼m alternatifi 0 ile {len(FACE_SWAP_VARIATIONS) - 1} arasÄ±nda tam sayÄ± olmalÄ±.")
     jaw_warp = _validate_jaw_warp(metadata.get("jawWarp"), target_size, bounds)
     real_face = _validate_real_face(metadata.get("realFace"), target_size)
     target_landmarks = _validate_target_landmarks(metadata.get("targetLandmarks"), target_size)
@@ -347,7 +347,7 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
                 for value in pose_distances
             )
         ):
-            raise ValueError("Referans poz mesafeleri 25 adet geçerli sayı veya null içermeli.")
+            raise ValueError("Referans poz mesafeleri 25 adet geÃ§erli sayÄ± veya null iÃ§ermeli.")
     return {
         "poseDistances": pose_distances,
         "targetLandmarks": target_landmarks,
@@ -363,7 +363,7 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
 
 def validate_reference_count(reference_count: int) -> None:
     if reference_count != MAX_REFERENCES:
-        raise ValueError(f"Retake hibrit profil işlemi için tam olarak {MAX_REFERENCES} referans fotoğrafı gerekli.")
+        raise ValueError(f"Retake hibrit profil iÅŸlemi iÃ§in tam olarak {MAX_REFERENCES} referans fotoÄŸrafÄ± gerekli.")
 
 
 def score_identity(
@@ -394,7 +394,7 @@ def score_identity(
             encoding="utf-8", errors="replace", timeout=600, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"[ArcFace] Benzerlik ölçülemedi: {error}", flush=True)
+        print(f"[ArcFace] Benzerlik Ã¶lÃ§Ã¼lemedi: {error}", flush=True)
         return empty
     marker = "RETAKE_IDENTITY_REPORT="
     lines = [line[len(marker):] for line in completed.stdout.splitlines() if line.startswith(marker)]
@@ -404,7 +404,7 @@ def score_identity(
         report = {}
     values = report.get("similarities") if report.get("ok") else None
     if not isinstance(values, list) or len(values) != len(probe_paths):
-        print("[ArcFace] Benzerlik ölçülemedi: " + tail(completed.stderr + "\n" + completed.stdout, 600), flush=True)
+        print("[ArcFace] Benzerlik Ã¶lÃ§Ã¼lemedi: " + tail(completed.stderr + "\n" + completed.stdout, 600), flush=True)
         return empty
     return [float(value) if isinstance(value, (int, float)) else None for value in values]
 
@@ -412,15 +412,15 @@ def score_identity(
 def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
     worker_path = Path(__file__).with_name("facefusion_identity_worker.py")
     if not worker_path.is_file():
-        raise IdentityVerificationError("ArcFace doğrulama worker dosyası bulunamadı.")
+        raise IdentityVerificationError("ArcFace doÄŸrulama worker dosyasÄ± bulunamadÄ±.")
     command = [
         sys.executable, str(worker_path),
         "--facefusion-dir", str(facefusion_dir),
         "--reference-paths", *[str(path) for path in reference_paths]
     ]
     print(
-        f"ArcFace ön kontrolü başlıyor: {len(reference_paths)} referans; "
-        "yüz algılama ve ArcFace ONNX ağırlıkları kontrol edilecek.",
+        f"ArcFace Ã¶n kontrolÃ¼ baÅŸlÄ±yor: {len(reference_paths)} referans; "
+        "yÃ¼z algÄ±lama ve ArcFace ONNX aÄŸÄ±rlÄ±klarÄ± kontrol edilecek.",
         flush=True
     )
     try:
@@ -438,7 +438,7 @@ def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path])
             decode_output(error.stdout) + "\n" + decode_output(error.stderr)
         )
         raise IdentityVerificationError(
-            "ArcFace 25 referans ön kontrolü 30 dakika içinde tamamlanamadı. " + detail
+            "ArcFace 25 referans Ã¶n kontrolÃ¼ 30 dakika iÃ§inde tamamlanamadÄ±. " + detail
         ) from error
 
     marker = "RETAKE_IDENTITY_REPORT="
@@ -450,24 +450,24 @@ def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path])
     if not report_lines:
         detail = tail(completed.stderr + "\n" + completed.stdout)
         raise IdentityVerificationError(
-            f"ArcFace worker rapor üretemedi (çıkış kodu {completed.returncode}). {detail}"
+            f"ArcFace worker rapor Ã¼retemedi (Ã§Ä±kÄ±ÅŸ kodu {completed.returncode}). {detail}"
         )
     try:
         report = json.loads(report_lines[-1])
     except json.JSONDecodeError as error:
-        raise IdentityVerificationError("ArcFace doğrulama raporu geçerli JSON değil.") from error
+        raise IdentityVerificationError("ArcFace doÄŸrulama raporu geÃ§erli JSON deÄŸil.") from error
 
     if completed.returncode != 0 or not report.get("ok"):
-        detail = str(report.get("error") or "ArcFace worker başarısız sonuç döndürdü.")
+        detail = str(report.get("error") or "ArcFace worker baÅŸarÄ±sÄ±z sonuÃ§ dÃ¶ndÃ¼rdÃ¼.")
         logs = tail(completed.stderr + "\n" + completed.stdout)
         raise IdentityVerificationError(
-            f"{detail} (worker çıkış kodu {completed.returncode}). {logs}"
+            f"{detail} (worker Ã§Ä±kÄ±ÅŸ kodu {completed.returncode}). {logs}"
         )
     if report.get("hard_conflict"):
         raise IdentityConflictError(
-            "ArcFace, 25 referans arasında ortak bir kimlik profili bulamadı "
-            f"(medyan cosine benzerliği: {report.get('median_similarity')}). "
-            "Farklı kişiye ait veya ağır bozulmuş fotoğrafları kontrol edip tekrar deneyin."
+            "ArcFace, 25 referans arasÄ±nda ortak bir kimlik profili bulamadÄ± "
+            f"(medyan cosine benzerliÄŸi: {report.get('median_similarity')}). "
+            "FarklÄ± kiÅŸiye ait veya aÄŸÄ±r bozulmuÅŸ fotoÄŸraflarÄ± kontrol edip tekrar deneyin."
         )
     return report
 
@@ -482,7 +482,7 @@ def parse_multipart(
     ).encode("utf-8")
     message = BytesParser(policy=policy.default).parsebytes(headers + body)
     if not message.is_multipart():
-        raise ValueError("İstek multipart/form-data biçiminde olmalı.")
+        raise ValueError("Ä°stek multipart/form-data biÃ§iminde olmalÄ±.")
 
     target_files: list[tuple[str, bytes]] = []
     reference_files: list[tuple[str, bytes]] = []
@@ -499,14 +499,14 @@ def parse_multipart(
             try:
                 metadata_value = json.loads(payload.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                raise ValueError("Profil metadata JSON olarak okunamadı.") from error
+                raise ValueError("Profil metadata JSON olarak okunamadÄ±.") from error
             continue
         if field_name not in {"target", "reference", "appearance_profile", "real_reference"}:
             continue
 
         extension = image_extension(part.get_content_type(), payload)
         if not payload or len(payload) > MAX_FILE_BYTES:
-            raise ValueError("Her görsel boş olmamalı ve 25 MB sınırını aşmamalı.")
+            raise ValueError("Her gÃ¶rsel boÅŸ olmamalÄ± ve 25 MB sÄ±nÄ±rÄ±nÄ± aÅŸmamalÄ±.")
         item = (extension, payload)
         if field_name == "real_reference":
             real_reference_files.append(item)
@@ -518,19 +518,19 @@ def parse_multipart(
             appearance_files.append(item)
 
     if len(target_files) != 1:
-        raise ValueError("Tam olarak bir hedef fotoğraf gönderilmelidir.")
+        raise ValueError("Tam olarak bir hedef fotoÄŸraf gÃ¶nderilmelidir.")
     if len(appearance_files) != 1:
-        raise ValueError("25 referanstan üretilen tek bir görünüm profili gönderilmelidir.")
+        raise ValueError("25 referanstan Ã¼retilen tek bir gÃ¶rÃ¼nÃ¼m profili gÃ¶nderilmelidir.")
     validate_reference_count(len(reference_files))
 
     metadata = _validate_metadata(metadata_value, len(reference_files))
     if len(real_reference_files) > MAX_REAL_FACE_CANDIDATES:
-        raise ValueError(f"En fazla {MAX_REAL_FACE_CANDIDATES} gerçek fotoğraf adayı gönderilebilir.")
+        raise ValueError(f"En fazla {MAX_REAL_FACE_CANDIDATES} gerÃ§ek fotoÄŸraf adayÄ± gÃ¶nderilebilir.")
     real_face = metadata.get("realFace")
     if real_face and len(real_reference_files) < len(real_face["references"]):
-        raise ValueError("Gerçek fotoğraf yüz ağı gönderildi ama fotoğrafı eksik.")
+        raise ValueError("GerÃ§ek fotoÄŸraf yÃ¼z aÄŸÄ± gÃ¶nderildi ama fotoÄŸrafÄ± eksik.")
     if real_face and len(real_reference_files) != len(real_face["references"]):
-        raise ValueError("Gerçek fotoğraf sayısı ile yüz ağı sayısı eşleşmiyor.")
+        raise ValueError("GerÃ§ek fotoÄŸraf sayÄ±sÄ± ile yÃ¼z aÄŸÄ± sayÄ±sÄ± eÅŸleÅŸmiyor.")
     # Kept with the metadata so the parsed tuple keeps its shape.
     metadata["realReferenceBytes"] = [payload for _, payload in real_reference_files] if real_face else None
     return (
@@ -546,7 +546,7 @@ def parse_multipart(
 
 def tail(text: str, limit: int = 4500) -> str:
     value = (text or "").strip()
-    return value[-limit:] if value else "FaceFusion ayrıntılı hata kaydı üretmedi."
+    return value[-limit:] if value else "FaceFusion ayrÄ±ntÄ±lÄ± hata kaydÄ± Ã¼retmedi."
 
 
 def supported_facefusion_weight(value: float) -> float:
@@ -554,9 +554,9 @@ def supported_facefusion_weight(value: float) -> float:
     try:
         amount = float(value)
     except (TypeError, ValueError) as error:
-        raise ValueError("FaceFusion ağırlığı sayı olmalı.") from error
+        raise ValueError("FaceFusion aÄŸÄ±rlÄ±ÄŸÄ± sayÄ± olmalÄ±.") from error
     if not math.isfinite(amount) or not 0.0 <= amount <= 1.0:
-        raise ValueError("FaceFusion ağırlığı 0 ile 1 arasında olmalı.")
+        raise ValueError("FaceFusion aÄŸÄ±rlÄ±ÄŸÄ± 0 ile 1 arasÄ±nda olmalÄ±.")
     steps = min(20, max(0, int(math.floor(amount * 20.0 + 0.5))))
     return steps / 20.0
 
@@ -635,11 +635,11 @@ def run_with_memory_fallback(
         ))
         has_fallback = index + 1 < len(attempts)
         if not is_memory_error or not has_fallback:
-            raise RuntimeError(f"{model} işlemi başarısız ({pixel_boost}). {detail}")
+            raise RuntimeError(f"{model} iÅŸlemi baÅŸarÄ±sÄ±z ({pixel_boost}). {detail}")
         next_boost = attempts[index + 1]
-        print(f"{model}: {pixel_boost} bellek hatası; {next_boost} ayarına düşülüyor.", flush=True)
+        print(f"{model}: {pixel_boost} bellek hatasÄ±; {next_boost} ayarÄ±na dÃ¼ÅŸÃ¼lÃ¼yor.", flush=True)
 
-    raise RuntimeError(f"{model} işlemi tamamlanamadı. {last_detail}")
+    raise RuntimeError(f"{model} iÅŸlemi tamamlanamadÄ±. {last_detail}")
 
 
 def run_face_enhancer(
@@ -670,7 +670,7 @@ def run_face_enhancer(
     )
     if completed.returncode != 0 or not output_path.is_file() or output_path.stat().st_size <= 0:
         raise RuntimeError(
-            "GFPGAN isteğe bağlı yüz iyileştirme aşaması başarısız. "
+            "GFPGAN isteÄŸe baÄŸlÄ± yÃ¼z iyileÅŸtirme aÅŸamasÄ± baÅŸarÄ±sÄ±z. "
             + tail(completed.stderr + "\n" + completed.stdout)
         )
 
@@ -680,13 +680,13 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
         import cv2
         import numpy as np
     except Exception as error:
-        raise RuntimeError(f"GFPGAN harmanlaması için OpenCV/NumPy yüklenemedi: {error}") from error
+        raise RuntimeError(f"GFPGAN harmanlamasÄ± iÃ§in OpenCV/NumPy yÃ¼klenemedi: {error}") from error
     hybrid = cv2.imread(str(hybrid_path), cv2.IMREAD_UNCHANGED)
     enhanced = cv2.imread(str(enhanced_path), cv2.IMREAD_COLOR)
     if hybrid is None or enhanced is None or hybrid.ndim != 3 or hybrid.shape[2] != 4:
-        raise RuntimeError("GFPGAN çıktısı ve alfa maskeli hibrit görüntü okunamadı.")
+        raise RuntimeError("GFPGAN Ã§Ä±ktÄ±sÄ± ve alfa maskeli hibrit gÃ¶rÃ¼ntÃ¼ okunamadÄ±.")
     if hybrid.shape[:2] != enhanced.shape[:2]:
-        raise RuntimeError("GFPGAN ve hibrit yüz çıktı boyutları eşleşmiyor.")
+        raise RuntimeError("GFPGAN ve hibrit yÃ¼z Ã§Ä±ktÄ± boyutlarÄ± eÅŸleÅŸmiyor.")
     blend = FACE_ENHANCER_BLEND / 100.0
     mixed = (
         hybrid[:, :, :3].astype(np.float32) * (1.0 - blend)
@@ -695,7 +695,7 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
     hybrid[:, :, :3] = np.clip(np.rint(mixed), 0, 255).astype(np.uint8)
     # Retain the exact pre-existing semantic/change matte.
     if not cv2.imwrite(str(output_path), hybrid):
-        raise RuntimeError("GFPGAN sonrası alfa maskeli hibrit sonuç yazılamadı.")
+        raise RuntimeError("GFPGAN sonrasÄ± alfa maskeli hibrit sonuÃ§ yazÄ±lamadÄ±.")
 
 
 def pad_image_to_even(path: Path) -> tuple[int, int]:
@@ -707,13 +707,13 @@ def pad_image_to_even(path: Path) -> tuple[int, int]:
 
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
-        raise RuntimeError("Hedef kırpım okunamadı.")
+        raise RuntimeError("Hedef kÄ±rpÄ±m okunamadÄ±.")
     height, width = image.shape[:2]
     pad_right, pad_bottom = width % 2, height % 2
     if pad_right or pad_bottom:
         padded = cv2.copyMakeBorder(image, 0, pad_bottom, 0, pad_right, cv2.BORDER_REPLICATE)
         if not cv2.imwrite(str(path), padded):
-            raise RuntimeError("Hedef kırpım çift boyuta tamamlanamadı.")
+            raise RuntimeError("Hedef kÄ±rpÄ±m Ã§ift boyuta tamamlanamadÄ±.")
     return width, height
 
 
@@ -736,13 +736,13 @@ def reshape_jawline(path: Path, jaw_warp: dict[str, Any], face_width: float, sca
         from retake_compositing import warp_jawline
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None or image.ndim != 3 or image.shape[2] != 4:
-        raise RuntimeError("Çene hattı düzeltmesi için alfa maskeli PNG okunamadı.")
+        raise RuntimeError("Ã‡ene hattÄ± dÃ¼zeltmesi iÃ§in alfa maskeli PNG okunamadÄ±.")
     color, alpha = warp_jawline(
         image[:, :, :3].copy(), image[:, :, 3].copy(),
         jaw_warp["controls"], jaw_warp["anchors"], face_width, scale
     )
     if not cv2.imwrite(str(path), cv2.merge((*cv2.split(color), alpha))):
-        raise RuntimeError("Çene hattı düzeltmesi uygulanmış PNG yazılamadı.")
+        raise RuntimeError("Ã‡ene hattÄ± dÃ¼zeltmesi uygulanmÄ±ÅŸ PNG yazÄ±lamadÄ±.")
 
 
 def fit_head_to_face(
@@ -760,17 +760,17 @@ def fit_head_to_face(
         except ImportError:
             from retake_compositing import fit_head_geometry
     except Exception as error:
-        raise RuntimeError(f"Kafa oranı düzeltmesi için OpenCV/NumPy yüklenemedi: {error}") from error
+        raise RuntimeError(f"Kafa oranÄ± dÃ¼zeltmesi iÃ§in OpenCV/NumPy yÃ¼klenemedi: {error}") from error
 
     image = cv2.imread(str(input_path), cv2.IMREAD_UNCHANGED)
     if image is None or image.ndim != 3 or image.shape[2] != 4:
-        raise RuntimeError("Kafa oranı düzeltmesi için alfa maskeli hibrit PNG okunamadı.")
+        raise RuntimeError("Kafa oranÄ± dÃ¼zeltmesi iÃ§in alfa maskeli hibrit PNG okunamadÄ±.")
     color, alpha = fit_head_geometry(
         image[:, :, :3].copy(), image[:, :, 3].copy(), face_bounds, scale_x, scale_y
     )
     adjusted = cv2.merge((*cv2.split(color), alpha))
     if not cv2.imwrite(str(output_path), adjusted):
-        raise RuntimeError("Kafa oranı düzeltmesi uygulanmış PNG yazılamadı.")
+        raise RuntimeError("Kafa oranÄ± dÃ¼zeltmesi uygulanmÄ±ÅŸ PNG yazÄ±lamadÄ±.")
 
 
 def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None) -> dict[str, Any] | None:
@@ -788,9 +788,9 @@ def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None)
             return None
         offset = profile_beard_offset(profile)
     except Exception as error:  # informative only
-        print(f"Sakal profili ölçülemedi: {error}", flush=True)
+        print(f"Sakal profili Ã¶lÃ§Ã¼lemedi: {error}", flush=True)
         return None
-    print(f"Kişinin sakal/yanak ton farkı (Lab): {', '.join(f'{v:.1f}' for v in offset)}.", flush=True)
+    print(f"KiÅŸinin sakal/yanak ton farkÄ± (Lab): {', '.join(f'{v:.1f}' for v in offset)}.", flush=True)
     return {"points": target_landmarks, "offset": offset.tolist()}
 
 
@@ -823,7 +823,7 @@ def choose_composite(
     # transplants do NOT receive this preference.
     matched_lower = [
         item for item in scored
-        if names[item[1]].find("referans alt yüz") >= 0
+        if names[item[1]].find("referans alt yÃ¼z") >= 0
         and item[0] >= value - 0.002
     ]
     # User-requested complete reconstruction: a true reference image may
@@ -831,7 +831,7 @@ def choose_composite(
     # near-tie. Full-face isn't forced on incompatible pose/light/expression.
     matched_full = [
         item for item in scored
-        if "tam referans yüzü" in names[item[1]]
+        if "tam referans yÃ¼zÃ¼" in names[item[1]]
         and item[0] >= max(score for score, _, _ in scored) - 0.002
     ]
     if matched_full:
@@ -839,10 +839,10 @@ def choose_composite(
     elif matched_lower:
         value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
-        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
+        f"{names[item[0]]}: {'â€”' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
         for item, score in zip(allowed, scores)
     )
-    print(f"Kimlik öncelikli birleştirme: {listed}; seçilen benzerlik {value:.3f}.", flush=True)
+    print(f"Kimlik Ã¶ncelikli birleÅŸtirme: {listed}; seÃ§ilen benzerlik {value:.3f}.", flush=True)
     return path
 
 
@@ -881,7 +881,7 @@ def run_realism(
             encoding="utf-8", errors="replace", timeout=REALISM_TIMEOUT_SECONDS, check=False
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        print(f"[Gerçekçilik] Çalıştırılamadı: {error}", flush=True)
+        print(f"[GerÃ§ekÃ§ilik] Ã‡alÄ±ÅŸtÄ±rÄ±lamadÄ±: {error}", flush=True)
         return []
     marker = "RETAKE_REALISM_REPORT="
     report = None
@@ -894,12 +894,12 @@ def run_realism(
             break
     if completed.returncode != 0 or not report or not report.get("ok"):
         detail = (completed.stderr or completed.stdout or "").strip().splitlines()[-3:]
-        print(f"[Gerçekçilik] Başarısız (kod {completed.returncode}): {' | '.join(detail)}", flush=True)
+        print(f"[GerÃ§ekÃ§ilik] BaÅŸarÄ±sÄ±z (kod {completed.returncode}): {' | '.join(detail)}", flush=True)
         return []
     print(
-        f"[Gerçekçilik] {len(report['outputs'])} sürüm üretildi ({report.get('device')}, "
-        f"{'kişisel model' if report.get('personal') else 'genel model + kimlik'}, "
-        f"yükleme {report.get('load_seconds')} sn, işleme {report.get('render_seconds')} sn).",
+        f"[GerÃ§ekÃ§ilik] {len(report['outputs'])} sÃ¼rÃ¼m Ã¼retildi ({report.get('device')}, "
+        f"{'kiÅŸisel model' if report.get('personal') else 'genel model + kimlik'}, "
+        f"yÃ¼kleme {report.get('load_seconds')} sn, iÅŸleme {report.get('render_seconds')} sn).",
         flush=True
     )
     return [Path(item["path"]) for item in report["outputs"] if Path(item["path"]).is_file()]
@@ -947,13 +947,13 @@ def apply_realism_render(final_output: Path, render_path: Path) -> None:
     final = cv2.imread(str(final_output), cv2.IMREAD_UNCHANGED)
     render = cv2.imread(str(render_path), cv2.IMREAD_COLOR)
     if final is None or render is None or final.shape[:2] != render.shape[:2] or final.ndim != 3 or final.shape[2] != 4:
-        raise RuntimeError("Gerçekçilik sonucu hibrit PNG ile birleştirilemedi.")
+        raise RuntimeError("GerÃ§ekÃ§ilik sonucu hibrit PNG ile birleÅŸtirilemedi.")
     changed = (np.max(cv2.absdiff(render, final[:, :, :3]), axis=2) >= 2).astype(np.float32)
     changed = cv2.GaussianBlur(cv2.dilate(changed, np.ones((5, 5), np.uint8)), (0, 0), 2.0) * 255.0
     alpha = np.maximum(final[:, :, 3].astype(np.float32), changed)
     merged = cv2.merge((*cv2.split(render), np.clip(np.rint(alpha), 0, 255).astype(np.uint8)))
     if not cv2.imwrite(str(final_output), merged):
-        raise RuntimeError("Gerçekçilik sonucu yazılamadı.")
+        raise RuntimeError("GerÃ§ekÃ§ilik sonucu yazÄ±lamadÄ±.")
 
 
 def find_realism(python: Path | None, models: Path | None) -> dict[str, Any] | None:
@@ -1002,7 +1002,7 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
                 continue
             candidates.append((image, points))
         if not candidates:
-            raise ValueError("gerçek fotoğraf okunamadı")
+            raise ValueError("gerÃ§ek fotoÄŸraf okunamadÄ±")
         if real_face.get("mode") == "lower":
             transplanted, chosen, fits = choose_and_transfer_lower_face(
                 result, target, candidates,
@@ -1021,13 +1021,13 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
             )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
-            f"Gerçek fotoğraf yüzü uygulandı: {len(candidates)} aday bükülüp karşılaştırıldı "
-            f"(uyum {scores}), {chosen + 1}. aday seçildi.",
+            f"GerÃ§ek fotoÄŸraf yÃ¼zÃ¼ uygulandÄ±: {len(candidates)} aday bÃ¼kÃ¼lÃ¼p karÅŸÄ±laÅŸtÄ±rÄ±ldÄ± "
+            f"(uyum {scores}), {chosen + 1}. aday seÃ§ildi.",
             flush=True
         )
         return transplanted, True
     except Exception as error:  # informative only; keep the AI swap
-        print(f"Gerçek fotoğraf yüzü uygulanamadı, yapay zekâ sonucu kullanılıyor: {error}", flush=True)
+        print(f"GerÃ§ek fotoÄŸraf yÃ¼zÃ¼ uygulanamadÄ±, yapay zekÃ¢ sonucu kullanÄ±lÄ±yor: {error}", flush=True)
         return result, False
 
 
@@ -1053,7 +1053,7 @@ def blend_lower_face(
         except ImportError:
             from retake_compositing import HARMONIZE_STRENGTH, matte_border_step, seamless_face_composite
     except Exception as error:
-        raise RuntimeError(f"Alt yüz harmanlama için OpenCV/NumPy yüklenemedi: {error}") from error
+        raise RuntimeError(f"Alt yÃ¼z harmanlama iÃ§in OpenCV/NumPy yÃ¼klenemedi: {error}") from error
 
     target = crop_to_size(cv2.imread(str(target_path), cv2.IMREAD_COLOR), expected_size)
     identity = crop_to_size(cv2.imread(str(identity_path), cv2.IMREAD_COLOR), expected_size)
@@ -1066,11 +1066,11 @@ def blend_lower_face(
             "yok" if image is None else f"{image.shape[1]}x{image.shape[0]}"
             for image in (target, identity, appearance)
         )
-        raise RuntimeError(f"Hedef, kimlik ve görünüm geçişlerinin çıktı ölçüleri eşleşmiyor ({sizes}).")
+        raise RuntimeError(f"Hedef, kimlik ve gÃ¶rÃ¼nÃ¼m geÃ§iÅŸlerinin Ã§Ä±ktÄ± Ã¶lÃ§Ã¼leri eÅŸleÅŸmiyor ({sizes}).")
 
     height, width = identity.shape[:2]
     if expected_size is not None and (width, height) != (expected_size["width"], expected_size["height"]):
-        raise ValueError("Hedef kırpımın gerçek boyutu bildirilen boyutla eşleşmiyor.")
+        raise ValueError("Hedef kÄ±rpÄ±mÄ±n gerÃ§ek boyutu bildirilen boyutla eÅŸleÅŸmiyor.")
     x = face_bounds["x"]
     y = face_bounds["y"]
     face_width = face_bounds["width"]
@@ -1113,9 +1113,9 @@ def blend_lower_face(
     p95_delta = float(np.percentile(face_delta, 95))
     if is_near_noop(changed_ratio, mean_delta, p95_delta):
         raise NoOpSwapError(
-            "FaceFusion iki geçişte de hedef yüze anlamlı bir değişiklik uygulamadı "
-            f"(değişen piksel oranı %{changed_ratio * 100:.3f}, ortalama fark {mean_delta:.3f}). "
-            "İşlem başarılı gibi gösterilmedi; kaynak/hedef yüz algılamasını kontrol edin."
+            "FaceFusion iki geÃ§iÅŸte de hedef yÃ¼ze anlamlÄ± bir deÄŸiÅŸiklik uygulamadÄ± "
+            f"(deÄŸiÅŸen piksel oranÄ± %{changed_ratio * 100:.3f}, ortalama fark {mean_delta:.3f}). "
+            "Ä°ÅŸlem baÅŸarÄ±lÄ± gibi gÃ¶sterilmedi; kaynak/hedef yÃ¼z algÄ±lamasÄ±nÄ± kontrol edin."
         )
 
     # FaceFusion has already applied its parser + occlusion masks while pasting
@@ -1156,7 +1156,7 @@ def blend_lower_face(
     rgba[:, :, 3] = alpha
 
     if not cv2.imwrite(str(output_path), rgba):
-        raise RuntimeError("Hibrit yüz sonucu ve semantik alfa maskesi diske yazılamadı.")
+        raise RuntimeError("Hibrit yÃ¼z sonucu ve semantik alfa maskesi diske yazÄ±lamadÄ±.")
     return used_real_face
 
 
@@ -1198,7 +1198,7 @@ def process_swap(
             if identity_cache:
                 identity_cache.put(identity_key, identity_report)
         else:
-            print("ArcFace raporu önbellekten alındı (referanslar değişmedi).", flush=True)
+            print("ArcFace raporu Ã¶nbellekten alÄ±ndÄ± (referanslar deÄŸiÅŸmedi).", flush=True)
         outlier_indices = [int(index) for index in identity_report.get("outlier_indices", [])]
         weights: list[int] = list(metadata["referenceWeights"])
         for outlier_index in outlier_indices:
@@ -1206,10 +1206,10 @@ def process_swap(
                 weights[outlier_index] = 1
         outlier_names = identity_report.get("outlier_files", [])
         print(
-            "ArcFace 25 referans kontrolü: "
+            "ArcFace 25 referans kontrolÃ¼: "
             f"medyan cosine={identity_report.get('median_similarity')}; "
-            f"inceleme gerektiren fotoğraf={outlier_names or 'yok'}. "
-            "Aykırı referanslar çıkarılmadı; kimlik ağırlıkları 1 oya indirildi.",
+            f"inceleme gerektiren fotoÄŸraf={outlier_names or 'yok'}. "
+            "AykÄ±rÄ± referanslar Ã§Ä±karÄ±lmadÄ±; kimlik aÄŸÄ±rlÄ±klarÄ± 1 oya indirildi.",
             flush=True
         )
         # All 25 photographs must be checked, but averaging all of their
@@ -1253,13 +1253,13 @@ def process_swap(
         ))
 
         print(
-            f"Profil hazır: {len(reference_paths)} referans, ağırlıklı kimlik oyu={len(weighted_identity_paths)}, "
-            f"görünüm profili={len(reference_paths)} hizalanmış fotoğraf.",
+            f"Profil hazÄ±r: {len(reference_paths)} referans, aÄŸÄ±rlÄ±klÄ± kimlik oyu={len(weighted_identity_paths)}, "
+            f"gÃ¶rÃ¼nÃ¼m profili={len(reference_paths)} hizalanmÄ±ÅŸ fotoÄŸraf.",
             flush=True
         )
         print(
-            f"1/2 kimlik geçişi: {IDENTITY_MODEL}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
-            f"hedef=1 fotoğraf; tercih edilen pixel boost={preferred_boost}.",
+            f"1/2 kimlik geÃ§iÅŸi: {IDENTITY_MODEL}; 2/2 gÃ¶rÃ¼nÃ¼m geÃ§iÅŸi: {APPEARANCE_MODEL}; "
+            f"hedef=1 fotoÄŸraf; tercih edilen pixel boost={preferred_boost}.",
             flush=True
         )
 
@@ -1278,7 +1278,7 @@ def process_swap(
                 if hit is not None:
                     progress(step, cached=True)
                     output.write_bytes(hit[0])
-                    print(f"{model}: aynı hedef için önceki geçiş yeniden kullanıldı.", flush=True)
+                    print(f"{model}: aynÄ± hedef iÃ§in Ã¶nceki geÃ§iÅŸ yeniden kullanÄ±ldÄ±.", flush=True)
                     return hit[1]
             progress(step)
             used = run_with_memory_fallback(
@@ -1289,7 +1289,7 @@ def process_swap(
             return used
 
         identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
-        print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
+        print(f"Kimlik profili geÃ§iÅŸi tamamlandÄ± ({identity_boost}).", flush=True)
 
         centroid = identity_report.get("centroid")
         identity_source_paths = weighted_identity_paths
@@ -1308,7 +1308,7 @@ def process_swap(
                 except Exception as error:
                     # The original full-25 pass remains usable if an optional
                     # candidate runs out of VRAM or fails face detection.
-                    print(f"Ek {name} kimlik adayı atlandı: {error}", flush=True)
+                    print(f"Ek {name} kimlik adayÄ± atlandÄ±: {error}", flush=True)
             if len(candidates) > 1:
                 candidate_scores = score_identity(
                     facefusion_dir, centroid, [path for _, path, _, _ in candidates]
@@ -1324,12 +1324,12 @@ def process_swap(
                         best_index, best_value = i, value
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
                 print(
-                    "Kaynak havuzu karşılaştırması: "
+                    "Kaynak havuzu karÅŸÄ±laÅŸtÄ±rmasÄ±: "
                     + ", ".join(
-                        f"{entry[0]}={'—' if value is None else f'{value:.3f}'}"
+                        f"{entry[0]}={'â€”' if value is None else f'{value:.3f}'}"
                         for entry, value in zip(candidates, candidate_scores)
                     )
-                    + f"; seçilen {identity_pool}.",
+                    + f"; seÃ§ilen {identity_pool}.",
                     flush=True
                 )
 
@@ -1344,16 +1344,16 @@ def process_swap(
                     identity_source = reinforced_output
                     reinforced = True
                 print(
-                    "Kimlik pekiştirme: "
-                    + ("uygulandı" if reinforced else "kullanılmadı")
-                    + (f" (benzerlik {single:.3f} → {double:.3f})" if single is not None and double is not None else ""),
+                    "Kimlik pekiÅŸtirme: "
+                    + ("uygulandÄ±" if reinforced else "kullanÄ±lmadÄ±")
+                    + (f" (benzerlik {single:.3f} â†’ {double:.3f})" if single is not None and double is not None else ""),
                     flush=True
                 )
             except Exception as error:  # informative only; the first pass stays
-                print(f"Kimlik pekiştirme atlandı: {error}", flush=True)
+                print(f"Kimlik pekiÅŸtirme atlandÄ±: {error}", flush=True)
 
         appearance_boost = cached_pass(3, [appearance_path], appearance_output, APPEARANCE_MODEL)
-        print(f"25 fotoğraflı görünüm profili geçişi tamamlandı ({appearance_boost}).", flush=True)
+        print(f"25 fotoÄŸraflÄ± gÃ¶rÃ¼nÃ¼m profili geÃ§iÅŸi tamamlandÄ± ({appearance_boost}).", flush=True)
 
         # The 25-image pixel mean can look waxy: aligned eyes and facial hair
         # rarely land on identical pixels. Try a crisp real reference as an
@@ -1368,7 +1368,7 @@ def process_swap(
                 cached_pass(3, [reference_paths[texture_reference_index]], alternative, APPEARANCE_MODEL)
                 texture_output = alternative
             except Exception as error:
-                print(f"Tek fotoğraftan doku adayı atlandı: {error}", flush=True)
+                print(f"Tek fotoÄŸraftan doku adayÄ± atlandÄ±: {error}", flush=True)
 
         progress(4)
         # Identity-first compositing: a few blends from seamless (photo's skin
@@ -1414,7 +1414,7 @@ def process_swap(
                 blends.append((path, float(report.get("border", 0.0))))
                 label = f"ton {harmonize:g}"
                 if path in transplanted:
-                    label += " + referans alt yüz" if transplanted[path] == "lower" else " + tam referans yüzü"
+                    label += " + referans alt yÃ¼z" if transplanted[path] == "lower" else " + tam referans yÃ¼zÃ¼"
                 labels.append(label)
         texture_blends: set[Path] = set()
         if texture_output is not None:
@@ -1429,11 +1429,11 @@ def process_swap(
                         None, harmonize, report, beard
                     )
                 except Exception as error:
-                    print(f"Gerçek referans dokusu adayı atlandı: {error}", flush=True)
+                    print(f"GerÃ§ek referans dokusu adayÄ± atlandÄ±: {error}", flush=True)
                     continue
                 texture_blends.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
-                labels.append(f"gerçek referans dokusu {harmonize:g}")
+                labels.append(f"gerÃ§ek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
         used_lower_face = transplanted.get(chosen_blend) == "lower"
@@ -1448,7 +1448,7 @@ def process_swap(
         used_enhancer = bool(enhancer_enabled)
         if used_enhancer:
             print(
-                f"İsteğe bağlı son aşama: {FACE_ENHANCER_MODEL}, blend={FACE_ENHANCER_BLEND}%.",
+                f"Ä°steÄŸe baÄŸlÄ± son aÅŸama: {FACE_ENHANCER_MODEL}, blend={FACE_ENHANCER_BLEND}%.",
                 flush=True
             )
             run_face_enhancer(facefusion_dir, hybrid_output, reference_paths, enhanced_output)
@@ -1462,7 +1462,7 @@ def process_swap(
         shutil.copyfile(final_output, pre_geometry_output)
         if jaw_scale > 0:
             reshape_jawline(final_output, jaw_warp, metadata["faceBounds"]["width"], jaw_scale)
-            print(f"Çene hattı referans kişiye göre düzeltildi (güç {jaw_scale:.2f}).", flush=True)
+            print(f"Ã‡ene hattÄ± referans kiÅŸiye gÃ¶re dÃ¼zeltildi (gÃ¼Ã§ {jaw_scale:.2f}).", flush=True)
         fit_head_to_face(
             final_output,
             final_output,
@@ -1484,7 +1484,7 @@ def process_swap(
                 report=identity_border_report
             )
         except Exception as error:
-            print(f"Yedek saf kimlik bileşimi oluşturulamadı: {error}", flush=True)
+            print(f"Yedek saf kimlik bileÅŸimi oluÅŸturulamadÄ±: {error}", flush=True)
             identity_fallback = None
 
         # v19's biggest practical failure: the pure-identity fallback won
@@ -1515,11 +1515,11 @@ def process_swap(
                             identity_regional_candidates.append(("identity-beard", path))
                         else:
                             print(
-                                f"[Retake] Güvenli sakal adayı atlandı "
-                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                                f"[Retake] GÃ¼venli sakal adayÄ± atlandÄ± "
+                                f"(kenar {border:.2f}, sÄ±nÄ±r {max_regional_border:.2f}).", flush=True
                             )
                     except Exception as error:
-                        print(f"[Retake] Kimlik üstü sakal nakli atlandı: {error}", flush=True)
+                        print(f"[Retake] Kimlik Ã¼stÃ¼ sakal nakli atlandÄ±: {error}", flush=True)
             if real_face and real_face.get("mode") in ("full", "both") and variation in full_reference_rounds:
                 for transfer_strength in (0.20, 0.40):
                     path = temp_dir / f"retake-identity-full-{int(transfer_strength * 100)}.png"
@@ -1537,11 +1537,11 @@ def process_swap(
                             identity_regional_candidates.append(("identity-full", path))
                         else:
                             print(
-                                f"[Retake] Güvenli tam yüz adayı atlandı "
-                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                                f"[Retake] GÃ¼venli tam yÃ¼z adayÄ± atlandÄ± "
+                                f"(kenar {border:.2f}, sÄ±nÄ±r {max_regional_border:.2f}).", flush=True
                             )
                     except Exception as error:
-                        print(f"[Retake] Kimlik üstü tam referans dokusu atlandı: {error}", flush=True)
+                        print(f"[Retake] Kimlik Ã¼stÃ¼ tam referans dokusu atlandÄ±: {error}", flush=True)
             if jaw_warp and jaw_scale > 0:
                 jaw_candidate = temp_dir / "retake-identity-jaw.png"
                 try:
@@ -1552,7 +1552,7 @@ def process_swap(
                     )
                     identity_regional_candidates.append(("identity-jaw", jaw_candidate))
                 except Exception as error:
-                    print(f"[Retake] Kimlik üstü çene uyarlaması atlandı: {error}", flush=True)
+                    print(f"[Retake] Kimlik Ã¼stÃ¼ Ã§ene uyarlamasÄ± atlandÄ±: {error}", flush=True)
 
         # Photographic realism (optional): re-render the face with a diffusion
         # model steered by the person's ArcFace identity.
@@ -1586,6 +1586,31 @@ def process_swap(
         for index, value in enumerate(candidate_scores[1:], start=1):
             if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
+        # When ArcFace cannot meaningfully distinguish finalists, prefer the
+        # one that retains the target photo's regional detail. This is a
+        # tie-break only: detail can never override a clearly stronger
+        # identity result.
+        candidate_detail_scores: list[float | None] = []
+        for _, candidate_path in rescue_candidates:
+            try:
+                detail, _ = check_photo_detail(target_path, candidate_path, metadata["faceBounds"])
+            except Exception:
+                detail = None
+            candidate_detail_scores.append(detail)
+        detail_choice = choose_detail_safe_tie(
+            candidate_scores, candidate_detail_scores, chosen_index
+        )
+        if detail_choice != chosen_index:
+            previous = chosen_index
+            chosen_index = detail_choice
+            best_score = candidate_scores[chosen_index] or best_score
+            print(
+                f"[Ultra] ArcFace yakÄ±n eÅŸitliÄŸinde daha doÄŸal doku seÃ§ildi: "
+                f"{rescue_candidates[previous][0]} â†’ {rescue_candidates[chosen_index][0]} "
+                f"(detay {candidate_detail_scores[previous]:.3f} â†’ "
+                f"{candidate_detail_scores[chosen_index]:.3f}).",
+                flush=True
+            )
         selected_identity = rescue_candidates[chosen_index][0]
         # ArcFace can undervalue beard edges. ONLY when pure identity won
         # and a measured regional alternative is within 0.003 absolute
@@ -1606,8 +1631,8 @@ def process_swap(
                 ))
                 selected_identity = rescue_candidates[chosen_index][0]
                 print(
-                    f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
-                    f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
+                    f"[Retake] Saf kimlik korundu; son aÅŸamada {selected_identity} "
+                    f"referans ayrÄ±ntÄ±sÄ± kullanÄ±ldÄ± (ArcFace={best_score:.3f}).", flush=True
                 )
         if selected_identity in ("identity-only", "identity-jaw"):
             used_lower_face = False
@@ -1623,12 +1648,12 @@ def process_swap(
             used_real_face = True
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
-                "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
+                "Ãœretilen yÃ¼z ArcFace ile doÄŸrulanamadÄ±. Kimlik kontrolÃ¼ olmadan gÃ¼venilir sonuÃ§ gÃ¶sterilmiyor."
             )
         if chosen_index > 0:
             print(
-                f"Kimlik koruma: {selected_identity} seçildi "
-                f"({final_score if final_score is not None else '—'} → {best_score:.3f}).",
+                f"Kimlik koruma: {selected_identity} seÃ§ildi "
+                f"({final_score if final_score is not None else 'â€”'} â†’ {best_score:.3f}).",
                 flush=True
             )
             shutil.copyfile(rescue_candidates[chosen_index][1], final_output)
@@ -1646,26 +1671,26 @@ def process_swap(
                     final_output, render_path, metadata["faceBounds"]
                 )
             except Exception as error:
-                accepted, reason = False, f"kontrol hatası: {error}"
+                accepted, reason = False, f"kontrol hatasÄ±: {error}"
             if accepted:
                 acceptable_renders.append(render_path)
                 acceptable_scores.append(render_score)
             else:
-                print(f"Gerçekçilik adayı elendi ({render_path.name}): {reason}.", flush=True)
+                print(f"GerÃ§ekÃ§ilik adayÄ± elendi ({render_path.name}): {reason}.", flush=True)
         chosen = choose_realism_render(result_similarity, acceptable_renders, acceptable_scores)
         if chosen is not None:
             render_path, render_similarity = chosen
             apply_realism_render(final_output, render_path)
             print(
-                f"Fotoğraf gerçekçiliği uygulandı: kimlik benzerliği {result_similarity:.3f} → {render_similarity:.3f}.",
+                f"FotoÄŸraf gerÃ§ekÃ§iliÄŸi uygulandÄ±: kimlik benzerliÄŸi {result_similarity:.3f} â†’ {render_similarity:.3f}.",
                 flush=True
             )
             result_similarity = render_similarity
             used_realism = True
         elif renders:
-            listed = ", ".join("—" if value is None else f"{value:.3f}" for value in render_scores)
+            listed = ", ".join("â€”" if value is None else f"{value:.3f}" for value in render_scores)
             print(
-                "Fotoğraf gerçekçiliği kullanılmadı: kimlik benzerliği seçilen sonucun altında kaldı "
+                "FotoÄŸraf gerÃ§ekÃ§iliÄŸi kullanÄ±lmadÄ±: kimlik benzerliÄŸi seÃ§ilen sonucun altÄ±nda kaldÄ± "
                 f"({listed}; FaceFusion {result_similarity:.3f}).",
                 flush=True
             )
@@ -1673,22 +1698,10 @@ def process_swap(
         # gate. Attempt a narrow, local cleanup on the existing face matte,
         # then keep it only if ArcFace still verifies the same identity.
         rim_cleaned = False
-        rim_stats: dict[str, Any] | None = None
         rim_candidate = temp_dir / "retake-rim-clean.png"
         try:
             rim_stats = repair_dark_rim_file(
                 target_path, final_output, rim_candidate, metadata["faceBounds"]
-            )
-            # Production v21 returned the old visible outline with no
-            # explanation. Always report detected ink pixels and the actual
-            # decision (even when the conservative repair does not activate).
-            print(
-                "[Retake] Kontur taraması: "
-                f"koyu piksel={rim_stats.get('dark_line_pixels', 0):.0f}; "
-                f"kenar payı=%{rim_stats.get('dark_line_fraction', 0) * 100:.2f}; "
-                f"karar={rim_stats.get('stage', 'unknown')}; "
-                f"azalma=%{rim_stats.get('dark_line_reduction', 0) * 100:.1f}.",
-                flush=True
             )
             if rim_stats.get("corrected_pixels", 0) > 0 and centroid:
                 corrected_score = score_identity(facefusion_dir, centroid, [rim_candidate])[0]
@@ -1697,44 +1710,27 @@ def process_swap(
                     result_similarity = corrected_score
                     rim_cleaned = True
                     print(
-                        f"[Retake] Koyu yüz konturu temizlendi "
+                        f"[Retake] Koyu yÃ¼z konturu temizlendi "
                         f"({rim_stats['corrected_pixels']:.0f} piksel; "
-                        f"koyu sınır %{rim_stats.get('dark_line_reduction', 0.0) * 100:.1f} azaldı; "
+                        f"koyu sÄ±nÄ±r %{rim_stats.get('dark_line_reduction', 0.0) * 100:.1f} azaldÄ±; "
                         f"ArcFace={corrected_score:.3f}).", flush=True
                     )
                 else:
-                    print("[Retake] Kontur adayı kimliği koruyamadı; atlandı.", flush=True)
+                    print("[Retake] Kontur adayÄ± kimliÄŸi koruyamadÄ±; atlandÄ±.", flush=True)
         except Exception as error:
-            print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
-
-        # Measure the FINAL delivered pixels, not the pre-repair proposal.
-        # The ArcFace guard may reject a successful-looking cleanup; never
-        # reward a candidate for a repair that wasn't actually committed.
-        rim_fraction: float | None = None
-        try:
-            residual = (
-                inspect_dark_rim_file(target_path, final_output, metadata["faceBounds"])
-                if rim_cleaned else rim_stats
-            )
-            if isinstance(residual, dict) and residual.get("stage") != "not_examined":
-                measure = float(residual["dark_line_fraction"])
-                if math.isfinite(measure) and 0 <= measure <= 1:
-                    rim_fraction = measure
-                    print(f"[Ultra] Sonuç yüz konturu kararma payı: %{measure * 100:.2f}.", flush=True)
-        except (TypeError, ValueError, KeyError, OSError) as error:
-            print(f"[Ultra] Yüz konturu ölçümü doğrulanamadı: {error}", flush=True)
+            print(f"[Retake] Kontur dÃ¼zeltmesi atlandÄ±: {error}", flush=True)
 
         # An unverifiable or measurably worse identity is a failed edit, not
         # a successful-looking photo. This relative guard avoids claiming a
         # universal fixed cosine threshold for every angle and lighting.
         if before_similarity is not None and result_similarity + 0.02 < before_similarity:
             raise IdentityConflictError(
-                "Çıktının referans kimlik benzerliği orijinal fotoğraftan düşük "
-                f"({before_similarity:.3f} → {result_similarity:.3f}). "
-                "Başka bir hedef fotoğraf/poz veya daha net referans deneyin."
+                "Ã‡Ä±ktÄ±nÄ±n referans kimlik benzerliÄŸi orijinal fotoÄŸraftan dÃ¼ÅŸÃ¼k "
+                f"({before_similarity:.3f} â†’ {result_similarity:.3f}). "
+                "BaÅŸka bir hedef fotoÄŸraf/poz veya daha net referans deneyin."
             )
         print(
-            f"Kimlik benzerliği: sonuç {result_similarity:.3f}"
+            f"Kimlik benzerliÄŸi: sonuÃ§ {result_similarity:.3f}"
             + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
             flush=True
         )
@@ -1744,18 +1740,17 @@ def process_swap(
             )
         except Exception as error:
             detail_score, detail_regions = None, {}
-            print(f"[Ultra] Bölgesel doku ölçümü atlandı: {error}", flush=True)
+            print(f"[Ultra] BÃ¶lgesel doku Ã¶lÃ§Ã¼mÃ¼ atlandÄ±: {error}", flush=True)
         if detail_score is not None:
             print(
-                f"[Ultra] Göz/burun/ağız/alt yüz detay korunumu: {detail_score:.3f}; "
-                f"bölgesel oranlar={detail_regions}.",
+                f"[Ultra] GÃ¶z/burun/aÄŸÄ±z/alt yÃ¼z detay korunumu: {detail_score:.3f}; "
+                f"bÃ¶lgesel oranlar={detail_regions}.",
                 flush=True
             )
         result = final_output.read_bytes()
         headers = {
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
-            "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -1776,11 +1771,11 @@ def process_swap(
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
         print(
-            "İşlem tamamlandı: AlphaFace kimlik geçişi + UniFace yüksek frekanslı alt yüz detay "
-            f"katmanı; dikişsiz ton/çok bantlı birleştirme; "
-            f"kafa oranı x{face_width_scale:.3f}/y{face_height_scale:.3f}; "
+            "Ä°ÅŸlem tamamlandÄ±: AlphaFace kimlik geÃ§iÅŸi + UniFace yÃ¼ksek frekanslÄ± alt yÃ¼z detay "
+            f"katmanÄ±; dikiÅŸsiz ton/Ã§ok bantlÄ± birleÅŸtirme; "
+            f"kafa oranÄ± x{face_width_scale:.3f}/y{face_height_scale:.3f}; "
             f"pixel boost={identity_boost}/{appearance_boost}; "
-            f"GFPGAN={'açık' if used_enhancer else 'kapalı'}; tek alfa maskeli PNG döndürüldü.",
+            f"GFPGAN={'aÃ§Ä±k' if used_enhancer else 'kapalÄ±'}; tek alfa maskeli PNG dÃ¶ndÃ¼rÃ¼ldÃ¼.",
             flush=True
         )
         return result, headers
@@ -1788,16 +1783,16 @@ def process_swap(
 
 def _swap_error(error: Exception) -> tuple[int, str]:
     if isinstance(error, IdentityConflictError):
-        print(f"[Retake ArcFace] Referans kimlik tutarsızlığı: {error}", flush=True)
+        print(f"[Retake ArcFace] Referans kimlik tutarsÄ±zlÄ±ÄŸÄ±: {error}", flush=True)
         return 422, str(error)
     if isinstance(error, IdentityVerificationError):
-        print(f"[Retake ArcFace] Ön kontrol başarısız: {error}", flush=True)
-        return 503, f"ArcFace kimlik kontrolü yapılamadı: {error}"
+        print(f"[Retake ArcFace] Ã–n kontrol baÅŸarÄ±sÄ±z: {error}", flush=True)
+        return 503, f"ArcFace kimlik kontrolÃ¼ yapÄ±lamadÄ±: {error}"
     if isinstance(error, NoOpSwapError):
         return 422, str(error)
     if isinstance(error, ValueError):
         return 400, str(error)
-    return 500, f"Yerel Retake hibrit profil işlemi başarısız: {error}"
+    return 500, f"Yerel Retake hibrit profil iÅŸlemi baÅŸarÄ±sÄ±z: {error}"
 
 
 def run_ultra_search(
@@ -1820,7 +1815,7 @@ def run_ultra_search(
     best_round = 0
     completed = 0
     errors: list[Exception] = []
-    # Diffusion is expensive and stochastic. Running 2–3 diffusion renders
+    # Diffusion is expensive and stochastic. Running 2â€“3 diffusion renders
     # in every one of 24 variants exhausted the seven-minute search window
     # before Retake could actually compare different identities. Compare
     # all feasible identity candidates first, then invest the heavy GPU
@@ -1848,14 +1843,14 @@ def run_ultra_search(
             )
         except Exception as error:
             errors.append(error)
-            print(f"[Ultra] Aday atlandı: {error}", flush=True)
+            print(f"[Ultra] Aday atlandÄ±: {error}", flush=True)
             # The best already verified result remains usable.
             continue
         completed += 1
         if prefer_ultra_candidate(headers, best_headers):
             best_result, best_headers, best_round = image, headers, round_number
             print(
-                f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
+                f"[Ultra] En iyi aday gÃ¼ncellendi: tur {round_number}, "
                 f"ArcFace={score_from_headers(headers)}.",
                 flush=True
             )
@@ -1865,7 +1860,7 @@ def run_ultra_search(
             # Preserve the actionable HTTP status and diagnosis: no-op,
             # invalid parameters and identity-conflict errors are distinct.
             raise errors[0]
-        raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
+        raise IdentityVerificationError("Ultra Mod hiÃ§bir adayÄ±n kimliÄŸini doÄŸrulayamadÄ±.")
 
     # One GPU realism investment on the best identity, not 24. This
     # evaluation always uses the untouched original target and reference
@@ -1881,12 +1876,12 @@ def run_ultra_search(
             )
             if prefer_ultra_candidate(upgraded_headers, best_headers):
                 best_result, best_headers = upgraded_image, upgraded_headers
-                print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
+                print("[Ultra] Finalist gerÃ§ekÃ§ilik adayÄ± kimlik ve doku testlerini geÃ§ti.", flush=True)
             else:
-                print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+                print("[Ultra] Finalist difÃ¼zyon adayÄ± elendi; gÃ¼Ã§lÃ¼ kimlik sonucu korundu.", flush=True)
         except Exception as error:
             # Realism is optional: preserve a previously verified result.
-            print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
+            print(f"[Ultra] Finalist gerÃ§ekÃ§ilik atlandÄ±: {error}", flush=True)
 
     # Spend the available interval trying distinct variants; when the GPU
     # finishes them faster, honor the explicit seven-minute minimum without
@@ -1909,8 +1904,8 @@ def run_ultra_search(
         "X-Retake-Ultra-Realism-Policy": "finalist-only" if has_realism else "not-installed",
     }
     print(
-        f"[Ultra] Sonuç: {completed} doğrulanmış tur, kazanan {best_round}. tur; "
-        f"benzerlik={score_from_headers(best_headers)}; süre {final['X-Retake-Ultra-Elapsed']} sn.",
+        f"[Ultra] SonuÃ§: {completed} doÄŸrulanmÄ±ÅŸ tur, kazanan {best_round}. tur; "
+        f"benzerlik={score_from_headers(best_headers)}; sÃ¼re {final['X-Retake-Ultra-Elapsed']} sn.",
         flush=True
     )
     return best_result, final
@@ -1922,7 +1917,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     timings: StageTimings | None = getattr(server, "stage_timings", None)
 
     def hold(remaining: float) -> None:
-        job["stage"] = "Ultra · kalite taraması tamamlandı, 7 dakika süresi doluyor"
+        job["stage"] = "Ultra Â· kalite taramasÄ± tamamlandÄ±, 7 dakika sÃ¼resi doluyor"
         job["minimum_remaining_seconds"] = round(remaining, 1)
         # Actual inference has finished; mark 99% until requested minimum.
         job["step"] = job["total"] - 1
@@ -1931,7 +1926,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     def finalist() -> None:
         # No false ETA: the diffusion worker's duration is GPU-dependent
         # and not covered by the bounded 420-second candidate search.
-        job["stage"] = "Ultra · en iyi yüz için son fotogerçekçilik geçişi"
+        job["stage"] = "Ultra Â· en iyi yÃ¼z iÃ§in son fotogerÃ§ekÃ§ilik geÃ§iÅŸi"
         job["step"] = job["total"] - 1
         job["stage_started"] = None
 
@@ -1952,9 +1947,9 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["step"] = step
         job["round"] = step // len(JOB_STAGES) + 1
         job["stage"] = (
-            f"Ultra {job['round']}/{len(ULTRA_VARIATIONS)} · "
+            f"Ultra {job['round']}/{len(ULTRA_VARIATIONS)} Â· "
             + JOB_STAGES[step % len(JOB_STAGES)]
-            + (" (önbellekten)" if cached else "")
+            + (" (Ã¶nbellekten)" if cached else "")
         )
         job["stage_started"] = now
 
@@ -1976,7 +1971,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["headers"] = headers
         job["step"] = job["total"]
         job["minimum_remaining_seconds"] = 0.0
-        job["stage"] = "Ultra · en iyi sonuç seçildi"
+        job["stage"] = "Ultra Â· en iyi sonuÃ§ seÃ§ildi"
         job["status"] = "done"
     except Exception as error:  # reported to the client through the job
         job["http_status"], job["error"] = _swap_error(error)
@@ -2023,7 +2018,7 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
 def create_job(realism: bool = False) -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": f"Ultra 1/{len(ULTRA_VARIATIONS)} · " + JOB_STAGES[0], "created": time.time(),
+        "stage": f"Ultra 1/{len(ULTRA_VARIATIONS)} Â· " + JOB_STAGES[0], "created": time.time(),
         "minimum_remaining_seconds": ULTRA_MIN_SECONDS,
         "total": len(JOB_STAGES) * len(ULTRA_VARIATIONS),
         "round": 1,
@@ -2064,7 +2059,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         # Without pairing the service only answers requests addressed to
         # loopback. With pairing (phone / PWA through an HTTPS tunnel that
         # connects to loopback) any Host is accepted, but every request must
-        # then carry the pairing code — see _paired().
+        # then carry the pairing code â€” see _paired().
         return self._is_loopback_host() or bool(self.server.pairing_token)  # type: ignore[attr-defined]
 
     def _paired(self) -> bool:
@@ -2099,7 +2094,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy"
         )
@@ -2118,7 +2113,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self) -> None:
         if not self._host_allowed() or not self._origin_allowed(required=True):
-            self._send_json(403, {"ok": False, "error": "Origin veya Host izinli değil."})
+            self._send_json(403, {"ok": False, "error": "Origin veya Host izinli deÄŸil."})
             return
         self.send_response(204)
         self._cors_headers()
@@ -2126,19 +2121,19 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         if not self._host_allowed() or not self._origin_allowed():
-            self._send_json(403, {"ok": False, "error": "Origin veya Host izinli değil."})
+            self._send_json(403, {"ok": False, "error": "Origin veya Host izinli deÄŸil."})
             return
         if not self._paired():
             self._send_json(401, {
                 "ok": False, "pairing_required": True,
-                "error": "Eşleştirme kodu gerekli veya hatalı."
+                "error": "EÅŸleÅŸtirme kodu gerekli veya hatalÄ±."
             })
             return
         if self.path.startswith("/api/jobs/"):
             self._send_job(self.path[len("/api/jobs/"):])
             return
         if self.path != "/health":
-            self._send_json(404, {"ok": False, "error": "Uç nokta bulunamadı."})
+            self._send_json(404, {"ok": False, "error": "UÃ§ nokta bulunamadÄ±."})
             return
 
         script = self.facefusion_dir / "facefusion.py"
@@ -2184,7 +2179,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 and (self.server.realism["models"] / "personal-lora" / "person.json").is_file()
             ),
             "provider_error": provider_error,
-            "error": None if script.is_file() else f"FaceFusion dosyası bulunamadı: {script}"
+            "error": None if script.is_file() else f"FaceFusion dosyasÄ± bulunamadÄ±: {script}"
         })
 
     def _send_job(self, tail_path: str) -> None:
@@ -2192,7 +2187,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         with JOBS_LOCK:
             job = JOBS.get(job_id)
         if job is None or action not in {"", "result"}:
-            self._send_json(404, {"ok": False, "error": "İş bulunamadı veya süresi doldu."})
+            self._send_json(404, {"ok": False, "error": "Ä°ÅŸ bulunamadÄ± veya sÃ¼resi doldu."})
             return
         if action == "":
             self._send_json(200, {
@@ -2218,7 +2213,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             })
             return
         if job["status"] != "done":
-            self._send_json(409, {"ok": False, "error": "Sonuç henüz hazır değil."})
+            self._send_json(409, {"ok": False, "error": "SonuÃ§ henÃ¼z hazÄ±r deÄŸil."})
             return
         result = job["result"]
         self.send_response(200)
@@ -2232,19 +2227,19 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         if not self._host_allowed() or not self._origin_allowed(required=True):
-            self._send_json(403, {"ok": False, "error": "Bu web kaynağından gelen isteğe izin verilmiyor."})
+            self._send_json(403, {"ok": False, "error": "Bu web kaynaÄŸÄ±ndan gelen isteÄŸe izin verilmiyor."})
             return
         if not self._paired():
             self._send_json(401, {
                 "ok": False, "pairing_required": True,
-                "error": "Eşleştirme kodu gerekli veya hatalı."
+                "error": "EÅŸleÅŸtirme kodu gerekli veya hatalÄ±."
             })
             return
         if self.path != "/api/face-swap":
-            self._send_json(404, {"ok": False, "error": "Uç nokta bulunamadı."})
+            self._send_json(404, {"ok": False, "error": "UÃ§ nokta bulunamadÄ±."})
             return
         if not INFERENCE_LOCK.acquire(blocking=False):
-            self._send_json(409, {"ok": False, "error": "Retake şu anda başka bir fotoğrafı işliyor."})
+            self._send_json(409, {"ok": False, "error": "Retake ÅŸu anda baÅŸka bir fotoÄŸrafÄ± iÅŸliyor."})
             return
 
         started = False
@@ -2255,7 +2250,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 return
             content_length = int(length_header)
             if content_length <= 0 or content_length > MAX_REQUEST_BYTES:
-                self._send_json(413, {"ok": False, "error": "İstek boyutu izin verilen sınırı aşıyor."})
+                self._send_json(413, {"ok": False, "error": "Ä°stek boyutu izin verilen sÄ±nÄ±rÄ± aÅŸÄ±yor."})
                 return
             content_type = self.headers.get("Content-Type", "")
             if not content_type.lower().startswith("multipart/form-data;"):
@@ -2264,7 +2259,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
 
             parsed = parse_multipart(content_type, self.rfile.read(content_length))
             if not (self.facefusion_dir / "facefusion.py").is_file():
-                self._send_json(503, {"ok": False, "error": "FaceFusion kurulumu bulunamadı. Kurulum betiğini çalıştır."})
+                self._send_json(503, {"ok": False, "error": "FaceFusion kurulumu bulunamadÄ±. Kurulum betiÄŸini Ã§alÄ±ÅŸtÄ±r."})
                 return
 
             job = create_job(bool(getattr(self.server, "realism", None)))
@@ -2277,51 +2272,51 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         except ValueError as error:
             self._send_json(400, {"ok": False, "error": str(error)})
         except (BrokenPipeError, ConnectionResetError):
-            print("İstemci bağlantıyı kapattı.", flush=True)
+            print("Ä°stemci baÄŸlantÄ±yÄ± kapattÄ±.", flush=True)
         except Exception as error:
-            self._send_json(500, {"ok": False, "error": f"Yerel Retake isteği işlenemedi: {error}"})
+            self._send_json(500, {"ok": False, "error": f"Yerel Retake isteÄŸi iÅŸlenemedi: {error}"})
         finally:
             if not started:
                 INFERENCE_LOCK.release()
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Retake için yerel 25 referanslı yüz profili köprüsü.")
-    parser.add_argument("--facefusion-dir", required=True, type=Path, help="FaceFusion kaynak klasörü")
+    parser = argparse.ArgumentParser(description="Retake iÃ§in yerel 25 referanslÄ± yÃ¼z profili kÃ¶prÃ¼sÃ¼.")
+    parser.add_argument("--facefusion-dir", required=True, type=Path, help="FaceFusion kaynak klasÃ¶rÃ¼")
     parser.add_argument("--host", default="127.0.0.1", choices=["127.0.0.1", "localhost"])
     parser.add_argument("--port", default=8765, type=int)
     parser.add_argument(
         "--face-swapper-pixel-boost",
         choices=("512x512", "768x768", "1024x1024"),
         default="1024x1024",
-        help="İlk deneme 1024x1024; CUDA bellek hatasında sırasıyla 768x768 ve 512x512 denenir."
+        help="Ä°lk deneme 1024x1024; CUDA bellek hatasÄ±nda sÄ±rasÄ±yla 768x768 ve 512x512 denenir."
     )
     parser.add_argument(
         "--shading-strength", type=float, default=None,
-        help="Asıl fotoğrafın ışık-gölge kabartmasının yeni yüze aktarılma gücü (0 kapalı, varsayılan 0.35, en çok 1.2)."
+        help="AsÄ±l fotoÄŸrafÄ±n Ä±ÅŸÄ±k-gÃ¶lge kabartmasÄ±nÄ±n yeni yÃ¼ze aktarÄ±lma gÃ¼cÃ¼ (0 kapalÄ±, varsayÄ±lan 0.35, en Ã§ok 1.2)."
     )
     parser.add_argument(
         "--enable-face-enhancer",
         action="store_true",
-        help="İsteğe bağlı GFPGAN 1.4 son aşamasını %25 karışımla etkinleştir."
+        help="Ä°steÄŸe baÄŸlÄ± GFPGAN 1.4 son aÅŸamasÄ±nÄ± %25 karÄ±ÅŸÄ±mla etkinleÅŸtir."
     )
     parser.add_argument(
         "--enable-pairing",
         action="store_true",
-        help="Telefon/PWA erişimi için eşleştirme kodunu zorunlu kıl (HTTPS tünel ile kullanılır)."
+        help="Telefon/PWA eriÅŸimi iÃ§in eÅŸleÅŸtirme kodunu zorunlu kÄ±l (HTTPS tÃ¼nel ile kullanÄ±lÄ±r)."
     )
     parser.add_argument(
         "--pairing-token-file", type=Path, default=Path.home() / ".retake" / "pairing-token",
-        help="Eşleştirme kodunun saklandığı dosya; yoksa oluşturulur."
+        help="EÅŸleÅŸtirme kodunun saklandÄ±ÄŸÄ± dosya; yoksa oluÅŸturulur."
     )
-    parser.add_argument("--origin", action="append", default=[], help="İzin verilen web origin'i; birden çok kez verilebilir.")
+    parser.add_argument("--origin", action="append", default=[], help="Ä°zin verilen web origin'i; birden Ã§ok kez verilebilir.")
     parser.add_argument(
         "--realism-python", type=Path, default=None,
-        help="Fotoğraf gerçekçiliği ortamının Python'u (tools/install_realism.ps1 kurar)."
+        help="FotoÄŸraf gerÃ§ekÃ§iliÄŸi ortamÄ±nÄ±n Python'u (tools/install_realism.ps1 kurar)."
     )
     parser.add_argument(
         "--realism-models", type=Path, default=None,
-        help="Fotoğraf gerçekçiliği modellerinin klasörü (tools/install_realism.ps1 indirir)."
+        help="FotoÄŸraf gerÃ§ekÃ§iliÄŸi modellerinin klasÃ¶rÃ¼ (tools/install_realism.ps1 indirir)."
     )
     return parser.parse_args()
 
@@ -2347,10 +2342,10 @@ def main() -> int:
     args = parse_args()
     facefusion_dir = args.facefusion_dir.expanduser().resolve()
     if not (facefusion_dir / "facefusion.py").is_file():
-        print(f"FaceFusion kurulumu bulunamadı: {facefusion_dir / 'facefusion.py'}", file=sys.stderr)
+        print(f"FaceFusion kurulumu bulunamadÄ±: {facefusion_dir / 'facefusion.py'}", file=sys.stderr)
         return 2
     if args.host not in {"127.0.0.1", "localhost"}:
-        print("Güvenlik nedeniyle servis yalnızca loopback adresinde çalışabilir.", file=sys.stderr)
+        print("GÃ¼venlik nedeniyle servis yalnÄ±zca loopback adresinde Ã§alÄ±ÅŸabilir.", file=sys.stderr)
         return 2
 
     origins = set(args.origin) | {
@@ -2370,39 +2365,39 @@ def main() -> int:
     server.pass_cache = PassCache()  # type: ignore[attr-defined]
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
     if args.shading_strength is not None and not 0.0 <= args.shading_strength <= 1.2:
-        print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
+        print("--shading-strength 0 ile 1.2 arasÄ±nda olmalÄ±.", file=sys.stderr)
         return 2
     server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
     server.realism = find_realism(args.realism_python, args.realism_models)  # type: ignore[attr-defined]
     if server.realism:  # type: ignore[attr-defined]
-        print(f"Fotoğraf gerçekçiliği AÇIK (difüzyon + kimlik yönlendirmesi): {args.realism_models}", flush=True)
+        print(f"FotoÄŸraf gerÃ§ekÃ§iliÄŸi AÃ‡IK (difÃ¼zyon + kimlik yÃ¶nlendirmesi): {args.realism_models}", flush=True)
     elif args.realism_python or args.realism_models:
         print(
-            "Fotoğraf gerçekçiliği kullanılamıyor: ortam veya modeller eksik. "
-            "Kurmak için: .\\tools\\install_realism.ps1",
+            "FotoÄŸraf gerÃ§ekÃ§iliÄŸi kullanÄ±lamÄ±yor: ortam veya modeller eksik. "
+            "Kurmak iÃ§in: .\\tools\\install_realism.ps1",
             flush=True
         )
     print(
-        f"Retake kişisel yüz profili servisi: http://{args.host}:{args.port} "
+        f"Retake kiÅŸisel yÃ¼z profili servisi: http://{args.host}:{args.port} "
         f"(profile={HYBRID_PROFILE_VERSION}, pixel boost={args.face_swapper_pixel_boost}, "
         f"GFPGAN={'on' if args.enable_face_enhancer else 'off'})",
         flush=True
     )
-    print("Servis yalnızca loopback adresini dinler.", flush=True)
+    print("Servis yalnÄ±zca loopback adresini dinler.", flush=True)
     if server.pairing_token:  # type: ignore[attr-defined]
         print(
-            "Telefon/PWA eşleştirmesi AÇIK. Bu bilgisayara bir HTTPS tünel aç "
-            f"(ör. cloudflared tunnel --url http://127.0.0.1:{args.port}) ve Retake'te "
-            "'Motor bağlantısı' bölümüne tünel adresi ile şu kodu gir:",
+            "Telefon/PWA eÅŸleÅŸtirmesi AÃ‡IK. Bu bilgisayara bir HTTPS tÃ¼nel aÃ§ "
+            f"(Ã¶r. cloudflared tunnel --url http://127.0.0.1:{args.port}) ve Retake'te "
+            "'Motor baÄŸlantÄ±sÄ±' bÃ¶lÃ¼mÃ¼ne tÃ¼nel adresi ile ÅŸu kodu gir:",
             flush=True
         )
-        print(f"    EŞLEŞTİRME KODU: {server.pairing_token}", flush=True)  # type: ignore[attr-defined]
-        print("Kodu bilen herkes bu motoru kullanabilir; paylaşma.", flush=True)
-    print("İzinli web origin'leri: " + ", ".join(sorted(origins)), flush=True)
+        print(f"    EÅLEÅTÄ°RME KODU: {server.pairing_token}", flush=True)  # type: ignore[attr-defined]
+        print("Kodu bilen herkes bu motoru kullanabilir; paylaÅŸma.", flush=True)
+    print("Ä°zinli web origin'leri: " + ", ".join(sorted(origins)), flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
-        print("\nRetake yerel yüz profili servisi kapatılıyor.", flush=True)
+        print("\nRetake yerel yÃ¼z profili servisi kapatÄ±lÄ±yor.", flush=True)
     finally:
         server.server_close()
     return 0
@@ -2410,3 +2405,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v18"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v19"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -254,8 +254,8 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
     except (ValueError, TypeError) as error:
         raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
     mode = value.get("mode", "full")
-    if mode not in ("full", "lower"):
-        raise ValueError("Gerçek fotoğraf aktarım modu full veya lower olmalı.")
+    if mode not in ("full", "lower", "both"):
+        raise ValueError("Gerçek fotoğraf aktarım modu full, lower veya both olmalı.")
     return {"mode": mode, "targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
@@ -989,7 +989,8 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
         else:
             transplanted, chosen, fits = choose_and_transplant(
                 result, target, candidates,
-                np.asarray(real_face["targetLandmarks"], np.float32), face_width
+                np.asarray(real_face["targetLandmarks"], np.float32), face_width,
+                complete_face=real_face.get("mode") == "full"
             )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
@@ -1343,16 +1344,20 @@ def process_swap(
         beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
         blends: list[tuple[Path, float]] = []
         labels: list[str] = []
-        transplanted: set[Path] = set()
-        # v18 automatically tries pose-matched lower-face reference detail,
-        # but only in several targeted rounds: heavy piecewise warps in all
-        # 24 rounds would waste the 420-second search budget.
-        # Full-face transplants remain a separate explicit user choice.
+        transplanted: dict[Path, str] = {}
+        # In selected rounds compare the complete reference face, its
+        # beard/jaw-only detail, and model-only identity. Every option starts
+        # from the original target; only ArcFace-verified, seamless results
+        # are eligible to win. Restrict extra warps to budgeted rounds.
         lower_reference_rounds = (0, 2, 7, 11, 15, 19, 21, 23)
-        try_reference = bool(real_face) and (
-            real_face.get("mode") == "full" or variation in lower_reference_rounds
-        )
-        transplant_options = [None, real_face] if try_reference else [None]
+        full_reference_rounds = (0, 4, 11, 19)
+        transplant_options: list[dict[str, Any] | None] = [None]
+        if real_face:
+            mode = real_face.get("mode", "full")
+            if mode in ("lower", "both") and variation in lower_reference_rounds:
+                transplant_options.append({**real_face, "mode": "lower"})
+            if mode in ("full", "both") and (mode == "full" or variation in full_reference_rounds):
+                transplant_options.append({**real_face, "mode": "full"})
         for index, (harmonize, shading_cap) in enumerate(COMPOSITE_VARIANTS):
             shading = user_shading if user_shading is not None else None
             if index > 0:
@@ -1366,11 +1371,11 @@ def process_swap(
                     target_path, identity_source, appearance_output, path, metadata["faceBounds"],
                     detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
                 ):
-                    transplanted.add(path)
+                    transplanted[path] = transplant.get("mode", "full") if transplant else "full"
                 blends.append((path, float(report.get("border", 0.0))))
                 label = f"ton {harmonize:g}"
                 if path in transplanted:
-                    label += " + referans alt yüz" if real_face and real_face.get("mode") == "lower" else " + doku nakli"
+                    label += " + referans alt yüz" if transplanted[path] == "lower" else " + tam referans yüzü"
                 labels.append(label)
         texture_blends: set[Path] = set()
         if texture_output is not None:
@@ -1392,11 +1397,8 @@ def process_swap(
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
-        used_lower_face = (
-            used_real_face and real_face is not None
-            and real_face.get("mode") == "lower"
-        )
-        used_full_face = used_real_face and not used_lower_face
+        used_lower_face = transplanted.get(chosen_blend) == "lower"
+        used_full_face = transplanted.get(chosen_blend) == "full"
         chosen_texture = (
             f"reference-{texture_reference_index + 1:02d}"
             if chosen_blend in texture_blends and texture_reference_index is not None
@@ -1597,6 +1599,7 @@ def process_swap(
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
             "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
+            "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
@@ -1893,7 +1896,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
-            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused"
+            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

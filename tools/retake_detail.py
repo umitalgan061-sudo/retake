@@ -308,7 +308,8 @@ def choose_and_transplant(
     candidates: list[tuple[np.ndarray, np.ndarray]],
     target_points: np.ndarray,
     face_width: float,
-    min_fit: float | None = MIN_REAL_FACE_FIT
+    min_fit: float | None = MIN_REAL_FACE_FIT,
+    complete_face: bool = False
 ) -> tuple[np.ndarray, int, list[dict[str, float]]]:
     """Warp each (image, mesh) candidate onto the face, keep the one that fits best.
 
@@ -320,6 +321,13 @@ def choose_and_transplant(
     if not candidates:
         raise ValueError("gerçek fotoğraf adayı yok")
     allowed = _changed_mask(swapped, target, face_width)
+    if complete_face:
+        # The parser-based FaceFusion result does not always change beard
+        # or cheek-hair pixels. For a full-face *candidate*, reference detail
+        # may also be carried through unchanged pixels INSIDE the mesh oval.
+        # The transplant_region below still rejects outside-face pixels and
+        # protects the mouth and the reference's forehead hairline.
+        allowed = np.maximum(allowed, 0.78)
     best = None
     fits = []
     for index, candidate in enumerate(candidates):

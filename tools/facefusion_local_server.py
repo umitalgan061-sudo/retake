@@ -813,7 +813,17 @@ def choose_composite(
         if names[item[1]].find("referans alt yüz") >= 0
         and item[0] >= value - 0.002
     ]
-    if matched_lower:
+    # User-requested complete reconstruction: a true reference image may
+    # win only after the same border threshold and within a strict ArcFace
+    # near-tie. Full-face isn't forced on incompatible pose/light/expression.
+    matched_full = [
+        item for item in scored
+        if "tam referans yüzü" in names[item[1]]
+        and item[0] >= max(score for score, _, _ in scored) - 0.002
+    ]
+    if matched_full:
+        value, path, border = max(matched_full, key=lambda item: item[0])
+    elif matched_lower:
         value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
         f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"

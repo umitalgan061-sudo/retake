@@ -280,3 +280,12 @@ if ($LASTEXITCODE -ne 0) { throw "Güncelleme tamamlanmadı" }
 ```
 
 GitHub merge tek başına yerel GPU motorunu veya Firebase Hosting'i yayımlamaz.
+
+
+### Retake v22 — ince yüz/çene çizgisi ve karar kayıtları
+
+v21 gerçek fotoğraf testinde motor ve Firebase doğru sürümde çalışsa da v20 ve v21 çıktıları piksel bazında neredeyse aynı kaldı; kazanan ilk tur için kontur temizliği uygulanmamıştı. v21 koyu çizginin geniş 11–27 piksellik sınır bandının en az %3'ünü kaplamasını beklediği için ince fakat uzun bir çizgi elenebiliyordu. v22, şüpheli koyulaşmayı **yalnızca 7–13 piksellik dar gerçek kontur şeridinde** puanlar, en az %1,5 şerit payı / asgari koyu piksel koşulunu kullanır ve işe yarayan onarımı yine ArcFace doğrulamasına gönderir. Çizgi hedef fotoğrafın kendisinde de varsa onarılmaz.
+
+Her doğrulanan turda `[Retake] Kontur taraması: koyu piksel=...; kenar payı=%...; karar=...; azalma=%...` yazılır. `karar=repaired` olsa dahi sonraki `Kontur adayı kimliği koruyamadı; atlandı` kaydı olasıdır: bu durumda onarım **nihai sonuçta kullanılmamıştır**. Bu yeni tanı kayıtları gerçek kaynak fotoğraf olmadan önceki atlanmanın kesin sebebini varsaymak yerine sonraki testte ölçmeye yarar.
+
+Güncelleme, tamamlanan fotoğraf işlemi yokken: `git pull --ff-only origin main`, ardından `.\tools\update_retake_ultra.ps1 -SkipPull`. Motor `retake_hybrid_25_reference_ultra_v22` dönmelidir. Görsel kalitenin arttığı ancak yeni üretilmiş gerçek sonuçla doğrulanabilir.

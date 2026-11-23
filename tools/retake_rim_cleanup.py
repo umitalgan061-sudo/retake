@@ -15,9 +15,12 @@ import numpy as np
 
 def repair_dark_rim(
     target: np.ndarray, edited: np.ndarray, bounds: dict[str, Any]
-) -> tuple[np.ndarray, dict[str, float]]:
+) -> tuple[np.ndarray, dict[str, Any]]:
     """Clean only a narrow darkened edge of the changed face; preserve alpha."""
-    statistics = {"dark_line_pixels": 0.0, "corrected_pixels": 0.0, "dark_line_fraction": 0.0}
+    statistics = {
+        "dark_line_pixels": 0.0, "corrected_pixels": 0.0, "dark_line_fraction": 0.0,
+        "dark_line_remaining": 0.0, "dark_line_reduction": 0.0, "stage": "not_examined"
+    }
     if (
         target is None or edited is None or target.ndim != 3 or edited.ndim != 3
         or target.shape[:2] != edited.shape[:2] or target.shape[2] < 3
@@ -63,19 +66,40 @@ def repair_dark_rim(
     # The widened ring only locates candidates: pixels still need to be
     # darker than the unchanged original AND inside the face alpha.
     ring_width = int(np.clip(round(width * 0.085), 11, 27)) | 1
-    ring = cv2.morphologyEx(
+    # The broad ring locates the face contour, but its total area is too
+    # large to score a one-pixel hairline/chin outline. In production v21 a
+    # visible thin line was skipped: the numerator was a narrow trace while
+    # the denominator was a 11–27px band. Assess the actual ink pixels
+    # against a narrow 7–13px strip, not the broad search area.
+    broad_ring = cv2.morphologyEx(
         filled, cv2.MORPH_GRADIENT,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring_width, ring_width))
     ) > 0
+    narrow_width = int(np.clip(round(width * 0.035), 7, 13)) | 1
+    narrow_ring = cv2.morphologyEx(
+        filled, cv2.MORPH_GRADIENT,
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (narrow_width, narrow_width))
+    ) > 0
+    # Score only the thin true contour; repair the entire broad halo band.
+    # Restricting the repair itself to the thin band missed half of a 3px
+    # synthetic outline and left a visible remnant (caught by CI).
+    edge = broad_ring & (alpha > 0)
+    scoring_edge = narrow_ring & edge
     orig_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY).astype(np.int16)
     out_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY).astype(np.int16)
-    new_dark = ring & ((orig_gray - out_gray) > 10) & (out_gray < 145) & (alpha > 0)
-    count, edge_count = int(new_dark.sum()), int(ring.sum())
-    fraction = count / max(1, edge_count)
+    new_dark = edge & ((orig_gray - out_gray) > 10) & (out_gray < 145)
+    count, edge_count = int(new_dark.sum()), int(scoring_edge.sum())
+    fraction = int((new_dark & scoring_edge).sum()) / max(1, edge_count)
     statistics["dark_line_pixels"] = float(count)
+    statistics["edge_pixels"] = float(edge_count)
     statistics["dark_line_fraction"] = round(fraction, 5)
-    if count < max(40, int(width * 0.14)) or fraction < 0.03:
+    if count < max(24, int(width * 0.10)):
+        statistics["stage"] = "few_dark_pixels"
         return edited, statistics
+    if fraction < 0.015:
+        statistics["stage"] = "low_edge_fraction"
+        return edited, statistics
+    statistics["stage"] = "candidate_detected"
 
     # Median filtering cannot reconstruct a continuous 2–4-pixel dark
     # outline. It can report thousands of edited pixels while leaving
@@ -100,7 +124,8 @@ def repair_dark_rim(
     statistics["dark_line_reduction"] = round((baseline - best_remaining) / max(1, baseline), 5)
     # Do not claim success because a blur changed arbitrary skin pixels:
     # require measurable reduction of the offending dark outline.
-    if best_candidate is None or baseline - best_remaining < max(20, int(baseline * 0.25)):
+    if best_candidate is None or baseline - best_remaining < max(12, int(baseline * 0.25)):
+        statistics["stage"] = "reduction_below_25_percent"
         return edited, statistics
     repaired = edited.copy()
     repaired_roi = repaired[top:bottom, left:right, :3]
@@ -108,13 +133,14 @@ def repair_dark_rim(
     statistics["corrected_pixels"] = float(np.count_nonzero(
         np.max(cv2.absdiff(repaired_roi, result), axis=2)[new_dark] >= 1
     ))
+    statistics["stage"] = "repaired"
     return repaired, statistics
 
 
 def repair_dark_rim_file(
     original_path: Path, composite_path: Path, repaired_path: Path,
     bounds: dict[str, Any]
-) -> dict[str, float]:
+) -> dict[str, Any]:
     original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
     result = cv2.imread(str(composite_path), cv2.IMREAD_UNCHANGED)
     if original is None or result is None:

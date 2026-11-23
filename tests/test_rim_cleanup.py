@@ -62,6 +62,33 @@ class FaceRimCleanupTest(unittest.TestCase):
                         "real inner beard detail must not be inpainted")
         self.assertTrue(np.array_equal(cleaned[:, :, 3], edited[:, :, 3]))
 
+    def test_short_one_pixel_jaw_ink_trace_is_detected(self):
+        # A partial 110-degree outline occupies under 3% of the OLD wide
+        # detection band: v21 silently skipped the visibly dark line.
+        source = self.make_source()
+        edited = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)
+        cv2.ellipse(edited, (135, 150), (80, 102), 0, 0, 360, (181, 181, 181, 255), -1)
+        cv2.ellipse(edited, (135, 150), (80, 102), 0, 25, 145, (5, 5, 5, 255), 1)
+        original_alpha = edited[:, :, 3].copy()
+        cleaned, report = repair_dark_rim(source, edited, self.bounds)
+        self.assertGreater(report["dark_line_pixels"], 35)
+        self.assertGreater(report["dark_line_fraction"], 0.015)
+        self.assertEqual(report["stage"], "repaired")
+        self.assertGreater(report["dark_line_reduction"], .25)
+        self.assertTrue(np.array_equal(cleaned[:, :, 3], original_alpha))
+        self.assertTrue(np.array_equal(cleaned[150, 135], edited[150, 135]))
+        self.assertTrue(np.array_equal(cleaned[0:24], edited[0:24]))
+
+    def test_naturally_dark_target_outline_is_not_removed(self):
+        source = self.make_source()
+        edited = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)
+        cv2.ellipse(source, (135, 150), (80, 102), 0, 0, 360, (5, 5, 5), 2)
+        edited[:, :, :3] = source
+        result, report = repair_dark_rim(source, edited, self.bounds)
+        self.assertEqual(report["dark_line_pixels"], 0)
+        self.assertEqual(report["corrected_pixels"], 0)
+        self.assertTrue(np.array_equal(result, edited))
+
     def test_no_halo_means_byte_for_byte_unchanged(self):
         source = self.make_source()
         same = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)

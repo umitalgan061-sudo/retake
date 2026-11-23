@@ -144,6 +144,13 @@ class RealFaceRequestTest(unittest.TestCase):
         validated = srv._validate_metadata({**self.base, "realFace": many}, srv.MAX_REFERENCES)["realFace"]
         self.assertEqual(len(validated["targetLandmarks"]), MESH_POINTS)
         self.assertEqual(len(validated["references"]), 3)
+        lower = srv._validate_metadata(
+            {**self.base, "realFace": {**many, "mode": "lower"}}, srv.MAX_REFERENCES
+        )["realFace"]
+        self.assertEqual(lower["mode"], "lower")
+        self.assertEqual(validated["mode"], "full")
+        with self.assertRaisesRegex(ValueError, "aktarım modu"):
+            srv._validate_metadata({**self.base, "realFace": {**many, "mode": "unknown"}}, srv.MAX_REFERENCES)
         # The single-candidate form is still understood.
         single = {"referenceLandmarks": mesh, "targetLandmarks": mesh}
         validated = srv._validate_metadata({**self.base, "realFace": single}, srv.MAX_REFERENCES)["realFace"]

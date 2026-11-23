@@ -355,7 +355,7 @@ class CachedPipelineTest(unittest.TestCase):
             "headFit": {"scaleX": 0.97, "scaleY": 1.04}
         }
         if real_face:
-            metadata["realFace"] = {"targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
+            metadata["realFace"] = {"mode": "lower" if real_face == "lower" else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
             metadata["realReferenceBytes"] = [b"photo"]
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
@@ -502,6 +502,22 @@ class CachedPipelineTest(unittest.TestCase):
         self.blend_scores = [0.60, 0.80, 0.61, 0.70, 0.62, 0.71]
         headers = self.run_swap(1, [], real_face=True)
         self.assertEqual(headers["X-Retake-Real-Face"], "on")
+
+    def test_lower_face_candidate_can_win_when_arcface_prefers_reference_beard(self):
+        self.blend_scores = [0.70, 0.88, 0.69, 0.75, 0.68, 0.72]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(2, [], real_face="lower")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Real-Face"], "off",
+                         "lower-only mode must not pretend to have pasted the whole face")
+        self.assertEqual(headers["X-Retake-Variation"], "2")
+
+    def test_measured_jaw_variant_has_dedicated_header(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
+        focused = self.run_swap(2, [], jaw_warp=jaw)
+        ordinary = self.run_swap(0, [], jaw_warp=jaw)
+        self.assertEqual(focused["X-Retake-Jaw-Focused"], "on")
+        self.assertEqual(ordinary["X-Retake-Jaw-Focused"], "off")
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])
@@ -667,6 +683,24 @@ class CompositeChoiceTest(unittest.TestCase):
             chosen = srv.choose_composite(Path("ff"), [1.0, 0.0], self.blends)
         self.assertEqual(chosen, Path("middle.png"))
         self.assertEqual(calls, [["seamless.png", "middle.png"]], "a visible border is never scored")
+
+    def test_real_lower_face_wins_only_within_tiny_arcface_tie(self):
+        labels = ["normal", "ton 0.6 + referans alt yüz", "ton 0.35 + doku nakli"]
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.8389]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("middle.png"),
+                         "real beard detail may win only when ArcFace is effectively equal")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.82]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("seamless.png"),
+                         "do not sacrifice meaningful global identity for any beard texture")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.839]):
+            best = srv.choose_composite(
+                Path("ff"), [1.0], self.blends,
+                ["normal", "ton 0.6 + doku nakli", "normal"]
+            )
+        self.assertEqual(best, Path("seamless.png"),
+                         "full-face transplant is not rewarded just for having a reference image")
 
     def test_without_a_measurement_the_most_seamless_blend_is_kept(self):
         with patch.object(srv, "score_identity", lambda *args: [None, None]):

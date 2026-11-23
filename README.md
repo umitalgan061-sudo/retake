@@ -205,3 +205,19 @@ v16 ile yapılan gerçek fotoğraf denemesinde, aktarılan yüzün alın–yanak
 Ultra-420 tahmini kalan süre artık teorik 24 turun tamamını (ör. 73 dakika) toplamaktan kaçınır. Yeni GPU turu 420 saniyelik arama penceresi dolduğunda başlatılmaz; devam eden CUDA geçişi bu süreyi aşabilir. Eksik hız geçmişinde veya final süre beklemesinde ETA hesabı hata vermez. Ekrandaki ArcFace sayı değeri artık 83 yerine örneğin **82,8** ya da **83,3** gibi bir ondalıkla gösterilir; bu sayı doğrulanmış kişinin kimlik olasılığı değildir.
 
 Yeni sürüme geçmek için `.\\tools\\update_retake_ultra.ps1` çalıştırılmalı ve gerekirse Firebase yayını tamamlanmalıdır. Sağlık kontrolü `model=retake_hybrid_25_reference_ultra_v17` göstermelidir. Web arayüzü geçiş süresince hem v16 hem v17 Ultra motorlarına bağlanabilir.
+
+
+## Retake v18 — otomatik sakal, bıyık ve çene transferi (Ultra-420)
+
+Önceki v17 sürümünde sakal çoğunlukla açık/koyu renk dengelemesiyle işleniyordu; gerçek referans fotoğrafını yüzün üzerine taşıyan seçenek ise varsayılan olarak kapalıydı. v18 ile MediaPipe 478 işaretli yüzde **pozla eşleşen en fazla 3 gerçek referans fotoğrafı**, varsayılan olarak *yalnızca sakal / bıyık / çene* adayı için hazırlanır. `tools/lower_face_transfer.py` kaynak fotoğraftaki gerçek kıl/doku bilgisini hedef yüze 478 noktalı üçgenlerle taşır, dudakları, ağız açıklığını, gözleri, saç ve kıyafetleri değiştirmez. Yüzün tümünü gerçek fotoğraftan aktarmak hâlâ ayrı bir kullanıcı seçeneği olarak kalır.
+
+Ayrıca, referans yüzün ölçülen çene konturunu daha güçlü uygulayan bazı Ultra varyasyonları bulunur. Ortaya çıkan alternatifler yine v18 motorundaki ArcFace kimlik, kenar dikişi ve gerçekçilik kontrollerinden geçirilir; değişiklik yüzü daha az benzetiyorsa önceki güvenilir adaya dönülür. Pozu eşleşen referans bulunamadığında alt yüz nakli devreye girmez. **Bu algoritma 83 skorunu kesin olarak yükseltme garantisi vermez** ve salt koyuluk/eşleştirme ölçüleri biyometrik çene/sakal kimlik skoru değildir.
+
+GitHub `main` güncellenmesi tek başına **Firebase web yayını veya Windows'ta açık FaceFusion motorunu** güncellemez:
+
+```powershell
+Set-Location "C:\\AI\\retake"
+.\\tools\\update_retake_ultra.ps1
+```
+
+Yeni yerel motorun `/health` yanıtında `model=retake_hybrid_25_reference_ultra_v18` görünmelidir. Canlı `app.js` dosyasında `X-Retake-Lower-Face-Transfer` bulunması web yayınının güncelliğine işarettir. Güncel arayüz, v18 motorunu zorunlu kılar.

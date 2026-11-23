@@ -36,7 +36,10 @@ export function describeSimilarity(after, before, referenceMedian = null) {
   if (score === null) return "";
   const previous = similarityScore(before);
   const comparison = referenceComparison(after, referenceMedian);
-  return `Kimlik benzerliği ${score} · ${similarityVerdict(score)}` +
+  // Scores shown as integers hide genuine small changes: 0.825–0.834
+  // all display as 83. Show one decimal, never claim a calibrated percent.
+  const decimalScore = (Number(after) * 100).toFixed(1).replace(".", ",");
+  return `Kimlik benzerliği ${decimalScore} · ${similarityVerdict(score)}` +
     (comparison ? ` · ${comparison}` : "") +
     (previous === null ? "" : ` · orijinal ${previous}`);
 }

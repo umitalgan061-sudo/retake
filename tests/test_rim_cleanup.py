@@ -6,7 +6,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tools.retake_rim_cleanup import repair_dark_rim, repair_dark_rim_file
+from tools.retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim, repair_dark_rim_file
 
 
 class FaceRimCleanupTest(unittest.TestCase):
@@ -102,6 +102,24 @@ class FaceRimCleanupTest(unittest.TestCase):
             cleaned, stats = repair_dark_rim(source, result, invalid)
             self.assertEqual(stats["corrected_pixels"], 0)
             self.assertTrue(np.array_equal(cleaned, result))
+
+    def test_read_only_halo_diagnostic_preserves_delivered_pixels(self):
+        source, result = self.make_ink_outline()
+        with tempfile.TemporaryDirectory() as directory:
+            original = Path(directory) / "target.png"
+            final = Path(directory) / "final.png"
+            self.assertTrue(cv2.imwrite(str(original), source))
+            self.assertTrue(cv2.imwrite(str(final), result))
+            before = final.read_bytes()
+            report = inspect_dark_rim_file(original, final, self.bounds)
+            self.assertGreater(report["dark_line_fraction"], .01)
+            self.assertEqual(before, final.read_bytes(), "a metric must never change the output")
+
+    def test_read_only_halo_diagnostic_returns_unknown_when_missing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = inspect_dark_rim_file(root / "missing-target.png", root / "missing-output.png", self.bounds)
+            self.assertEqual(report["stage"], "not_examined")
 
     def test_file_candidate_can_be_arcface_verified_before_replacement(self):
         source, result = self.make_ink_outline()

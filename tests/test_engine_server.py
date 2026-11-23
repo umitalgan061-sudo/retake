@@ -533,8 +533,54 @@ class CachedPipelineTest(unittest.TestCase):
 
     def test_real_reference_warp_is_cached_across_three_tone_variants(self):
         self.run_swap(0, [], real_face="both")
-        self.assertEqual(self.transplant_modes.count("lower"), 1)
+        self.assertEqual(self.transplant_modes.count("lower"), 3,
+                         "once across tone variants plus two strength-adjusted identity rescues")
         self.assertEqual(self.transplant_modes.count("full"), 1)
+
+    def test_identity_beard_can_survive_if_cosine_is_near_tied_with_identity_only(self):
+        # The observed v19 failure: 0.833 pure-identity fallback always
+        # removed the actual reference beard. A feathered reference beard
+        # within .003 cosine is now allowed, with an additional seam gate.
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-beard-35.png": 0.832,
+            "retake-identity-beard-65.png": 0.831,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-beard")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8320")
+
+    def test_identity_beard_rejected_when_cosine_loss_is_not_a_tie(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-beard-35.png": 0.826,
+            "retake-identity-beard-65.png": 0.824,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-only")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8330")
+
+    def test_identity_only_jaw_candidate_is_scored_and_may_win_a_strict_tie(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 381]}], "anchors": [[195, 200]]}
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.804,
+            "retake-pre-geometry.png": 0.804,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-jaw.png": 0.832,
+        }
+        headers = self.run_swap(2, [], jaw_warp=jaw)
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-jaw")
+        self.assertEqual(headers["X-Retake-Jaw-Focused"], "on")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
 
     def test_measured_jaw_variant_has_dedicated_header(self):
         jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
@@ -548,7 +594,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.run_swap(3, [])
         self.assertEqual(self.arcface_calls, 1)
         self.assertEqual([model for model, _ in self.facefusion_calls].count("alphaface_256"), 2)
-        self.assertEqual(self.facefusion_calls[-1][1], 0.94)
+        self.assertEqual(self.facefusion_calls[-1][1], 0.95)
 
 
 class RemainingTimeTest(unittest.TestCase):

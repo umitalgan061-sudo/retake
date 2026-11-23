@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v19"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v20"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -106,32 +106,32 @@ HEAD_FIT_MAX = 1.18
 # FaceFusion passes and only redoes blending and head fitting (seconds, not
 # minutes). The fourth is a genuinely different, softer identity pass.
 FACE_SWAP_VARIATIONS = (
-    # Four legacy v15 variants plus 20 v16 search alternatives.
-    # Different swapper weights reuse GPU passes when possible.
+    # v20: CLI supports exact 0.05 steps, not 0.94/0.96/0.99.
+    # Cover 1.00 / 0.95 / 0.90 early with varied texture/shape settings.
     (1.00, 0.20, 1.00),
     (1.00, 0.24, 0.00),
     (1.00, 0.12, 1.50),
-    (0.94, 0.30, 0.50),
+    (0.95, 0.30, 0.50),
     (1.00, 0.08, 0.00),
     (1.00, 0.32, 0.00),
-    (1.00, 0.14, 0.65),
+    (0.90, 0.14, 0.65),
     (1.00, 0.28, 1.20),
-    (0.99, 0.10, 0.00),
-    (0.99, 0.28, 0.85),
-    (0.99, 0.36, 0.00),
-    (0.98, 0.10, 1.10),
-    (0.98, 0.18, 0.00),
-    (0.98, 0.30, 0.65),
-    (0.97, 0.08, 0.00),
-    (0.97, 0.24, 1.20),
-    (0.96, 0.14, 0.70),
-    (0.96, 0.32, 0.00),
+    (0.95, 0.10, 0.00),
+    (0.95, 0.28, 0.85),
+    (0.95, 0.36, 0.00),
+    (0.95, 0.10, 1.10),
+    (0.95, 0.18, 0.00),
+    (0.95, 0.30, 0.65),
+    (0.95, 0.08, 0.00),
+    (0.95, 0.24, 1.20),
+    (0.90, 0.14, 0.70),
+    (0.90, 0.32, 0.00),
     (0.95, 0.14, 0.00),
     (0.95, 0.24, 0.90),
-    (0.94, 0.08, 0.00),
-    (0.94, 0.24, 1.00),
-    (0.92, 0.14, 0.00),
-    (0.92, 0.30, 0.70),
+    (0.90, 0.08, 0.00),
+    (0.90, 0.24, 1.00),
+    (0.90, 0.18, 0.00),
+    (0.90, 0.30, 0.70),
 )
 
 
@@ -549,6 +549,18 @@ def tail(text: str, limit: int = 4500) -> str:
     return value[-limit:] if value else "FaceFusion ayrıntılı hata kaydı üretmedi."
 
 
+def supported_facefusion_weight(value: float) -> float:
+    """Normalize to FaceFusion's exact 0.05 CLI steps and share cache key."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("FaceFusion ağırlığı sayı olmalı.") from error
+    if not math.isfinite(amount) or not 0.0 <= amount <= 1.0:
+        raise ValueError("FaceFusion ağırlığı 0 ile 1 arasında olmalı.")
+    steps = min(20, max(0, int(math.floor(amount * 20.0 + 0.5))))
+    return steps / 20.0
+
+
 def run_facefusion(
     facefusion_dir: Path,
     target_path: Path,
@@ -558,6 +570,7 @@ def run_facefusion(
     pixel_boost: str,
     face_swapper_weight: float = 1.0
 ) -> tuple[bool, str]:
+    face_swapper_weight = supported_facefusion_weight(face_swapper_weight)
     command = [
         sys.executable,
         str(facefusion_dir / "facefusion.py"),
@@ -1213,6 +1226,7 @@ def process_swap(
         face_swapper_weight, detail_transfer_strength, head_fit_strength = (
             FACE_SWAP_VARIATIONS[variation]
         )
+        face_swapper_weight = supported_facefusion_weight(face_swapper_weight)
         head_fit = metadata["headFit"]
         jaw_warp = metadata.get("jawWarp")
         # Dedicated aggressive-jaw variants extend the *measured reference*

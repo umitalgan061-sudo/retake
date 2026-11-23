@@ -22,7 +22,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
@@ -33,7 +33,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
@@ -1586,6 +1586,29 @@ def process_swap(
         for index, value in enumerate(candidate_scores[1:], start=1):
             if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
+        # Only an ArcFace near-tie can be settled by regional photographic
+        # detail. Measure the actual delivered pixels, not a metadata flag.
+        candidate_detail_scores: list[float | None] = []
+        for _, candidate_path in rescue_candidates:
+            try:
+                detail, _ = check_photo_detail(target_path, candidate_path, metadata["faceBounds"])
+            except (ValueError, OSError, cv2.error):
+                detail = None
+            candidate_detail_scores.append(detail)
+        detail_choice = choose_detail_safe_tie(
+            candidate_scores, candidate_detail_scores, chosen_index
+        )
+        if detail_choice != chosen_index:
+            previous = chosen_index
+            chosen_index = detail_choice
+            best_score = candidate_scores[chosen_index]
+            print(
+                f"[Ultra] ArcFace yakın eşitliğinde daha doğal doku seçildi: "
+                f"{rescue_candidates[previous][0]} → {rescue_candidates[chosen_index][0]} "
+                f"(detay {candidate_detail_scores[previous]:.3f} → "
+                f"{candidate_detail_scores[chosen_index]:.3f}).",
+                flush=True
+            )
         selected_identity = rescue_candidates[chosen_index][0]
         # ArcFace can undervalue beard edges. ONLY when pure identity won
         # and a measured regional alternative is within 0.003 absolute

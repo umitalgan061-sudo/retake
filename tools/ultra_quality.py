@@ -25,6 +25,71 @@ REGIONS = {
 }
 
 
+def choose_detail_safe_tie(
+    identity_scores: list[float | None],
+    detail_scores: list[float | None],
+    incumbent: int,
+    identity_tolerance: float = 0.003,
+    minimum_detail_gain: float = 0.025,
+) -> int:
+    """Resolve only valid ArcFace near-ties using natural photo microdetail.
+
+    The selected identity score must remain within a narrow cosine tolerance
+    of both the incumbent and the strongest measurable candidate. A missing
+    score, an invalid quality metric, or an inconclusive gain never replaces
+    the current winner. This is a quality heuristic, not a realism percentage.
+    """
+    if (
+        not (0 <= incumbent < len(identity_scores) == len(detail_scores))
+        or not math.isfinite(identity_tolerance)
+        or not 0 <= identity_tolerance <= 0.01
+        or not math.isfinite(minimum_detail_gain)
+        or not 0 <= minimum_detail_gain <= 1
+    ):
+        return incumbent
+
+    def identity(value: float | None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and -1 <= value <= 1 else None
+
+    def quality(value: float | None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and 0 <= value <= 1 else None
+
+    current_identity = identity(identity_scores[incumbent])
+    current_detail = quality(detail_scores[incumbent])
+    if current_identity is None or current_detail is None:
+        return incumbent
+
+    verified_scores = [identity(score) for score in identity_scores]
+    highest_identity = max(score for score in verified_scores if score is not None)
+    if current_identity < highest_identity - identity_tolerance:
+        # An existing identity winner that is not itself near the highest
+        # measurement cannot be quietly replaced by an appearance-only vote.
+        return incumbent
+
+    contenders = [
+        index for index, score in enumerate(verified_scores)
+        if score is not None
+        and score >= current_identity - identity_tolerance
+        and score >= highest_identity - identity_tolerance
+        and quality(detail_scores[index]) is not None
+    ]
+    if not contenders:
+        return incumbent
+    best = max(
+        contenders,
+        key=lambda index: (float(detail_scores[index]), float(verified_scores[index]))
+    )
+    if quality(detail_scores[best]) >= current_detail + minimum_detail_gain:
+        return best
+    return incumbent
+
+
 def _detail_energy(gray: np.ndarray) -> float:
     if min(gray.shape[:2]) < 8:
         return 0.0
@@ -90,3 +155,4 @@ def check_photo_detail(
     original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
     result = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
     return regional_photo_detail(original, result, bounds)
+

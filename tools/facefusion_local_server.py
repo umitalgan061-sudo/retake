@@ -1375,6 +1375,7 @@ def process_swap(
             used_real_face and real_face is not None
             and real_face.get("mode") == "lower"
         )
+        used_full_face = used_real_face and not used_lower_face
         chosen_texture = (
             f"reference-{texture_reference_index + 1:02d}"
             if chosen_blend in texture_blends and texture_reference_index is not None
@@ -1458,6 +1459,7 @@ def process_swap(
         # detail layer. Report the transfer only if it survives final selection.
         if selected_identity == "identity-only":
             used_lower_face = False
+            used_full_face = False
             used_real_face = False
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
@@ -1571,7 +1573,7 @@ def process_swap(
             "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
             "X-Retake-Variation": str(variation),
-            "X-Retake-Real-Face": "on" if used_real_face else "off",
+            "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
             "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
@@ -1869,7 +1871,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup"
+            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
+            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v21"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1677,6 +1677,17 @@ def process_swap(
         try:
             rim_stats = repair_dark_rim_file(
                 target_path, final_output, rim_candidate, metadata["faceBounds"]
+            )
+            # Production v21 returned the old visible outline with no
+            # explanation. Always report detected ink pixels and the actual
+            # decision (even when the conservative repair does not activate).
+            print(
+                "[Retake] Kontur taraması: "
+                f"koyu piksel={rim_stats.get('dark_line_pixels', 0):.0f}; "
+                f"kenar payı=%{rim_stats.get('dark_line_fraction', 0) * 100:.2f}; "
+                f"karar={rim_stats.get('stage', 'unknown')}; "
+                f"azalma=%{rim_stats.get('dark_line_reduction', 0) * 100:.1f}.",
+                flush=True
             )
             if rim_stats.get("corrected_pixels", 0) > 0 and centroid:
                 corrected_score = score_identity(facefusion_dir, centroid, [rim_candidate])[0]

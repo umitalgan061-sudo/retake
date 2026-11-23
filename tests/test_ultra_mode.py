@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from tools import facefusion_local_server as srv
 from tools.ultra_mode import (
-    ULTRA_VARIATIONS, prefer_ultra_candidate, score_from_headers,
+    ULTRA_VARIATIONS, prefer_ultra_candidate, rim_from_headers, score_from_headers,
     should_continue_ultra, with_variation
 )
 
@@ -228,6 +228,34 @@ class UltraSelectionTest(unittest.TestCase):
         c = {**score(.821), "X-Retake-Detail-Score": ".95"}
         self.assertTrue(prefer_ultra_candidate(b, a))
         self.assertFalse(prefer_ultra_candidate(c, a))
+
+    def test_rejects_unverifiable_or_invalid_residual_halo_scores(self):
+        for invalid in ("", "nan", "inf", "-0.1", "1.1", "bogus"):
+            self.assertIsNone(rim_from_headers({"X-Retake-Rim-Fraction": invalid}))
+        self.assertIsNone(rim_from_headers({}))
+        self.assertAlmostEqual(rim_from_headers({"X-Retake-Rim-Fraction": ".19"}), .19)
+
+    def test_visible_black_outline_breaks_only_identity_near_ties(self):
+        dark = {**score(.838), "X-Retake-Rim-Fraction": ".19", "X-Retake-Detail-Score": ".85"}
+        clean = {**score(.837), "X-Retake-Rim-Fraction": ".04", "X-Retake-Detail-Score": ".70"}
+        worse = {**score(.821), "X-Retake-Rim-Fraction": ".00"}
+        self.assertTrue(prefer_ultra_candidate(clean, dark), "visible seam improvement wins a narrow ArcFace tie")
+        self.assertFalse(prefer_ultra_candidate(dark, clean), "same identity tie must reject darker outline")
+        self.assertFalse(prefer_ultra_candidate(worse, dark), "a cleaner face must not replace a different identity")
+        self.assertTrue(prefer_ultra_candidate(dark, worse), "meaningful identity gain stays first priority")
+
+    def test_missing_halo_score_never_counts_as_perfect(self):
+        dark = {**score(.83), "X-Retake-Rim-Fraction": ".19"}
+        missing = score(.83)
+        invalid = {**score(.83), "X-Retake-Rim-Fraction": "nan"}
+        self.assertFalse(prefer_ultra_candidate(missing, dark))
+        self.assertFalse(prefer_ultra_candidate(invalid, dark))
+        self.assertFalse(prefer_ultra_candidate(dark, missing))
+
+    def test_small_halo_difference_defers_to_existing_detail_tie_break(self):
+        old = {**score(.83), "X-Retake-Rim-Fraction": ".10", "X-Retake-Detail-Score": ".40"}
+        new = {**score(.83), "X-Retake-Rim-Fraction": ".09", "X-Retake-Detail-Score": ".88"}
+        self.assertTrue(prefer_ultra_candidate(new, old))
 
     def test_every_failed_round_preserves_original_error_kind(self):
         with patch.object(srv, "process_swap", side_effect=srv.NoOpSwapError("no face")):

@@ -23,7 +23,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail
-    from .retake_rim_cleanup import repair_dark_rim_file
+    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -34,7 +34,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail
-    from retake_rim_cleanup import repair_dark_rim_file
+    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -1673,6 +1673,7 @@ def process_swap(
         # gate. Attempt a narrow, local cleanup on the existing face matte,
         # then keep it only if ArcFace still verifies the same identity.
         rim_cleaned = False
+        rim_stats: dict[str, Any] | None = None
         rim_candidate = temp_dir / "retake-rim-clean.png"
         try:
             rim_stats = repair_dark_rim_file(
@@ -1706,6 +1707,23 @@ def process_swap(
         except Exception as error:
             print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
 
+        # Measure the FINAL delivered pixels, not the pre-repair proposal.
+        # The ArcFace guard may reject a successful-looking cleanup; never
+        # reward a candidate for a repair that wasn't actually committed.
+        rim_fraction: float | None = None
+        try:
+            residual = (
+                inspect_dark_rim_file(target_path, final_output, metadata["faceBounds"])
+                if rim_cleaned else rim_stats
+            )
+            if isinstance(residual, dict) and residual.get("stage") != "not_examined":
+                measure = float(residual["dark_line_fraction"])
+                if math.isfinite(measure) and 0 <= measure <= 1:
+                    rim_fraction = measure
+                    print(f"[Ultra] Sonuç yüz konturu kararma payı: %{measure * 100:.2f}.", flush=True)
+        except (TypeError, ValueError, KeyError, OSError) as error:
+            print(f"[Ultra] Yüz konturu ölçümü doğrulanamadı: {error}", flush=True)
+
         # An unverifiable or measurably worse identity is a failed edit, not
         # a successful-looking photo. This relative guard avoids claiming a
         # universal fixed cosine threshold for every angle and lighting.
@@ -1737,6 +1755,7 @@ def process_swap(
         headers = {
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
+            "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -2080,7 +2099,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
+            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy"
         )

@@ -1645,7 +1645,7 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
-    clock=None, sleeper=None, on_hold=None,
+    clock=None, sleeper=None, on_hold=None, on_finalist=None,
     min_duration_seconds: float | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
@@ -1662,6 +1662,13 @@ def run_ultra_search(
     best_round = 0
     completed = 0
     errors: list[Exception] = []
+    # Diffusion is expensive and stochastic. Running 2–3 diffusion renders
+    # in every one of 24 variants exhausted the seven-minute search window
+    # before Retake could actually compare different identities. Compare
+    # all feasible identity candidates first, then invest the heavy GPU
+    # realism pass in the single best validated finalist.
+    has_realism = bool(caches and caches.get("realism"))
+    search_caches = {**caches, "realism": None} if has_realism else caches
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -1679,7 +1686,7 @@ def run_ultra_search(
         try:
             image, headers = process_swap(
                 facefusion_dir, pixel_boost, enhancer_enabled,
-                with_variation(parsed, variation), report, caches
+                with_variation(parsed, variation), report, search_caches
             )
         except Exception as error:
             errors.append(error)
@@ -1702,6 +1709,27 @@ def run_ultra_search(
             raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
+    # One GPU realism investment on the best identity, not 24. This
+    # evaluation always uses the untouched original target and reference
+    # sources; it never feeds a generated face back as identity input.
+    if has_realism:
+        try:
+            if on_finalist is not None:
+                on_finalist()
+            upgraded_image, upgraded_headers = process_swap(
+                facefusion_dir, pixel_boost, enhancer_enabled,
+                with_variation(parsed, ULTRA_VARIATIONS[best_round - 1]),
+                lambda *_args, **_kwargs: None, caches
+            )
+            if prefer_ultra_candidate(upgraded_headers, best_headers):
+                best_result, best_headers = upgraded_image, upgraded_headers
+                print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
+            else:
+                print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+        except Exception as error:
+            # Realism is optional: preserve a previously verified result.
+            print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
+
     # Spend the available interval trying distinct variants; when the GPU
     # finishes them faster, honor the explicit seven-minute minimum without
     # pointlessly running the identical model again. Failed jobs return early.
@@ -1720,6 +1748,7 @@ def run_ultra_search(
         "X-Retake-Ultra-Rounds": str(completed),
         "X-Retake-Ultra-Winner": str(best_round),
         "X-Retake-Ultra-Elapsed": str(round(clock() - started, 1)),
+        "X-Retake-Ultra-Realism-Policy": "finalist-only" if has_realism else "not-installed",
     }
     print(
         f"[Ultra] Sonuç: {completed} doğrulanmış tur, kazanan {best_round}. tur; "
@@ -1740,6 +1769,13 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         # Actual inference has finished; mark 99% until requested minimum.
         job["step"] = job["total"] - 1
         job["stage_started"] = None  # do not log final waiting as GPU inference
+
+    def finalist() -> None:
+        # No false ETA: the diffusion worker's duration is GPU-dependent
+        # and not covered by the bounded 420-second candidate search.
+        job["stage"] = "Ultra · en iyi yüz için son fotogerçekçilik geçişi"
+        job["step"] = job["total"] - 1
+        job["stage_started"] = None
 
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
@@ -1775,7 +1811,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None)
             },
-            on_hold=hold
+            on_hold=hold, on_finalist=finalist
         )
         close_stage(time.time())
         job["result"] = result
@@ -1906,7 +1942,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, "
-            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity"
+            "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
+            "X-Retake-Ultra-Realism-Policy"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

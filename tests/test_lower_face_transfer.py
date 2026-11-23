@@ -79,11 +79,17 @@ class LowerFaceTransferTest(unittest.TestCase):
         swapped[70:100, 100:140] = 185
         region = lower_face_mask(self.mesh, self.mesh, (SIZE, SIZE), 140) > 0.65
         self.assertTrue(np.array_equal(swapped[region], self.target[region]))
+        # Include distinct actual hair/stubble microtexture. A uniform
+        # -22 brightness difference would be (correctly) neutralized by
+        # local lighting normalization and is not a facial-hair test.
+        beard_reference = self.reference.copy()
+        for x in range(80, 164, 3):
+            cv2.line(beard_reference, (x, 165), (x + 6, 213), (12, 22, 29), 1, cv2.LINE_AA)
         with patch("tools.lower_face_transfer.candidate_fit", return_value={
             "structure": 0.8, "light": 0.4, "score": 1.0
         }):
             result, _, _ = choose_and_transfer_lower_face(
-                swapped, self.target, [(self.reference, self.mesh)],
+                swapped, self.target, [(beard_reference, self.mesh)],
                 self.mesh, face_width=140, strength=0.94
             )
         self.assertGreater(float(np.mean(np.abs(

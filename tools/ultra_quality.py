@@ -32,26 +32,60 @@ def choose_detail_safe_tie(
     identity_tolerance: float = 0.003,
     minimum_detail_gain: float = 0.025,
 ) -> int:
-    """Break an ArcFace near-tie with photographic detail, never replace a clear winner.
+    """Resolve only valid ArcFace near-ties using natural photo microdetail.
 
-    Identity remains the primary safety gate. This narrow tie-break exists
-    because a cosmetically smoother candidate can score virtually the same in
-    ArcFace while visibly losing beard, skin and hair-adjacent texture.
+    The selected identity score must remain within a narrow cosine tolerance
+    of both the incumbent and the strongest measurable candidate. A missing
+    score, an invalid quality metric, or an inconclusive gain never replaces
+    the current winner. This is a quality heuristic, not a realism percentage.
     """
-    if not (0 <= incumbent < len(identity_scores) == len(detail_scores)):
+    if (
+        not (0 <= incumbent < len(identity_scores) == len(detail_scores))
+        or not math.isfinite(identity_tolerance)
+        or not 0 <= identity_tolerance <= 0.01
+        or not math.isfinite(minimum_detail_gain)
+        or not 0 <= minimum_detail_gain <= 1
+    ):
         return incumbent
-    identity = identity_scores[incumbent]
-    incumbent_detail = detail_scores[incumbent]
-    if identity is None or incumbent_detail is None:
+
+    def identity(value: float | None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and -1 <= value <= 1 else None
+
+    def quality(value: float | None) -> float | None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        value = float(value)
+        return value if math.isfinite(value) and 0 <= value <= 1 else None
+
+    current_identity = identity(identity_scores[incumbent])
+    current_detail = quality(detail_scores[incumbent])
+    if current_identity is None or current_detail is None:
         return incumbent
-    eligible = [
-        index for index, (score, detail) in enumerate(zip(identity_scores, detail_scores))
-        if score is not None and detail is not None and score >= identity - identity_tolerance
+
+    verified_scores = [identity(score) for score in identity_scores]
+    highest_identity = max(score for score in verified_scores if score is not None)
+    if current_identity < highest_identity - identity_tolerance:
+        # An existing identity winner that is not itself near the highest
+        # measurement cannot be quietly replaced by an appearance-only vote.
+        return incumbent
+
+    contenders = [
+        index for index, score in enumerate(verified_scores)
+        if score is not None
+        and score >= current_identity - identity_tolerance
+        and score >= highest_identity - identity_tolerance
+        and quality(detail_scores[index]) is not None
     ]
-    if not eligible:
+    if not contenders:
         return incumbent
-    best = max(eligible, key=lambda index: (float(detail_scores[index]), float(identity_scores[index])))
-    if float(detail_scores[best]) >= incumbent_detail + minimum_detail_gain:
+    best = max(
+        contenders,
+        key=lambda index: (float(detail_scores[index]), float(verified_scores[index]))
+    )
+    if quality(detail_scores[best]) >= current_detail + minimum_detail_gain:
         return best
     return incumbent
 

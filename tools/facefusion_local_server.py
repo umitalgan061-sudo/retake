@@ -1644,6 +1644,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["minimum_remaining_seconds"] = round(remaining, 1)
         # Actual inference has finished; mark 99% until requested minimum.
         job["step"] = job["total"] - 1
+        job["stage_started"] = None  # do not log final waiting as GPU inference
 
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
@@ -1697,8 +1698,14 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
 
 
 def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> float | None:
-    if timings is None or job["status"] not in {"queued", "running"}:
+    if job["status"] not in {"queued", "running"}:
         return None
+    minimum_remaining = (
+        max(0.0, ULTRA_MIN_SECONDS - (time.time() - job["created"]))
+        if "minimum_remaining_seconds" in job and "created" in job else 0.0
+    )
+    if timings is None:
+        return minimum_remaining if minimum_remaining > 0 else None
     total = job.get("total", len(JOB_STAGES))
     step = min(job.get("step", 0), total - 1)
     pending = [
@@ -1706,9 +1713,9 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
         for index in range(step, total) if index not in job["skipped"]
     ]
     if not pending:
-        return 0.0
+        return minimum_remaining
     in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
-    return timings.remaining(pending, 0, in_current)
+    return max(minimum_remaining, timings.remaining(pending, 0, in_current))
 
 
 def create_job(realism: bool = False) -> dict[str, Any]:

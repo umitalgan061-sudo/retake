@@ -6,7 +6,7 @@ import unittest
 import cv2
 import numpy as np
 
-from tools.ultra_quality import REGIONS, regional_photo_detail
+from tools.ultra_quality import REGIONS, choose_detail_safe_tie, regional_photo_detail
 
 BOUNDS = {"x": 54, "y": 54, "width": 210, "height": 245}
 
@@ -50,6 +50,18 @@ class UltraPhotoDetailTest(unittest.TestCase):
         )
         self.assertIsNone(score)
 
+    def test_detail_breaks_only_an_identity_near_tie(self):
+        self.assertEqual(
+            choose_detail_safe_tie([.8400, .8385], [.80, .88], 0), 1
+        )
+        self.assertEqual(
+            choose_detail_safe_tie([.8400, .8300], [.80, .98], 0), 0
+        )
+        self.assertEqual(
+            choose_detail_safe_tie([.8400, .8390], [.80, .81], 0), 0
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
+

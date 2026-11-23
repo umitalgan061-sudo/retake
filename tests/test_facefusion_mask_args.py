@@ -20,6 +20,7 @@ from tools.facefusion_local_server import (
     MAX_TARGET_HEIGHT,
     MAX_TARGET_WIDTH,
     run_facefusion,
+    supported_facefusion_weight,
 )
 
 
@@ -69,7 +70,9 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 24)
         strengths = set()
         for swapper_weight, detail_strength, head_fit_strength in FACE_SWAP_VARIATIONS:
-            self.assertGreaterEqual(swapper_weight, 0.92)
+            self.assertGreaterEqual(swapper_weight, 0.90)
+            self.assertEqual(round(swapper_weight * 20), swapper_weight * 20,
+                             "FaceFusion only accepts exact multiples of 0.05")
             self.assertLessEqual(swapper_weight, 1.0)
             self.assertGreater(detail_strength, 0)
             self.assertLessEqual(detail_strength, 0.36)
@@ -157,11 +160,31 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         )
         command = subprocess_run.call_args.args[0]
         weight_index = command.index("--face-swapper-weight")
-        self.assertEqual(command[weight_index + 1], "0.94")
+        self.assertEqual(command[weight_index + 1], "0.95")
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FaceFusionWeightGridTest(unittest.TestCase):
+    def test_all_ultra_variants_can_execute_on_facefusion_392(self):
+        self.assertEqual(len(FACE_SWAP_VARIATIONS), 24)
+        self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 24)
+        self.assertIn(0.9, {x[0] for x in FACE_SWAP_VARIATIONS})
+        self.assertIn(0.95, {x[0] for x in FACE_SWAP_VARIATIONS})
+        for variation, (weight, *_rest) in enumerate(FACE_SWAP_VARIATIONS):
+            with self.subTest(variation=variation):
+                self.assertAlmostEqual(supported_facefusion_weight(weight), weight)
+                self.assertEqual(round(weight * 20), weight * 20)
+
+    def test_invalid_float_weights_are_normalized_before_argparse(self):
+        for raw, expected in ((0.94, .95), (.96, .95), (.97, .95), (.98, 1.0), (.99, 1.0), (.92, .90)):
+            with self.subTest(raw=raw):
+                self.assertEqual(supported_facefusion_weight(raw), expected)
+        for raw in (float("nan"), float("inf"), -0.01, 1.01, None, "oops"):
+            with self.subTest(raw=raw), self.assertRaises(ValueError):
+                supported_facefusion_weight(raw)
 
 
 class HeadFitLimitsTest(unittest.TestCase):

@@ -119,6 +119,30 @@ class TransplantTest(unittest.TestCase):
         self.assertTrue(np.array_equal(complete[10:35], baseline[10:35]))
         self.assertTrue(np.array_equal(complete[:, 10:30], baseline[:, 10:30]))
 
+    def test_fractional_full_photo_transfer_preserves_original_identity_base(self):
+        baseline = self.target.copy()
+        refs = [(self.reference, self.points)]
+        full, _, _ = choose_and_transplant(
+            baseline, self.target, refs, self.points, 140,
+            min_fit=None, complete_face=True, strength=1.0
+        )
+        gentle, _, _ = choose_and_transplant(
+            baseline, self.target, refs, self.points, 140,
+            min_fit=None, complete_face=True, strength=0.20
+        )
+        full_change = float(np.abs(full.astype(np.float32) - baseline.astype(np.float32)).mean())
+        gentle_change = float(np.abs(gentle.astype(np.float32) - baseline.astype(np.float32)).mean())
+        self.assertGreater(gentle_change, 0.1)
+        self.assertLess(gentle_change, full_change * 0.35)
+        self.assertTrue(np.array_equal(gentle[0:20], baseline[0:20]))
+        self.assertTrue(np.array_equal(gentle[:, 0:30], baseline[:, 0:30]))
+        for strength in (0.0, -0.1, 1.01, float("nan")):
+            with self.subTest(strength=strength), self.assertRaisesRegex(ValueError, "gücü"):
+                choose_and_transplant(
+                    baseline, self.target, refs, self.points, 140,
+                    min_fit=None, complete_face=True, strength=strength
+                )
+
     def test_open_mouth_and_what_the_swap_kept_stay_untouched(self):
         swapped = self.swapped.copy()
         # A hand over the cheek: the swap model's mask kept the photo there.

@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v19"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v20"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -106,32 +106,32 @@ HEAD_FIT_MAX = 1.18
 # FaceFusion passes and only redoes blending and head fitting (seconds, not
 # minutes). The fourth is a genuinely different, softer identity pass.
 FACE_SWAP_VARIATIONS = (
-    # Four legacy v15 variants plus 20 v16 search alternatives.
-    # Different swapper weights reuse GPU passes when possible.
+    # v20: CLI supports exact 0.05 steps, not 0.94/0.96/0.99.
+    # Cover 1.00 / 0.95 / 0.90 early with varied texture/shape settings.
     (1.00, 0.20, 1.00),
     (1.00, 0.24, 0.00),
     (1.00, 0.12, 1.50),
-    (0.94, 0.30, 0.50),
+    (0.95, 0.30, 0.50),
     (1.00, 0.08, 0.00),
     (1.00, 0.32, 0.00),
-    (1.00, 0.14, 0.65),
+    (0.90, 0.14, 0.65),
     (1.00, 0.28, 1.20),
-    (0.99, 0.10, 0.00),
-    (0.99, 0.28, 0.85),
-    (0.99, 0.36, 0.00),
-    (0.98, 0.10, 1.10),
-    (0.98, 0.18, 0.00),
-    (0.98, 0.30, 0.65),
-    (0.97, 0.08, 0.00),
-    (0.97, 0.24, 1.20),
-    (0.96, 0.14, 0.70),
-    (0.96, 0.32, 0.00),
+    (0.95, 0.10, 0.00),
+    (0.95, 0.28, 0.85),
+    (0.95, 0.36, 0.00),
+    (0.95, 0.10, 1.10),
+    (0.95, 0.18, 0.00),
+    (0.95, 0.30, 0.65),
+    (0.95, 0.08, 0.00),
+    (0.95, 0.24, 1.20),
+    (0.90, 0.14, 0.70),
+    (0.90, 0.32, 0.00),
     (0.95, 0.14, 0.00),
     (0.95, 0.24, 0.90),
-    (0.94, 0.08, 0.00),
-    (0.94, 0.24, 1.00),
-    (0.92, 0.14, 0.00),
-    (0.92, 0.30, 0.70),
+    (0.90, 0.08, 0.00),
+    (0.90, 0.24, 1.00),
+    (0.90, 0.18, 0.00),
+    (0.90, 0.30, 0.70),
 )
 
 
@@ -549,6 +549,18 @@ def tail(text: str, limit: int = 4500) -> str:
     return value[-limit:] if value else "FaceFusion ayrıntılı hata kaydı üretmedi."
 
 
+def supported_facefusion_weight(value: float) -> float:
+    """Normalize to FaceFusion's exact 0.05 CLI steps and share cache key."""
+    try:
+        amount = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError("FaceFusion ağırlığı sayı olmalı.") from error
+    if not math.isfinite(amount) or not 0.0 <= amount <= 1.0:
+        raise ValueError("FaceFusion ağırlığı 0 ile 1 arasında olmalı.")
+    steps = min(20, max(0, int(math.floor(amount * 20.0 + 0.5))))
+    return steps / 20.0
+
+
 def run_facefusion(
     facefusion_dir: Path,
     target_path: Path,
@@ -558,6 +570,7 @@ def run_facefusion(
     pixel_boost: str,
     face_swapper_weight: float = 1.0
 ) -> tuple[bool, str]:
+    face_swapper_weight = supported_facefusion_weight(face_swapper_weight)
     command = [
         sys.executable,
         str(facefusion_dir / "facefusion.py"),
@@ -994,13 +1007,17 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
             transplanted, chosen, fits = choose_and_transfer_lower_face(
                 result, target, candidates,
                 np.asarray(real_face["targetLandmarks"], np.float32), face_width,
-                strength=0.94
+                # The rescue path can try a gentle real-beard transfer
+                # over the stronger identity-only base, rather than losing
+                # global facial identity to an all-or-nothing transplant.
+                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0))))
             )
         else:
             transplanted, chosen, fits = choose_and_transplant(
                 result, target, candidates,
                 np.asarray(real_face["targetLandmarks"], np.float32), face_width,
-                complete_face=real_face.get("mode") == "full"
+                complete_face=real_face.get("mode") == "full",
+                strength=float(real_face.get("strength", 1.0))
             )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
@@ -1213,6 +1230,7 @@ def process_swap(
         face_swapper_weight, detail_transfer_strength, head_fit_strength = (
             FACE_SWAP_VARIATIONS[variation]
         )
+        face_swapper_weight = supported_facefusion_weight(face_swapper_weight)
         head_fit = metadata["headFit"]
         jaw_warp = metadata.get("jawWarp")
         # Dedicated aggressive-jaw variants extend the *measured reference*
@@ -1457,15 +1475,84 @@ def process_swap(
         # an unmasked raw FaceFusion output. It can rescue cases where
         # beautifying and geometric edits have pulled the person off-identity.
         identity_fallback = temp_dir / "retake-identity-only.png"
+        identity_border_report: dict[str, Any] = {}
         try:
             blend_lower_face(
                 target_path, identity_source, appearance_output, identity_fallback,
                 metadata["faceBounds"], 0.0, metadata["targetSize"],
-                shading_strength=0.0, harmonize_strength=0.35
+                shading_strength=0.0, harmonize_strength=0.35,
+                report=identity_border_report
             )
         except Exception as error:
             print(f"Yedek saf kimlik bileşimi oluşturulamadı: {error}", flush=True)
             identity_fallback = None
+
+        # v19's biggest practical failure: the pure-identity fallback won
+        # ArcFace in every real round (0.833), deleting the reference beard
+        # and all jaw changes. Give that strong ID base its OWN local,
+        # feathered beard and chin geometry alternatives. These are rescue
+        # candidates, not blind pasted faces. The next ArcFace check must
+        # approve them, and a significantly worse matte border disqualifies
+        # them before candidate selection.
+        identity_regional_candidates: list[tuple[str, Path]] = []
+        if identity_fallback is not None:
+            original_border = float(identity_border_report.get("border", 0.0))
+            max_regional_border = max(BORDER_STEP_FLOOR, original_border * 1.15)
+            if real_face and real_face.get("mode") in ("lower", "both") and variation in lower_reference_rounds:
+                for transfer_strength in (0.35, 0.65):
+                    path = temp_dir / f"retake-identity-beard-{int(transfer_strength * 100)}.png"
+                    report: dict[str, Any] = {}
+                    try:
+                        used = blend_lower_face(
+                            target_path, identity_source, appearance_output, path,
+                            metadata["faceBounds"], 0.0, metadata["targetSize"],
+                            shading_strength=0.0,
+                            real_face={**real_face, "mode": "lower", "strength": transfer_strength},
+                            harmonize_strength=0.35, report=report
+                        )
+                        border = float(report.get("border", float("inf")))
+                        if used and math.isfinite(border) and border <= max_regional_border:
+                            identity_regional_candidates.append(("identity-beard", path))
+                        else:
+                            print(
+                                f"[Retake] Güvenli sakal adayı atlandı "
+                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                            )
+                    except Exception as error:
+                        print(f"[Retake] Kimlik üstü sakal nakli atlandı: {error}", flush=True)
+            if real_face and real_face.get("mode") in ("full", "both") and variation in full_reference_rounds:
+                for transfer_strength in (0.20, 0.40):
+                    path = temp_dir / f"retake-identity-full-{int(transfer_strength * 100)}.png"
+                    report: dict[str, Any] = {}
+                    try:
+                        used = blend_lower_face(
+                            target_path, identity_source, appearance_output, path,
+                            metadata["faceBounds"], 0.0, metadata["targetSize"],
+                            shading_strength=0.0,
+                            real_face={**real_face, "mode": "full", "strength": transfer_strength},
+                            harmonize_strength=0.35, report=report
+                        )
+                        border = float(report.get("border", float("inf")))
+                        if used and math.isfinite(border) and border <= max_regional_border:
+                            identity_regional_candidates.append(("identity-full", path))
+                        else:
+                            print(
+                                f"[Retake] Güvenli tam yüz adayı atlandı "
+                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                            )
+                    except Exception as error:
+                        print(f"[Retake] Kimlik üstü tam referans dokusu atlandı: {error}", flush=True)
+            if jaw_warp and jaw_scale > 0:
+                jaw_candidate = temp_dir / "retake-identity-jaw.png"
+                try:
+                    shutil.copyfile(identity_fallback, jaw_candidate)
+                    reshape_jawline(
+                        jaw_candidate, jaw_warp, metadata["faceBounds"]["width"],
+                        min(1.25, jaw_scale)
+                    )
+                    identity_regional_candidates.append(("identity-jaw", jaw_candidate))
+                except Exception as error:
+                    print(f"[Retake] Kimlik üstü çene uyarlaması atlandı: {error}", flush=True)
 
         # Photographic realism (optional): re-render the face with a diffusion
         # model steered by the person's ArcFace identity.
@@ -1486,6 +1573,7 @@ def process_swap(
         rescue_candidates = [("head-fit", final_output), ("no-head-warp", pre_geometry_output)]
         if identity_fallback is not None:
             rescue_candidates.append(("identity-only", identity_fallback))
+        rescue_candidates.extend(identity_regional_candidates)
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
         before_similarity = scores[-1]
@@ -1499,12 +1587,40 @@ def process_swap(
             if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
         selected_identity = rescue_candidates[chosen_index][0]
-        # Identity-only fallback does not include the reference lower-face
-        # detail layer. Report the transfer only if it survives final selection.
+        # ArcFace can undervalue beard edges. ONLY when pure identity won
+        # and a measured regional alternative is within 0.003 absolute
+        # cosine (not "3%" similarity), allow the strongest verified
+        # beard/jaw candidate to replace the unmodified beard.
         if selected_identity == "identity-only":
+            regional_ties = [
+                (index, value)
+                for index, ((label, _), value) in enumerate(zip(rescue_candidates, candidate_scores))
+                if label in ("identity-beard", "identity-full", "identity-jaw")
+                and value is not None and value >= best_score - 0.003
+            ]
+            if regional_ties:
+                chosen_index, best_score = max(regional_ties, key=lambda item: (
+                    item[1],
+                    {"identity-full": 2, "identity-beard": 1, "identity-jaw": 0}
+                    [rescue_candidates[item[0]][0]]
+                ))
+                selected_identity = rescue_candidates[chosen_index][0]
+                print(
+                    f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
+                    f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
+                )
+        if selected_identity in ("identity-only", "identity-jaw"):
             used_lower_face = False
             used_full_face = False
             used_real_face = False
+        elif selected_identity == "identity-beard":
+            used_lower_face = True
+            used_full_face = False
+            used_real_face = True
+        elif selected_identity == "identity-full":
+            used_lower_face = False
+            used_full_face = True
+            used_real_face = True
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1619,7 +1735,7 @@ def process_swap(
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
-            "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
+            "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
             "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,

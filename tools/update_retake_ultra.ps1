@@ -2,7 +2,7 @@
 .SYNOPSIS
   Bring Retake's local FaceFusion bridge and Firebase web hosting up to date.
 .DESCRIPTION
-  Run this from the Retake checkout after merging v16. Downloads main,
+  Run this from an up-to-date Retake worktree. Downloads main,
   publishes Firebase hosting if authenticated, then *restarts only* the
   facefusion_local_server.py process owned by the Retake app.
   Existing pairing mode is preserved when detectable.
@@ -71,7 +71,7 @@ try {
     if (-not (Test-Path $StartScript)) {
         throw "Baslatma betigi bulunamadi: $StartScript"
     }
-    Write-Host "Retake Ultra-420 v16 FaceFusion servisi baslatiliyor..." -ForegroundColor Green
+    Write-Host "Retake Ultra-420 guncel FaceFusion servisi baslatiliyor..." -ForegroundColor Green
     Write-Host "Bu PowerShell penceresini kapatmayin. Ayrica http://127.0.0.1:8765/health kontrol edin." -ForegroundColor Yellow
     if ($EnablePairing -or $pairFromPrevious) {
         & $StartScript -EnablePairing

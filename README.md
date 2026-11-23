@@ -239,3 +239,24 @@ Set-ExecutionPolicy -Scope Process Bypass
 ```
 
 The helper pulls main, tries `firebase deploy --only hosting:retake06 --project projelerim-8fecd` if CLI/authentication is available, and restarts only the Retake Python bridge. It **does not** magically install missing CUDA, diffusion checkpoints or train a personal LoRA. To confirm the new engine: `(Invoke-RestMethod "http://127.0.0.1:8765/health").model` must equal `retake_hybrid_25_reference_ultra_v19`. The live `app.js` should contain `X-Retake-Complete-Identity`. GitHub merge does not automatically publish or restart the user's computer.
+
+
+## Retake v20 — Gerçek GPU logundan doğrulanan kritik Ultra hataları
+
+23 Kasım 2026 tarihli **canlı v19 GPU testi** iki ayrı kalite sorununu doğruladı. İlk olarak FaceFusion 3.9.2 yalnızca **0.05 aralıklarla** verilen `--face-swapper-weight` değerlerini kabul ederken, v19'un 24 adaylık listesinde `0.94, 0.99, 0.98, 0.97, 0.96, 0.92` gibi geçersiz değerler vardı. Bu turlar sessizce eleniyor, gerçekte çok daha az varyasyon çalışıyordu. v20, tüm 24 varyasyonu doğrudan geçerli değerlerle tanımlar (1.00 / 0.95 / 0.90). `supported_facefusion_weight()` CLI'ye gönderim **ve GPU önbellek anahtarı** için ikinci bir güvenlik katmanı olarak 0.05'e yuvarlama yapar; tüm varyasyonların CLI uyumluluğu regresyon testleriyle sınanır.
+
+İkincisi, v19'daki gerçek sakal/çene ve tam yüz nakli **ara aday** olarak başarıyla oluşturulsa da ArcFace skorları (sakal 0.797–0.817, tam yüz yaklaşık 0.632–0.652) saf kimlik yedeğinin (0.833) altında kalınca **nihai çıktı sürekli `identity-only`** oluyordu. Böylece gerçek referans sakalı ve çene şekli geri alınmış oluyordu. v20, güçlü kimlik yedeğinin ÜZERİNE doğrudan, iki ayrı güçte (0.35, 0.65) gerçek sakal/çene adayı, iki düşük güçte (0.20, 0.40) tam yüz referans dokusu adayı ve referansa göre ayrı bir çene geometrisi adayı oluşturur. Bölgesel sakal adayları, mevcut kimlik yedeğinin sınır dikişine göre belirgin daha kötü kenar oluşturmuyorsa ölçülür. **Sadece 0.003 veya daha küçük mutlak ArcFace kaybı** varsa, referans sakalı/çene varyantı kimliği değiştirmeyen yedeğin yerine geçebilir. Büyük kimlik kaybı varsa yine `identity-only` korunur; başarı garantisi veya sahte skor yükseltmesi yapılmaz.
+
+Üçüncüsü, ana gerçekçilik/difüzyon modelleri üç render üretmiş ama ArcFace 0.730 / 0.722 / 0.703 ölçtüğünden v19 bunları doğru biçimde elemişti. v20 bu kimlik koruma filtresini **gevşetmez**. Bu skorlar kalibre edilmiş kimlik yüzdeleri değildir.
+
+Sonuç ekranı, saf kimlik yedeği seçildiğinde **referans sakal/çene aktarımının finalde kullanılmadığını** dürüstçe gösterir. `/health.model` v20'yi, `X-Retake-Identity-Selection` ise gerçekten seçilen final yöntemini belirtir. Örneğin `identity-beard` veya `identity-jaw` ancak ArcFace ve kenar koşulları sağlanınca döner.
+
+Windows kurulumunda eski `C:\AI\retake` klasörü GitHub geçmişiyle ayrışmıştı. Onun yerine 23 Kasım'da oluşturulan güvenli worktree kullanılır:
+
+```powershell
+Set-Location "C:\AI\retake-v19-20261123-143224"
+git pull --ff-only origin main
+.\tools\update_retake_ultra.ps1 -SkipPull
+```
+
+Devam eden iş yokken motor yeniden başlatılmalıdır. Firebase deployment başarılıysa tarayıcıda Ctrl+F5; motor `(Invoke-RestMethod "http://127.0.0.1:8765/health").model` ile `retake_hybrid_25_reference_ultra_v20` olarak kontrol edilir. Bir GitHub merge işlemi **bilgisayarda çalışan servisi veya canlı siteyi** kendiliğinden güncellemez.

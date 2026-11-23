@@ -58,7 +58,11 @@ def repair_dark_rim(
         return edited, statistics
     filled = np.zeros_like(changed)
     cv2.drawContours(filled, [contour], -1, 255, cv2.FILLED)
-    ring_width = int(np.clip(round(width * 0.045), 7, 15)) | 1
+    # A 7-pixel contour search band misses the outer half of real 2–4px
+    # matte outlines; the detector then "repairs" only part of the line.
+    # The widened ring only locates candidates: pixels still need to be
+    # darker than the unchanged original AND inside the face alpha.
+    ring_width = int(np.clip(round(width * 0.085), 11, 27)) | 1
     ring = cv2.morphologyEx(
         filled, cv2.MORPH_GRADIENT,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring_width, ring_width))

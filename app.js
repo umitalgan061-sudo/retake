@@ -637,9 +637,9 @@ function selectResult(index) {
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : "",
     item.lowerFace ? "referans sakal/çene dokusu" : "",
-    item.completeIdentity ? "tam referans yüzü" : "",
+    item.completeIdentity ? "tam yüz referans ayrıntısı" : "",
     item.jawFocused ? "çene geometrisi uyarlaması" : "",
-    item.rimCleanup ? "yüz konturu temizlendi" : "",
+    item.rimCleanup ? "yüz kenarı yumuşatıldı" : "",
     item.identitySelection === "identity-only" ? "referans sakal/çene aktarımı finalde seçilemedi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;

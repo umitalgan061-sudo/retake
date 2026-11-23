@@ -1550,6 +1550,7 @@ def process_swap(
         rescue_candidates = [("head-fit", final_output), ("no-head-warp", pre_geometry_output)]
         if identity_fallback is not None:
             rescue_candidates.append(("identity-only", identity_fallback))
+        rescue_candidates.extend(identity_regional_candidates)
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
         before_similarity = scores[-1]
@@ -1563,12 +1564,35 @@ def process_swap(
             if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
         selected_identity = rescue_candidates[chosen_index][0]
-        # Identity-only fallback does not include the reference lower-face
-        # detail layer. Report the transfer only if it survives final selection.
+        # ArcFace can undervalue beard edges. ONLY when pure identity won
+        # and a measured regional alternative is within 0.003 absolute
+        # cosine (not "3%" similarity), allow the strongest verified
+        # beard/jaw candidate to replace the unmodified beard.
         if selected_identity == "identity-only":
+            regional_ties = [
+                (index, value)
+                for index, ((label, _), value) in enumerate(zip(rescue_candidates, candidate_scores))
+                if label in ("identity-beard", "identity-jaw")
+                and value is not None and value >= best_score - 0.003
+            ]
+            if regional_ties:
+                chosen_index, best_score = max(regional_ties, key=lambda item: (
+                    item[1],
+                    1 if rescue_candidates[item[0]][0] == "identity-beard" else 0
+                ))
+                selected_identity = rescue_candidates[chosen_index][0]
+                print(
+                    f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
+                    f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
+                )
+        if selected_identity in ("identity-only", "identity-jaw"):
             used_lower_face = False
             used_full_face = False
             used_real_face = False
+        elif selected_identity == "identity-beard":
+            used_lower_face = True
+            used_full_face = False
+            used_real_face = True
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1683,7 +1707,7 @@ def process_swap(
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
-            "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
+            "X-Retake-Jaw-Focused": "on" if jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
             "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,

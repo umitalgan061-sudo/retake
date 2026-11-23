@@ -287,9 +287,9 @@ async function checkFaceFusionStatus() {
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
-          !["retake_hybrid_25_reference_ultra_v16", "retake_hybrid_25_reference_ultra_v17"].includes(health.model)) {
+          health.model !== "retake_hybrid_25_reference_ultra_v18") {
         throw new Error(
-          "Retake Ultra-420 motoru eski. Yerel FaceFusion en az v16 olmalı: git pull yapıp motoru yeniden başlat."
+          "Retake Ultra v18 motoru gerekli: git pull yapıp FaceFusion servisini yeniden başlat."
         );
       }
       state.faceFusionStatus = {
@@ -300,10 +300,10 @@ async function checkFaceFusionStatus() {
         realism: Boolean(health.realism),
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
-          ? "Ultra-420 · en az 7 dakika, 24 aday, kişisel model ve bölgesel doku analizi hazır."
+          ? "Ultra-420 v18 · kişisel model ve otomatik çene/sakal aktarımı hazır."
           : health.realism
-            ? "Ultra-420 hazır · en az 7 dakika, gerçekçilik aktif. Kişisel model için: tools\\train_personal_model.ps1"
-            : "Ultra-420 hazır · 24 aday, en az 7 dakika. Gerçekçilik modeli için: tools\\install_realism.ps1"
+            ? "Ultra-420 v18 · sakal/çene adayları ve gerçekçilik aktif. Kişisel model: tools\\train_personal_model.ps1"
+            : "Ultra-420 v18 · 24 aday, sakal/çene aktarımı, en az 7 dk. Gerçekçilik: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -636,6 +636,8 @@ function selectResult(index) {
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : "",
+    item.lowerFace ? "referans sakal/çene dokusu" : "",
+    item.jawFocused ? "çene geometrisi uyarlaması" : "",
     item.rimCleanup ? "yüz konturu temizlendi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
@@ -653,6 +655,8 @@ function addResult(blob, label, scores = {}) {
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
+    lowerFace: scores.lowerFace === true,
+    jawFocused: scores.jawFocused === true,
     rimCleanup: scores.rimCleanup === true,
     realism: scores.realism === true,
     texture: scores.texture || "average",
@@ -1654,9 +1658,10 @@ async function buildLocalFaceFusionInputs() {
       frontalness: face.jaw.frontalness
     }, profile.jawContour)
     : null;
-  const realFace = isRealFaceEnabled()
-    ? await prepareRealFace(face, profile, readyReferences, toCanvas)
-    : null;
+  // Always prepare pose-matched real-reference crops for the lower-face-only
+  // candidate. This does NOT activate the full-face transplant switch.
+  // If the mesh/pose is unreliable, the FaceFusion identity path continues.
+  const realFace = await prepareRealFace(face, profile, readyReferences, toCanvas);
   // The face's mesh in crop pixels: the engine finds the beard and cheeks
   // with it to give the person's own facial-hair tone.
   const targetLandmarks = face.mesh
@@ -1689,8 +1694,8 @@ async function buildLocalFaceFusionInputs() {
   };
 }
 
-// Off by default: pasting another photo's face reads as a mask; the engine's
-// identity-guided realism layer is the default way to a photographic face.
+// Full-face paste remains opt-in. Retake v18 tries *only* a conservative
+// beard/chin/moustache reference candidate automatically in Ultra mode.
 const REAL_FACE_STORAGE_KEY = "retake-real-face-v2";
 
 function isRealFaceEnabled() {
@@ -1958,7 +1963,7 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage("Ultra-420 · kimlik ve fotoğraf ayrıntıları karşılaştırılıyor");
+  showWaitStage("Ultra-420 v18 · çene/sakal kimliği ve gerçek fotoğraf ayrıntıları karşılaştırılıyor");
 
   let generatedUrl = null;
   try {
@@ -1991,6 +1996,7 @@ async function runFaceFusionEdit() {
         form.append("real_reference", candidate.blob, `retake-real-reference-${index + 1}.png`);
       });
       metadata.realFace = {
+        mode: isRealFaceEnabled() ? "full" : "lower",
         targetLandmarks: realFace.targetLandmarks,
         references: realFace.candidates.map((candidate) => ({ landmarks: candidate.landmarks }))
       };
@@ -2024,6 +2030,8 @@ async function runFaceFusionEdit() {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
+      lowerFace: response.headers.get("X-Retake-Lower-Face-Transfer") === "on",
+      jawFocused: response.headers.get("X-Retake-Jaw-Focused") === "on",
       rimCleanup: response.headers.get("X-Retake-Rim-Cleanup") === "on",
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",

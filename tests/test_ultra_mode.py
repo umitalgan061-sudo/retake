@@ -84,6 +84,48 @@ class UltraSelectionTest(unittest.TestCase):
         self.assertEqual(positions, list(range(len(srv.JOB_STAGES) * len(ULTRA_VARIATIONS))))
         self.assertEqual(visits, [(b"original photo", index) for index in ULTRA_VARIATIONS])
 
+    def test_diffusion_is_run_only_for_best_identity_finalist(self):
+        calls = []
+        finalist_calls = []
+        realism_config = {"python": Path("gpu"), "models": Path("weights")}
+
+        def fake_swap(*args):
+            variation = args[3][6]["variation"]
+            active = bool(args[5] and args[5].get("realism"))
+            calls.append((variation, active))
+            if active:
+                return b"realism", score(0.85, realism=True)
+            return f"unfiltered-{variation}".encode(), score(0.84 if variation == 3 else 0.74)
+
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_args, **_kwargs: None,
+                caches={"realism": realism_config},
+                on_finalist=lambda: finalist_calls.append("gpu"),
+                min_duration_seconds=0
+            )
+        self.assertEqual(calls[:24], [(variation, False) for variation in ULTRA_VARIATIONS])
+        self.assertEqual(calls[24:], [(3, True)])
+        self.assertEqual(photo, b"realism")
+        self.assertEqual(finalist_calls, ["gpu"])
+        self.assertEqual(headers["X-Retake-Ultra-Realism-Policy"], "finalist-only")
+
+    def test_bad_finalist_diffusion_cannot_overwrite_sharp_identity_result(self):
+        def fake_swap(*args):
+            if args[5] and args[5].get("realism"):
+                return b"fake-face", score(0.65, realism=True)
+            return b"strong-identity", score(0.84)
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_args, **_kwargs: None,
+                caches={"realism": {"python": Path("gpu")}},
+                min_duration_seconds=0
+            )
+        self.assertEqual(photo, b"strong-identity")
+        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "24")
+
     def test_budget_stops_extra_rounds_without_sleep_or_fake_wait(self):
         now = [0.0]
 

@@ -1007,7 +1007,10 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
             transplanted, chosen, fits = choose_and_transfer_lower_face(
                 result, target, candidates,
                 np.asarray(real_face["targetLandmarks"], np.float32), face_width,
-                strength=0.94
+                # The rescue path can try a gentle real-beard transfer
+                # over the stronger identity-only base, rather than losing
+                # global facial identity to an all-or-nothing transplant.
+                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0))))
             )
         else:
             transplanted, chosen, fits = choose_and_transplant(

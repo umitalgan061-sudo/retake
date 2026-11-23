@@ -293,6 +293,10 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
+        if names == ["retake-rim-clean.png"]:
+            # The optional post-render cleanup uses a second score probe.
+            # Keep the preceding full-rescue probe available to existing tests.
+            return [self.candidate_scores.get(names[0], 0.74) if self.candidate_scores else 0.74]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)

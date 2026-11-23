@@ -567,7 +567,9 @@ class RealismChoiceTest(unittest.TestCase):
     def test_choice_needs_a_verified_identity(self):
         renders = [Path("a.png"), Path("b.png")]
         self.assertEqual(srv.choose_realism_render(0.40, renders, [0.38, 0.51]), (Path("b.png"), 0.51))
-        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.395, None]), (Path("a.png"), 0.395))
+        self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.395, None]),
+                          "v16 rejects even 0.005 cosine loss for optional realism")
+        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.398, None]), (Path("a.png"), 0.398))
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.30, 0.38]))
         self.assertIsNone(srv.choose_realism_render(None, renders, [0.9, 0.9]), "unverifiable")
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [None, None]))

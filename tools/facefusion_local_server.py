@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v17"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v18"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -253,7 +253,10 @@ def _validate_real_face(value: Any, size: dict[str, int]) -> dict[str, Any] | No
         ]
     except (ValueError, TypeError) as error:
         raise ValueError(f"Gerçek fotoğraf yüz ağı geçersiz: {error}") from error
-    return {"targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
+    mode = value.get("mode", "full")
+    if mode not in ("full", "lower"):
+        raise ValueError("Gerçek fotoğraf aktarım modu full veya lower olmalı.")
+    return {"mode": mode, "targetLandmarks": target_points.tolist(), "references": [{"landmarks": mesh} for mesh in meshes]}
 
 
 def _validate_target_landmarks(value: Any, size: dict[str, int]) -> list[list[float]] | None:
@@ -948,8 +951,10 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
     import numpy as np
     try:
         from .retake_detail import choose_and_transplant
+        from .lower_face_transfer import choose_and_transfer_lower_face
     except ImportError:
         from retake_detail import choose_and_transplant
+        from lower_face_transfer import choose_and_transfer_lower_face
     try:
         candidates = []
         for payload, reference in zip(real_face["images"], real_face["references"]):
@@ -963,9 +968,17 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
             candidates.append((image, points))
         if not candidates:
             raise ValueError("gerçek fotoğraf okunamadı")
-        transplanted, chosen, fits = choose_and_transplant(
-            result, target, candidates, np.asarray(real_face["targetLandmarks"], np.float32), face_width
-        )
+        if real_face.get("mode") == "lower":
+            transplanted, chosen, fits = choose_and_transfer_lower_face(
+                result, target, candidates,
+                np.asarray(real_face["targetLandmarks"], np.float32), face_width,
+                strength=0.94
+            )
+        else:
+            transplanted, chosen, fits = choose_and_transplant(
+                result, target, candidates,
+                np.asarray(real_face["targetLandmarks"], np.float32), face_width
+            )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
             f"Gerçek fotoğraf yüzü uygulandı: {len(candidates)} aday bükülüp karşılaştırıldı "
@@ -1168,9 +1181,16 @@ def process_swap(
         )
         head_fit = metadata["headFit"]
         jaw_warp = metadata.get("jawWarp")
+        # Dedicated aggressive-jaw variants extend the *measured reference*
+        # jaw transformation, never invent a generic chin shape. A hard cap
+        # in retake_compositing prevents excessive pixel displacement.
+        jaw_focused = variation in (2, 7, 11, 15, 19, 21, 23)
+        jaw_scale = (
+            min(1.75, max(0.0, head_fit_strength) * (1.40 if jaw_focused else 1.0))
+            if jaw_warp else 0.0
+        )
         # The jaw warp already reshapes the lower face; the global head fit then
         # adds three quarters of its proportion change, so length is not counted twice.
-        jaw_scale = min(1.25, max(0.0, head_fit_strength)) if jaw_warp else 0.0
         if jaw_scale > 0:
             head_fit_strength *= 0.75
         face_width_scale = min(HEAD_FIT_MAX, max(
@@ -1351,6 +1371,10 @@ def process_swap(
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
+        used_lower_face = (
+            used_real_face and real_face is not None
+            and real_face.get("mode") == "lower"
+        )
         chosen_texture = (
             f"reference-{texture_reference_index + 1:02d}"
             if chosen_blend in texture_blends and texture_reference_index is not None
@@ -1430,6 +1454,11 @@ def process_swap(
             if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
         selected_identity = rescue_candidates[chosen_index][0]
+        # Identity-only fallback does not include the reference lower-face
+        # detail layer. Report the transfer only if it survives final selection.
+        if selected_identity == "identity-only":
+            used_lower_face = False
+            used_real_face = False
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1543,6 +1572,8 @@ def process_swap(
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_real_face else "off",
+            "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
+            "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity == "head-fit" else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,

@@ -72,6 +72,26 @@ class LowerFaceTransferTest(unittest.TestCase):
         self.assertTrue(np.array_equal(result[174, 120], self.swap[174, 120]))
         self.assertGreater(int(np.count_nonzero(cv2.absdiff(result, self.swap))), 50)
 
+    def test_replaces_old_beard_even_when_facefusion_left_it_unchanged(self):
+        # v18 multiplied the real reference by the FaceFusion edit mask,
+        # which excludes beard pixels not recognized by the skin parser.
+        swapped = self.target.copy()
+        swapped[70:100, 100:140] = 185
+        region = lower_face_mask(self.mesh, self.mesh, (SIZE, SIZE), 140) > 0.65
+        self.assertTrue(np.array_equal(swapped[region], self.target[region]))
+        with patch("tools.lower_face_transfer.candidate_fit", return_value={
+            "structure": 0.8, "light": 0.4, "score": 1.0
+        }):
+            result, _, _ = choose_and_transfer_lower_face(
+                swapped, self.target, [(self.reference, self.mesh)],
+                self.mesh, face_width=140, strength=0.94
+            )
+        self.assertGreater(float(np.mean(np.abs(
+            result[region].astype(np.float32) - swapped[region].astype(np.float32)
+        ))), 2.0)
+        self.assertTrue(np.array_equal(result[25:40], swapped[25:40]))
+        self.assertTrue(np.array_equal(result[174, 120], swapped[174, 120]))
+
     def test_invalid_mesh_or_strength_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "478"):
             lower_face_mask(self.mesh[:20], self.mesh, (SIZE, SIZE), 140)

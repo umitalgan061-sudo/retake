@@ -149,3 +149,20 @@ def repair_dark_rim_file(
     if report["corrected_pixels"] > 0 and not cv2.imwrite(str(repaired_path), cleaned):
         raise OSError("Yüz kontur onarımı yazılamadı.")
     return report
+
+
+def inspect_dark_rim_file(
+    original_path: Path, composite_path: Path, bounds: dict[str, Any]
+) -> dict[str, Any]:
+    """Measure the visible residual halo without changing an output file.
+
+    Uses the *same* contour, changed-pixel, and target-relative darkness
+    detector as repair_dark_rim. A low fraction is a visual-quality heuristic,
+    not a biometric or calibrated photorealism probability.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    result = cv2.imread(str(composite_path), cv2.IMREAD_UNCHANGED)
+    if original is None or result is None:
+        return {"stage": "not_examined", "dark_line_fraction": 0.0}
+    _, report = repair_dark_rim(original, result, bounds)
+    return report

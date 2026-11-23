@@ -60,7 +60,7 @@ REINFORCE_STAGE = 2
 REALISM_STAGE = 5
 SCORING_STAGE = 6
 # A realism render may cost at most this much ArcFace similarity to be used.
-REALISM_MAX_IDENTITY_LOSS = 0.01
+REALISM_MAX_IDENTITY_LOSS = 0.004
 REALISM_TIMEOUT_SECONDS = 900
 # (tone harmonization, shading cap) per compositing variant; the first is the
 # most seamless. Measured on the user's photos (ArcFace to the references):
@@ -1245,7 +1245,7 @@ def process_swap(
                     # Require an observable improvement, not a tiny change
                     # from embedding / image-encoding measurement noise.
                     if value is not None and (
-                        best_value is None or value > best_value + 0.012
+                        best_value is None or value > best_value + 0.006
                     ):
                         best_index, best_value = i, value
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
@@ -1266,7 +1266,7 @@ def process_swap(
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
                 single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
-                if single is not None and double is not None and double > single + 0.012:
+                if single is not None and double is not None and double > single + 0.008:
                     identity_source = reinforced_output
                     reinforced = True
                 print(
@@ -1425,7 +1425,7 @@ def process_swap(
         chosen_index = 0
         best_score = final_score if final_score is not None else -1.0
         for index, value in enumerate(candidate_scores[1:], start=1):
-            if value is not None and value > best_score + 0.015:
+            if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
         selected_identity = rescue_candidates[chosen_index][0]
         if final_score is None and best_score < -0.99:

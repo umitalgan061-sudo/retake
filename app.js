@@ -286,8 +286,11 @@ async function checkFaceFusionStatus() {
       }
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
-      if (!health.ultra_mode) {
-        throw new Error("Retake Ultra motoru güncel değil. GitHub'daki yeni kodu çekip FaceFusion servisini yeniden başlat.");
+      if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
+          health.model !== "retake_hybrid_25_reference_ultra_v16") {
+        throw new Error(
+          "Retake Ultra-420 motoru eski. Yerel FaceFusion v11/v15 yerine v16 olmalı: git pull yapıp motoru kapat/aç."
+        );
       }
       state.faceFusionStatus = {
         checked: true,
@@ -297,10 +300,10 @@ async function checkFaceFusionStatus() {
         realism: Boolean(health.realism),
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
-          ? "Ultra Mod · 4 varyasyon, kimlik karşılaştırması ve kişisel fotoğraf modelin hazır."
+          ? "Ultra-420 · en az 7 dakika, 24 aday, kişisel model ve bölgesel doku analizi hazır."
           : health.realism
-            ? "Ultra Mod hazır · gerçekçilik açık. Daha iyi yüz detayları için: tools\\train_personal_model.ps1"
-            : "Ultra Mod hazır · gerçekçilik modeli için: tools\\install_realism.ps1"
+            ? "Ultra-420 hazır · en az 7 dakika, gerçekçilik aktif. Kişisel model için: tools\\train_personal_model.ps1"
+            : "Ultra-420 hazır · 24 aday, en az 7 dakika. Gerçekçilik modeli için: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -1879,7 +1882,7 @@ function hideWaitStage() {
 }
 
 const JOB_POLL_INTERVAL_MS = 1500;
-const JOB_TIMEOUT_MS = 20 * 60 * 1000;
+const JOB_TIMEOUT_MS = 45 * 60 * 1000;
 
 // The engine works on the swap as a background job and reports its real stage,
 // so a long run never depends on a single open connection.
@@ -1903,14 +1906,17 @@ async function waitForEngineJob(jobId, total) {
     }
     if (job.status === "error") throw new Error(job.error || "FaceFusion işlemi başarısız.");
     const remaining = formatRemaining(job.eta_seconds);
+    const minimumRemaining = Number(job.minimum_remaining_seconds) > 0
+      ? formatRemaining(job.minimum_remaining_seconds)
+      : "";
     setWaitProgress(
       job.step,
       job.total || total,
-      `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}` + (remaining ? ` · ${remaining}` : "")
+      `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}` + (remaining ? ` · ${remaining}` : "") + (minimumRemaining ? ` · Ultra min. kalan ${minimumRemaining}` : "")
     );
     if (job.status === "done") return;
   }
-  throw new Error("İşlem 20 dakika içinde tamamlanmadı.");
+  throw new Error("İşlem 45 dakika içinde tamamlanmadı.");
 }
 
 async function runFaceFusionEdit() {
@@ -1942,7 +1948,7 @@ async function runFaceFusionEdit() {
   // Ultra always runs the complete bounded search on the server. No more
   // rotating a single head-fit variation when the user taps "generate".
   const variation = 0;
-  elements.outputTitle.textContent = "Ultra Mod · en iyi görünüm aranıyor";
+  elements.outputTitle.textContent = "Ultra-420 · en az 7 dakika kalite araması";
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   if (!state.result) {
     elements.outputPlaceholder.hidden = false;
@@ -1950,7 +1956,7 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage("Ultra Mod · benzerlik ve gerçekçilik optimize ediliyor");
+  showWaitStage("Ultra-420 · kimlik ve fotoğraf ayrıntıları karşılaştırılıyor");
 
   let generatedUrl = null;
   try {
@@ -2011,12 +2017,14 @@ async function runFaceFusionEdit() {
     }
     const completedRounds = Number(response.headers.get("X-Retake-Ultra-Rounds"));
     const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
+    const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
+      detailScore,
       referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
     };
     showProfileHealth(
@@ -2038,7 +2046,7 @@ async function runFaceFusionEdit() {
       generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended"
     );
     state.nextVariation = 0;
-    const ultraLabel = "Ultra · en iyi sonuç" + (
+    const ultraLabel = "Ultra-420 · en iyi sonuç" + (
       Number.isInteger(completedRounds) && completedRounds >= 1
         ? ` (${completedRounds} tur)` : ""
     );

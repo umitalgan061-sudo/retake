@@ -80,12 +80,16 @@ def repair_dark_rim(
         filled, cv2.MORPH_GRADIENT,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (narrow_width, narrow_width))
     ) > 0
-    edge = broad_ring & narrow_ring & (alpha > 0)
+    # Score only the thin true contour; repair the entire broad halo band.
+    # Restricting the repair itself to the thin band missed half of a 3px
+    # synthetic outline and left a visible remnant (caught by CI).
+    edge = broad_ring & (alpha > 0)
+    scoring_edge = narrow_ring & edge
     orig_gray = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY).astype(np.int16)
     out_gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY).astype(np.int16)
     new_dark = edge & ((orig_gray - out_gray) > 10) & (out_gray < 145)
-    count, edge_count = int(new_dark.sum()), int(edge.sum())
-    fraction = count / max(1, edge_count)
+    count, edge_count = int(new_dark.sum()), int(scoring_edge.sum())
+    fraction = int((new_dark & scoring_edge).sum()) / max(1, edge_count)
     statistics["dark_line_pixels"] = float(count)
     statistics["edge_pixels"] = float(edge_count)
     statistics["dark_line_fraction"] = round(fraction, 5)

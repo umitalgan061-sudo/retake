@@ -287,9 +287,9 @@ async function checkFaceFusionStatus() {
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
-          health.model !== "retake_hybrid_25_reference_ultra_v19") {
+          health.model !== "retake_hybrid_25_reference_ultra_v20") {
         throw new Error(
-          "Retake Ultra v19 motoru gerekli: GitHub'dan güncelleyip FaceFusion servisini yeniden başlat."
+          "Retake Ultra v20 motoru gerekli: GitHub'dan güncelleyip FaceFusion servisini yeniden başlat."
         );
       }
       state.faceFusionStatus = {
@@ -300,10 +300,10 @@ async function checkFaceFusionStatus() {
         realism: Boolean(health.realism),
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
-          ? "Ultra-420 v19 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
+          ? "Ultra-420 v20 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
           : health.realism
-            ? "Ultra-420 v19 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
-            : "Ultra-420 v19 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
+            ? "Ultra-420 v20 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
+            : "Ultra-420 v20 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -639,7 +639,8 @@ function selectResult(index) {
     item.lowerFace ? "referans sakal/çene dokusu" : "",
     item.completeIdentity ? "tam referans yüzü" : "",
     item.jawFocused ? "çene geometrisi uyarlaması" : "",
-    item.rimCleanup ? "yüz konturu temizlendi" : ""
+    item.rimCleanup ? "yüz konturu temizlendi" : "",
+    item.identitySelection === "identity-only" ? "referans sakal/çene aktarımı finalde seçilemedi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
   elements.qualityBadge.hidden = !quality;
@@ -660,6 +661,7 @@ function addResult(blob, label, scores = {}) {
     completeIdentity: scores.completeIdentity === true,
     jawFocused: scores.jawFocused === true,
     rimCleanup: scores.rimCleanup === true,
+    identitySelection: scores.identitySelection || "",
     realism: scores.realism === true,
     texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null
@@ -1965,7 +1967,7 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage("Ultra-420 v19 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
+  showWaitStage("Ultra-420 v20 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
 
   let generatedUrl = null;
   try {
@@ -2038,6 +2040,7 @@ async function runFaceFusionEdit() {
       completeIdentity: response.headers.get("X-Retake-Complete-Identity") === "on",
       jawFocused: response.headers.get("X-Retake-Jaw-Focused") === "on",
       rimCleanup: response.headers.get("X-Retake-Rim-Cleanup") === "on",
+      identitySelection: response.headers.get("X-Retake-Identity-Selection") || "",
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
       detailScore,

@@ -74,7 +74,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_ultra_v15, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_ultra_v16, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 
@@ -139,7 +139,7 @@ Hedef fotoğrafın tamamı gönderilmez; seçilen yüz crop'u gönderilir. Refer
 - FaceFusion motorunun döndürdüğü RGBA görüntünün RGB pikselleri, yüz kompoziti içinde zaten birleştirilmiştir. `X-Retake-Compositing: preblended` bilgisi geldiğinde tarayıcı, alfa kanalını yalnızca **değiştirilen bölgenin kapsamı** olarak kullanır; aynı görüntüyü ikinci kez alfa ile harmanlamaz. Aksi hâlde yüz değişimi yumuşak kenarlarda gereksiz yere seyrelir.
 - Yerel motor v13 son çıktı, kafa/çene şekillendirmesi uygulanmamış çıktı ve yalnızca kimlik aktarılmış alternatifi ArcFace ile karşılaştırır. Kimlik benzerliği anlamlı ölçüde artıyorsa daha sadık aday seçilir. ArcFace skoru alınamazsa güvenilir sonuç üretilemediği belirtilir; referans kimliğine göre orijinalden belirgin kötü aday geri verilmez.
 - Yeni akış bir **kalite önlemi**dir; fotoğraflardan birebir yüz üretimini veya kişiye özel eğitilmiş model edinilmesini garanti etmez. Özellikle ağır profil, düşük ışık, ağız/göz örtülmesi ve farklı yaş/sakal görünümleri için gerçek hedef fotoğraflarla gözle test yapılmalıdır.
-- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_ultra_v15` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
+- Kod güncellendikten sonra yerel motoru kapatıp `git pull` ardından `.\\tools\\start_facefusion_retake.ps1` ile yeniden başlat. `/health` JSON'unda `retake_hybrid_25_reference_ultra_v16` göründüğünü doğrula. Bu güncelleme yalnızca GitHub'a gönderildiğinde açık olan eski yerel motor otomatik olarak değişmez.
 - Web sürümünü ayrıca Firebase Hosting'e yayımla. Yeni web koduyla eski motorun çalışması mümkündür, fakat yeni `preblended` düzeltmesinden yararlanmak için **web ve yerel motorun ikisinin de güncel olması gerekir**.
 - Sunucunun yanıtında `X-Retake-Identity-Selection` (head-fit / no-head-warp / identity-only) ve `X-Retake-Similarity` bulunur. ArcFace cosine değeri bir kimlik garantisi veya kullanıcının yüzde yüz benzerliği değildir. Motorun testlerinde yüz aktarımı modelleri taklit edilir; gerçek NVIDIA/FaceFusion GPU ve kullanıcı fotoğraflarıyla karşılaştırmalı manuel değerlendirme ayrıca yapılmalıdır.
 
@@ -164,6 +164,29 @@ Retake her turu ArcFace ile sayısal olarak ölçer. Belirgin şekilde daha yük
 
 Varsayılan **240 saniye arama bütçesi** yeni tur başlatmaya devam edip etmeyeceğini belirler; bu değer ne en az 4 dakika boş bekleme ne de tam 4 dakikada bitirme garantisidir. CUDA işlemine başlandıktan sonra ilgili tur tamamlanır; dolayısıyla daha uzun çalışabilir. Birden çok tur biterse en yüksek doğrulanmış aday gösterilir; son tur daha kötüyse önceki en iyi sonuç kullanılır. İlk işlemlerde GPU kaynakları/model yüklemeleri daha fazla zaman alabilir.
 
-Sağlık denetiminde `model=retake_hybrid_25_reference_ultra_v15`, `ultra_mode=true`, `ultra_rounds=4`, `ultra_search_budget_seconds=240` görülmelidir. Güncellenmemiş motorda web arayüzü Ultra çalışıyor izlenimi vermez; önce yerel kodu güncelleyip servisi yeniden başlat. GitHub'a birleştirmek Firebase sitesini kendiliğinden yayımlamaz.
+Sağlık denetiminde `model=retake_hybrid_25_reference_ultra_v16`, `ultra_mode=true`, `ultra_rounds=4`, `ultra_search_budget_seconds=240` görülmelidir. Güncellenmemiş motorda web arayüzü Ultra çalışıyor izlenimi vermez; önce yerel kodu güncelleyip servisi yeniden başlat. GitHub'a birleştirmek Firebase sitesini kendiliğinden yayımlamaz.
 
 Yüzün referanslarla **birebir aynı** olacağı vaat edilmez. ArcFace bir kosinüs benzerliği ölçer; fotoğrafın gerçekçiliğini, kimlik ispatını veya insan algısındaki benzerliği tek başına garanti etmez.
+
+## 11. Ultra-420 v16 — minimum 7 dakika, yüksek benzerlik seçimi
+
+Bu sürüm **24 farklı parametre seti** üzerinde kalite araması yapabilir: AlphaFace/InSwapper kimlik ağırlığı, UniFace'den alt yüz/sakal dokusu aktarımı ve kafa/çene geometrisi. Her adayın hedefi değişmez orijinal fotoğraf; en iyi yüzü her turda yeniden girdi yapma yöntemi uygulanmaz. 25 referans ArcFace tarafından kontrol edilir; tam küme, güvenilir alt küme ve uygun pozlu fotoğraf kümesi gerektiğinde üretim alternatifi olabilir. Genel ArcFace skoru esas kriterdir.
+
+**Göz/burun/ağız/alt yüz doku kontrolü** orijinal kamera fotoğrafının yerel detay enerjisinin korunmasını ölçer. Bu skor gerçek biyometrik kimlik benzerliği veya kişi doğrulaması değildir. ArcFace yakın sonuçlarda detay skoru ve fotoğraf gerçekçiliği sınırlı bir karar etkisine sahiptir; ciddi kimlik düşüşü telafi edilemez. Fotoğrafın dışı preblended maske ve tarayıcıdaki piksel-bütünlüğü kontrolüyle korunur.
+
+**Minimum çalışma süresi 420 sn:** GPU yeni adayları 420 saniyelik arama bütçesi boyunca başlatabilir, başlamış işlemleri kesmez. Bütün varyasyonlar daha hızlı biterse kullanıcı isteği gereği kalan süre açıkça **bekleme** olarak geçer; sahte GPU işi üretilmez. Sonuç en az 7 dakika sonra gelir; GPU yavaşsa daha uzun sürebilir. Başarısız işler gereksiz 7 dakika beklemeden hata verir. Frontend iş takibini 45 dakika boyunca sürdürür.
+
+**Windows güncelleme:** Retake depounda aşağıdaki komutları çalıştır. Eski `v11` sunucusu bellekte çalışıyorsa yalnızca `git pull` yeterli değildir; yeniden başlatılmalıdır.
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\\tools\\update_retake_ultra.ps1
+```
+
+Bu yardımcı betik GitHub güncellemesini, Firebase Hosting yayını için CLI varsa deploy'u ve eski FaceFusion Python sürecini sonlandırıp yeni yerel motoru açmayı dener. Firebase CLI/oturum eksikse yayın atlanır ve bir uyarı görülür. Manuel yayın:
+
+```powershell
+firebase deploy --only hosting:retake06 --project projelerim-8fecd
+```
+
+Sonrasında `(Invoke-RestMethod 'http://127.0.0.1:8765/health') | Select-Object model,ultra_mode,ultra_rounds,ultra_min_seconds` komutuyla `retake_hybrid_25_reference_ultra_v16 / True / 24 / 420` görmelisin. Canlı `app.js` içinde `X-Retake-Ultra` bulunmalıdır. Kişisel LoRA eğitimi ayrı adımdır ve bu özellik, gerçek cihaz üzerinde kimlik skorunda kesin iyileşme vaat etmez.

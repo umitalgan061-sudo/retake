@@ -1016,7 +1016,8 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
             transplanted, chosen, fits = choose_and_transplant(
                 result, target, candidates,
                 np.asarray(real_face["targetLandmarks"], np.float32), face_width,
-                complete_face=real_face.get("mode") == "full"
+                complete_face=real_face.get("mode") == "full",
+                strength=float(real_face.get("strength", 1.0))
             )
         scores = ", ".join(f"{fit['score']:.2f}" for fit in fits)
         print(
@@ -1519,6 +1520,28 @@ def process_swap(
                             )
                     except Exception as error:
                         print(f"[Retake] Kimlik üstü sakal nakli atlandı: {error}", flush=True)
+            if real_face and real_face.get("mode") in ("full", "both") and variation in full_reference_rounds:
+                for transfer_strength in (0.20, 0.40):
+                    path = temp_dir / f"retake-identity-full-{int(transfer_strength * 100)}.png"
+                    report: dict[str, Any] = {}
+                    try:
+                        used = blend_lower_face(
+                            target_path, identity_source, appearance_output, path,
+                            metadata["faceBounds"], 0.0, metadata["targetSize"],
+                            shading_strength=0.0,
+                            real_face={**real_face, "mode": "full", "strength": transfer_strength},
+                            harmonize_strength=0.35, report=report
+                        )
+                        border = float(report.get("border", float("inf")))
+                        if used and math.isfinite(border) and border <= max_regional_border:
+                            identity_regional_candidates.append(("identity-full", path))
+                        else:
+                            print(
+                                f"[Retake] Güvenli tam yüz adayı atlandı "
+                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                            )
+                    except Exception as error:
+                        print(f"[Retake] Kimlik üstü tam referans dokusu atlandı: {error}", flush=True)
             if jaw_warp and jaw_scale > 0:
                 jaw_candidate = temp_dir / "retake-identity-jaw.png"
                 try:
@@ -1572,13 +1595,14 @@ def process_swap(
             regional_ties = [
                 (index, value)
                 for index, ((label, _), value) in enumerate(zip(rescue_candidates, candidate_scores))
-                if label in ("identity-beard", "identity-jaw")
+                if label in ("identity-beard", "identity-full", "identity-jaw")
                 and value is not None and value >= best_score - 0.003
             ]
             if regional_ties:
                 chosen_index, best_score = max(regional_ties, key=lambda item: (
                     item[1],
-                    1 if rescue_candidates[item[0]][0] == "identity-beard" else 0
+                    {"identity-full": 2, "identity-beard": 1, "identity-jaw": 0}
+                    [rescue_candidates[item[0]][0]]
                 ))
                 selected_identity = rescue_candidates[chosen_index][0]
                 print(
@@ -1592,6 +1616,10 @@ def process_swap(
         elif selected_identity == "identity-beard":
             used_lower_face = True
             used_full_face = False
+            used_real_face = True
+        elif selected_identity == "identity-full":
+            used_lower_face = False
+            used_full_face = True
             used_real_face = True
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(

@@ -1108,7 +1108,18 @@ def blend_lower_face(
     # browser keep every other source pixel byte-for-byte.
     used_real_face = False
     if real_face is not None:
-        result, used_real_face = apply_real_face(result, target, real_face, face_width)
+        # All compositing variants in one identity round start from the same
+        # unprocessed BGR image. Real-photo triangulation is expensive:
+        # compute each lower/full transfer once, then try the different
+        # harmonisation strengths on that identical candidate.
+        cached = real_face.get("_precomposite_cache")
+        if cached is not None and cached.shape == result.shape:
+            result = cached.copy()
+            used_real_face = True
+        else:
+            result, used_real_face = apply_real_face(result, target, real_face, face_width)
+            if used_real_face:
+                real_face["_precomposite_cache"] = result.copy()
     options: dict[str, float] = {}
     if shading_strength is not None:
         options["shading_strength"] = shading_strength

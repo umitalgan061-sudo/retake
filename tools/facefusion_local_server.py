@@ -1490,8 +1490,22 @@ def process_swap(
             + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
             flush=True
         )
+        try:
+            detail_score, detail_regions = check_photo_detail(
+                target_path, final_output, metadata["faceBounds"]
+            )
+        except Exception as error:
+            detail_score, detail_regions = None, {}
+            print(f"[Ultra] Bölgesel doku ölçümü atlandı: {error}", flush=True)
+        if detail_score is not None:
+            print(
+                f"[Ultra] Göz/burun/ağız/alt yüz detay korunumu: {detail_score:.3f}; "
+                f"bölgesel oranlar={detail_regions}.",
+                flush=True
+            )
         result = final_output.read_bytes()
         headers = {
+            "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -1536,7 +1550,8 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
-    clock=None
+    clock=None, sleeper=None, on_hold=None,
+    min_duration_seconds: float | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
 
@@ -1544,6 +1559,8 @@ def run_ultra_search(
     not destroy an already verified image. No blind recursive re-swapping.
     """
     clock = clock or time.monotonic
+    sleeper = sleeper or time.sleep
+    minimum = ULTRA_MIN_SECONDS if min_duration_seconds is None else max(0.0, min_duration_seconds)
     started = clock()
     best_result: bytes | None = None
     best_headers: dict[str, str] | None = None
@@ -1590,6 +1607,18 @@ def run_ultra_search(
             raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
+    # Spend the available interval trying distinct variants; when the GPU
+    # finishes them faster, honor the explicit seven-minute minimum without
+    # pointlessly running the identical model again. Failed jobs return early.
+    remaining = minimum - (clock() - started)
+    while remaining > 0:
+        if on_hold is not None:
+            on_hold(remaining)
+        sleeper(min(5.0, remaining))
+        remaining = minimum - (clock() - started)
+    if on_hold is not None:
+        on_hold(0.0)
+
     final = {
         **best_headers,
         "X-Retake-Ultra": "on",
@@ -1609,6 +1638,12 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     """Worker thread: long swaps must not depend on one open HTTP response
     (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
     timings: StageTimings | None = getattr(server, "stage_timings", None)
+
+    def hold(remaining: float) -> None:
+        job["stage"] = "Ultra · kalite taraması tamamlandı, 7 dakika süresi doluyor"
+        job["minimum_remaining_seconds"] = round(remaining, 1)
+        # Actual inference has finished; mark 99% until requested minimum.
+        job["step"] = job["total"] - 1
 
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
@@ -1643,12 +1678,14 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None)
-            }
+            },
+            on_hold=hold
         )
         close_stage(time.time())
         job["result"] = result
         job["headers"] = headers
         job["step"] = job["total"]
+        job["minimum_remaining_seconds"] = 0.0
         job["stage"] = "Ultra · en iyi sonuç seçildi"
         job["status"] = "done"
     except Exception as error:  # reported to the client through the job
@@ -1677,7 +1714,8 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
 def create_job(realism: bool = False) -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": "Ultra 1/4 · " + JOB_STAGES[0], "created": time.time(),
+        "stage": f"Ultra 1/{len(ULTRA_VARIATIONS)} · " + JOB_STAGES[0], "created": time.time(),
+        "minimum_remaining_seconds": ULTRA_MIN_SECONDS,
         "total": len(JOB_STAGES) * len(ULTRA_VARIATIONS),
         "round": 1,
         # Without realism, each round skips that step. It must never appear
@@ -1751,7 +1789,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
-            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed"
+            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
+            "X-Retake-Detail-Score"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -1820,6 +1859,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "profile_references": MAX_REFERENCES,
             "ultra_mode": True,
             "ultra_rounds": len(ULTRA_VARIATIONS),
+            "ultra_min_seconds": ULTRA_MIN_SECONDS,
             "ultra_search_budget_seconds": ULTRA_SEARCH_BUDGET_SECONDS,
             "async_jobs": True,
             "caches": True,
@@ -1851,6 +1891,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 "total": job.get("total", len(JOB_STAGES)),
                 "round": job.get("round", 1),
                 "ultra": True,
+                "minimum_remaining_seconds": (
+                    max(0.0, round(ULTRA_MIN_SECONDS - (time.time() - job["created"]), 1))
+                    if job["status"] in {"running", "queued"}
+                    else 0.0
+                ),
                 "stage": job["stage"],
                 "elapsed": round((job.get("finished") or time.time()) - job["created"], 1),
                 "error": job.get("error"),

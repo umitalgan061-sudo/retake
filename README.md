@@ -260,3 +260,23 @@ git pull --ff-only origin main
 ```
 
 Devam eden iş yokken motor yeniden başlatılmalıdır. Firebase deployment başarılıysa tarayıcıda Ctrl+F5; motor `(Invoke-RestMethod "http://127.0.0.1:8765/health").model` ile `retake_hybrid_25_reference_ultra_v20` olarak kontrol edilir. Bir GitHub merge işlemi **bilgisayarda çalışan servisi veya canlı siteyi** kendiliğinden güncellemez.
+
+
+## Retake v21 — ölçülen kontur onarımı
+
+Gerçek v20 GPU çıktısında saç çizgisi, şakaklar ve çene altında koyu yapay sınır görülürken motor "6496 piksel yüz konturu temizlendi" diyordu. Önceki 5x5 medyan filtre piksel sayısını başarı olarak bildiriyor, 2–4 piksel kalınlığındaki koyu çizgiyi tam kaldırmıyordu.
+
+v21, sınır bandını genişleterek **yalnızca orijinal hedef fotoğraftan belirgin şekilde daha koyu hale gelmiş, alfa içindeki** kontur piksellerini Telea ile tamamlar; medyan filtre alternatifini de karşılaştırır. Düzenleme başarılı kabul edilmek için tespit edilen koyu çizginin **en az %25 azalması** gerekir. Göz, sakalın içi, fotoğraf çevresi ve alfa maskesi korunur. Son ArcFace testi önceki **en fazla 0,004 skor kaybı** koşulunu korur. Loglarda artık tespit edilen koyu sınırın gerçekte yüzde kaç azaldığı da gösterilir.
+
+Bu, görsel yüz kenarı iyileştirmesidir; **kimlik skorunu artırma veya kusursuz eşleşme garantisi değildir**. Sentetik testler gerçek fotoğraftaki bütün hataları dışlamaz. Beklenen `/health.model`: `retake_hybrid_25_reference_ultra_v21`.
+
+Bilgisayarındaki çalışan güncel worktree klasöründen (eski `C:\AI\retake` Git geçmişi ayrıştığı için kullanılmamalı), fotoğraf işi yokken:
+
+```powershell
+Set-Location "C:\AI\retake-v19-20261123-143224"
+git pull --ff-only origin main
+if ($LASTEXITCODE -ne 0) { throw "Güncelleme tamamlanmadı" }
+.\tools\update_retake_ultra.ps1 -SkipPull
+```
+
+GitHub merge tek başına yerel GPU motorunu veya Firebase Hosting'i yayımlamaz.

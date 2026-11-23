@@ -287,9 +287,9 @@ async function checkFaceFusionStatus() {
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
-          health.model !== "retake_hybrid_25_reference_ultra_v20") {
+          health.model !== "retake_hybrid_25_reference_ultra_v21") {
         throw new Error(
-          "Retake Ultra v20 motoru gerekli: GitHub'dan güncelleyip FaceFusion servisini yeniden başlat."
+          "Retake Ultra v21 motoru gerekli: GitHub'dan güncelleyip FaceFusion servisini yeniden başlat."
         );
       }
       state.faceFusionStatus = {
@@ -300,10 +300,10 @@ async function checkFaceFusionStatus() {
         realism: Boolean(health.realism),
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
-          ? "Ultra-420 v20 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
+          ? "Ultra-420 v21 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
           : health.realism
-            ? "Ultra-420 v20 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
-            : "Ultra-420 v20 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
+            ? "Ultra-420 v21 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
+            : "Ultra-420 v21 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -1967,7 +1967,7 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage("Ultra-420 v20 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
+  showWaitStage("Ultra-420 v21 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
 
   let generatedUrl = null;
   try {

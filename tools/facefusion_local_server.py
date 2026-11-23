@@ -83,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v20"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v21"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1687,6 +1687,7 @@ def process_swap(
                     print(
                         f"[Retake] Koyu yüz konturu temizlendi "
                         f"({rim_stats['corrected_pixels']:.0f} piksel; "
+                        f"koyu sınır %{rim_stats.get('dark_line_reduction', 0.0) * 100:.1f} azaldı; "
                         f"ArcFace={corrected_score:.3f}).", flush=True
                     )
                 else:

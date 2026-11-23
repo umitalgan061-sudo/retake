@@ -58,7 +58,11 @@ def repair_dark_rim(
         return edited, statistics
     filled = np.zeros_like(changed)
     cv2.drawContours(filled, [contour], -1, 255, cv2.FILLED)
-    ring_width = int(np.clip(round(width * 0.045), 7, 15)) | 1
+    # A 7-pixel contour search band misses the outer half of real 2–4px
+    # matte outlines; the detector then "repairs" only part of the line.
+    # The widened ring only locates candidates: pixels still need to be
+    # darker than the unchanged original AND inside the face alpha.
+    ring_width = int(np.clip(round(width * 0.085), 11, 27)) | 1
     ring = cv2.morphologyEx(
         filled, cv2.MORPH_GRADIENT,
         cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ring_width, ring_width))
@@ -73,19 +77,36 @@ def repair_dark_rim(
     if count < max(40, int(width * 0.14)) or fraction < 0.03:
         return edited, statistics
 
-    support = cv2.dilate(
-        new_dark.astype(np.uint8),
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-    ) > 0
-    touched = ring & support & (alpha > 0)
-    if not np.any(touched):
+    # Median filtering cannot reconstruct a continuous 2–4-pixel dark
+    # outline. It can report thousands of edited pixels while leaving
+    # a visible black chin/hairline edge. Reconstruct ONLY pixels that
+    # became darker than the unedited target along the face boundary.
+    paint_mask = new_dark.astype(np.uint8) * 255
+    inpainted = cv2.inpaint(result, paint_mask, 3.0, cv2.INPAINT_TELEA)
+    local_median = cv2.medianBlur(result, 5)
+    candidates = (inpainted, local_median)
+    baseline = int(np.count_nonzero(new_dark))
+    best_candidate = None
+    best_remaining = baseline
+    for candidate in candidates:
+        gray = cv2.cvtColor(candidate, cv2.COLOR_BGR2GRAY).astype(np.int16)
+        remaining = int(np.count_nonzero(
+            new_dark & ((orig_gray - gray) > 10) & (gray < 145)
+        ))
+        if remaining < best_remaining:
+            best_candidate = candidate
+            best_remaining = remaining
+    statistics["dark_line_remaining"] = float(best_remaining)
+    statistics["dark_line_reduction"] = round((baseline - best_remaining) / max(1, baseline), 5)
+    # Do not claim success because a blur changed arbitrary skin pixels:
+    # require measurable reduction of the offending dark outline.
+    if best_candidate is None or baseline - best_remaining < max(20, int(baseline * 0.25)):
         return edited, statistics
-    softened = cv2.medianBlur(result, 5)
     repaired = edited.copy()
     repaired_roi = repaired[top:bottom, left:right, :3]
-    repaired_roi[touched] = softened[touched]
+    repaired_roi[new_dark] = best_candidate[new_dark]
     statistics["corrected_pixels"] = float(np.count_nonzero(
-        np.max(cv2.absdiff(repaired_roi, result), axis=2)[touched] >= 1
+        np.max(cv2.absdiff(repaired_roi, result), axis=2)[new_dark] >= 1
     ))
     return repaired, statistics
 

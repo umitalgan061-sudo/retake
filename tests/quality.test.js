@@ -19,8 +19,10 @@ test("scores and verdicts", () => {
   assert.equal(similarityScore(-0.2), 0);
   assert.equal(similarityScore(null), null);
   assert.deepEqual([60, 45, 31, 12].map(similarityVerdict), ["Çok güçlü", "Güçlü", "Orta", "Zayıf"]);
-  assert.equal(describeSimilarity(0.74, 0.21), "Kimlik benzerliği 74 · Çok güçlü · orijinal 21");
-  assert.equal(describeSimilarity(0.44, null), "Kimlik benzerliği 44 · Güçlü");
+  assert.equal(describeSimilarity(0.74, 0.21), "Kimlik benzerliği 74,0 · Çok güçlü · orijinal 21");
+  assert.equal(describeSimilarity(0.44, null), "Kimlik benzerliği 44,0 · Güçlü");
+  assert.match(describeSimilarity(0.8334, 0.0), /83,3 · Çok güçlü/);
+  assert.match(describeSimilarity(0.8279, 0.0), /82,8 · Çok güçlü/);
   assert.equal(describeSimilarity(null, 0.2), "");
 });
 

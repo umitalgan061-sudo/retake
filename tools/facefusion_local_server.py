@@ -1732,7 +1732,7 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
         max(0.0, ULTRA_MIN_SECONDS - (time.time() - job["created"]))
         if "minimum_remaining_seconds" in job and "created" in job else 0.0
     )
-    if timings is None:
+    if timings is None or not isinstance(job.get("stage_started"), (int, float)) and "created" in job:
         return minimum_remaining if minimum_remaining > 0 else None
     total = job.get("total", len(JOB_STAGES))
     step = min(job.get("step", 0), total - 1)
@@ -1742,8 +1742,21 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
     ]
     if not pending:
         return minimum_remaining
-    in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
-    return max(minimum_remaining, timings.remaining(pending, 0, in_current))
+    started = job.get("stage_started")
+    in_current = max(0.0, time.time() - started) if step not in job["skipped"] and isinstance(started, (int, float)) else 0.0
+    estimate = timings.remaining(pending, 0, in_current)
+    if estimate is None:
+        return minimum_remaining if minimum_remaining > 0 else None
+    if "created" in job:
+        # The v16 ETA projected ALL 24 potential rounds and claimed 73min
+        # even though new rounds are forbidden after 420 seconds. Count only
+        # the remaining search window plus the currently running CUDA stage.
+        elapsed = max(0.0, time.time() - job["created"])
+        remaining_window = max(0.0, ULTRA_SEARCH_BUDGET_SECONDS - elapsed)
+        current_stage = JOB_STAGES[step % len(JOB_STAGES)]
+        current_eta = timings.remaining([current_stage], 0, in_current)
+        estimate = min(estimate, remaining_window + max(0.0, current_eta or 0.0))
+    return max(minimum_remaining, estimate)
 
 
 def create_job(realism: bool = False) -> dict[str, Any]:

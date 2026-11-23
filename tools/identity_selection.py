@@ -52,6 +52,18 @@ def plan_identity_source_sets(
     if len(accepted) < 6:
         return pools
 
+    # An outlier stays in the first all-photo attempt because the measured
+    # output, not a heuristic, has the final say.  But it must not be allowed
+    # to make "all 25" the only broad identity hypothesis.  A separate
+    # trusted-full pool keeps the diversity of the profile (unlike a compact
+    # consensus) while removing only references ArcFace already flagged.
+    # This matters most for a sharp but visibly different beard, haircut or
+    # lighting outlier: it can lift a global cosine score while making the
+    # resulting face look less like the person to a human observer.
+    trusted_full = _weighted(accepted, weights)
+    if trusted_full != full:
+        pools.append((f"trusted-{len(accepted)}", trusted_full))
+
     consensus_size = min(len(accepted), max(6, consensus_size))
     sorted_consensus = sorted(
         accepted, key=lambda i: (-float(medians[i]), -weights[i], i)

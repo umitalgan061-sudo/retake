@@ -1687,6 +1687,7 @@ def process_swap(
                     print(
                         f"[Retake] Koyu yüz konturu temizlendi "
                         f"({rim_stats['corrected_pixels']:.0f} piksel; "
+                        f"koyu sınır %{rim_stats.get('dark_line_reduction', 0.0) * 100:.1f} azaldı; "
                         f"ArcFace={corrected_score:.3f}).", flush=True
                     )
                 else:

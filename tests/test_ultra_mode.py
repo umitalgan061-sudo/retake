@@ -53,7 +53,7 @@ class UltraSelectionTest(unittest.TestCase):
         best = score("0.800")
         self.assertTrue(prefer_ultra_candidate(best, None))
         self.assertTrue(prefer_ultra_candidate(score("0.811"), best))
-        self.assertFalse(prefer_ultra_candidate(score("0.803"), best))
+        self.assertTrue(prefer_ultra_candidate(score("0.803"), best), "measurable identity improvement must not be discarded")
         self.assertTrue(prefer_ultra_candidate(score("0.799", realism=True), best))
         self.assertFalse(prefer_ultra_candidate(score("0.790", realism=True), best))
         self.assertFalse(prefer_ultra_candidate(score("0.800"), score("0.801", realism=True)))
@@ -68,19 +68,20 @@ class UltraSelectionTest(unittest.TestCase):
             visits.append((parsed[0], variant))
             for i in range(len(srv.JOB_STAGES)):
                 progress(i)
-            return f"photo-{variant}".encode(), results[variant]
+            return f"photo-{variant}".encode(), results[variant % len(results)]
 
         positions = []
         with patch.object(srv, "process_swap", fake_swap):
             photo, headers = srv.run_ultra_search(
                 Path("."), "1024x1024", False, fake_request(),
                 lambda step, cached=False: positions.append(step),
+                min_duration_seconds=0
             )
         self.assertEqual(photo, b"photo-2")
         self.assertEqual(headers["X-Retake-Ultra"], "on")
-        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "4")
+        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "24")
         self.assertEqual(headers["X-Retake-Ultra-Winner"], "3")
-        self.assertEqual(positions, list(range(len(srv.JOB_STAGES) * 4)))
+        self.assertEqual(positions, list(range(len(srv.JOB_STAGES) * len(ULTRA_VARIATIONS))))
         self.assertEqual(visits, [(b"original photo", index) for index in ULTRA_VARIATIONS])
 
     def test_budget_stops_extra_rounds_without_sleep_or_fake_wait(self):
@@ -96,12 +97,13 @@ class UltraSelectionTest(unittest.TestCase):
         with patch.object(srv, "process_swap", fake_swap):
             photo, headers = srv.run_ultra_search(
                 Path("."), "1024x1024", False, fake_request(),
-                lambda *_args, **_kwargs: None, clock=clock
+                lambda *_args, **_kwargs: None, clock=clock,
+                min_duration_seconds=0
             )
         self.assertEqual(photo, b"best")
-        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "2")
-        self.assertEqual(headers["X-Retake-Ultra-Elapsed"], "250.0")
-        self.assertFalse(should_continue_ultra(2, 250))
+        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "4")
+        self.assertEqual(headers["X-Retake-Ultra-Elapsed"], "500.0")
+        self.assertFalse(should_continue_ultra(4, 500))
 
     def test_failed_later_round_preserves_best_verified_result(self):
         attempts = []
@@ -116,11 +118,74 @@ class UltraSelectionTest(unittest.TestCase):
         with patch.object(srv, "process_swap", fake_swap):
             photo, headers = srv.run_ultra_search(
                 Path("."), "1024x1024", False, fake_request(),
-                lambda *_args, **_kwargs: None
+                lambda *_args, **_kwargs: None,
+                min_duration_seconds=0
             )
         self.assertEqual(photo, b"good")
-        self.assertEqual(attempts, [0, 1, 2, 3])
+        self.assertEqual(attempts, list(ULTRA_VARIATIONS))
         self.assertEqual(headers["X-Retake-Ultra-Winner"], "1")
+
+    def test_seven_minimum_is_real_elapsed_time_and_does_not_reprocess_pixels(self):
+        now = [0.0]
+        holds = []
+        seen = []
+
+        def clock():
+            return now[0]
+
+        def advance(seconds):
+            now[0] += seconds
+
+        def fake_swap(*args):
+            seen.append(args[3][6]["variation"])
+            # The first GPU round costs 360s, second costs 80s.
+            now[0] += 360 if len(seen) == 1 else 80
+            return b"validated", score(0.86)
+
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_args, **_kwargs: None, clock=clock,
+                sleeper=advance, on_hold=holds.append,
+                min_duration_seconds=420
+            )
+        self.assertEqual(photo, b"validated")
+        self.assertEqual(seen, [0, 1])
+        self.assertEqual(headers["X-Retake-Ultra-Elapsed"], "440.0")
+        self.assertEqual(holds[-1], 0.0)
+
+    def test_finishing_all_variants_early_uses_visible_minimum_hold(self):
+        now = [0.0]
+        holds = []
+        attempts = []
+
+        def fake_swap(*args):
+            now[0] += 2
+            attempts.append(args[3][6]["variation"])
+            return b"good", score(0.9)
+
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_args, **_kwargs: None,
+                clock=lambda: now[0],
+                sleeper=lambda delay: now.__setitem__(0, now[0] + delay),
+                on_hold=holds.append,
+                min_duration_seconds=420
+            )
+        self.assertEqual(len(attempts), 24)
+        self.assertEqual(photo, b"good")
+        self.assertEqual(headers["X-Retake-Ultra-Elapsed"], "420.0")
+        self.assertGreater(len(holds), 1)
+        self.assertGreater(holds[0], 0)
+        self.assertEqual(holds[-1], 0.0)
+
+    def test_detail_score_decides_ties_without_overriding_identity(self):
+        a = {**score(.830), "X-Retake-Detail-Score": ".44"}
+        b = {**score(.829), "X-Retake-Detail-Score": ".88"}
+        c = {**score(.821), "X-Retake-Detail-Score": ".95"}
+        self.assertTrue(prefer_ultra_candidate(b, a))
+        self.assertFalse(prefer_ultra_candidate(c, a))
 
     def test_every_failed_round_preserves_original_error_kind(self):
         with patch.object(srv, "process_swap", side_effect=srv.NoOpSwapError("no face")):

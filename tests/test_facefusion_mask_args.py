@@ -62,17 +62,17 @@ class FaceFusionSemanticMaskArgumentsTest(unittest.TestCase):
         self.assertNotIn("hair", regions)
 
     def test_alternate_render_balances_are_bounded_and_distinct(self):
-        self.assertEqual(len(FACE_SWAP_VARIATIONS), 4)
+        self.assertEqual(len(FACE_SWAP_VARIATIONS), 24)
         self.assertEqual(FACE_SWAP_VARIATIONS[0], (1.0, 0.20, 1.0))
-        # Three variants share the swapper weight so regenerate can reuse the GPU passes.
-        self.assertEqual(sum(1 for item in FACE_SWAP_VARIATIONS if item[0] == 1.0), 3)
-        self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 4)
+        # GPU cache reuses identity/appearance passes for shared swapper weights.
+        self.assertGreaterEqual(sum(1 for item in FACE_SWAP_VARIATIONS if item[0] == 1.0), 4)
+        self.assertEqual(len(set(FACE_SWAP_VARIATIONS)), 24)
         strengths = set()
         for swapper_weight, detail_strength, head_fit_strength in FACE_SWAP_VARIATIONS:
             self.assertGreaterEqual(swapper_weight, 0.92)
             self.assertLessEqual(swapper_weight, 1.0)
             self.assertGreater(detail_strength, 0)
-            self.assertLessEqual(detail_strength, 0.30)
+            self.assertLessEqual(detail_strength, 0.36)
             self.assertGreaterEqual(head_fit_strength, 0.0)
             self.assertLessEqual(head_fit_strength, 1.5)
             strengths.add(head_fit_strength)

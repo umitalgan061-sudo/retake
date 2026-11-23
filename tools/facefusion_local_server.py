@@ -22,8 +22,9 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
+    from .ultra_quality import check_photo_detail
     from .ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
@@ -31,8 +32,9 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
+    from ultra_quality import check_photo_detail
     from ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 
@@ -58,7 +60,7 @@ REINFORCE_STAGE = 2
 REALISM_STAGE = 5
 SCORING_STAGE = 6
 # A realism render may cost at most this much ArcFace similarity to be used.
-REALISM_MAX_IDENTITY_LOSS = 0.01
+REALISM_MAX_IDENTITY_LOSS = 0.004
 REALISM_TIMEOUT_SECONDS = 900
 # (tone harmonization, shading cap) per compositing variant; the first is the
 # most seamless. Measured on the user's photos (ArcFace to the references):
@@ -79,7 +81,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v15"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v16"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -102,10 +104,32 @@ HEAD_FIT_MAX = 1.18
 # FaceFusion passes and only redoes blending and head fitting (seconds, not
 # minutes). The fourth is a genuinely different, softer identity pass.
 FACE_SWAP_VARIATIONS = (
-    (1.00, 0.20, 1.0),
-    (1.00, 0.24, 0.0),
-    (1.00, 0.12, 1.5),
-    (0.94, 0.30, 0.5)
+    # Four legacy v15 variants plus 20 v16 search alternatives.
+    # Different swapper weights reuse GPU passes when possible.
+    (1.00, 0.20, 1.00),
+    (1.00, 0.24, 0.00),
+    (1.00, 0.12, 1.50),
+    (0.94, 0.30, 0.50),
+    (1.00, 0.08, 0.00),
+    (1.00, 0.32, 0.00),
+    (1.00, 0.14, 0.65),
+    (1.00, 0.28, 1.20),
+    (0.99, 0.10, 0.00),
+    (0.99, 0.28, 0.85),
+    (0.99, 0.36, 0.00),
+    (0.98, 0.10, 1.10),
+    (0.98, 0.18, 0.00),
+    (0.98, 0.30, 0.65),
+    (0.97, 0.08, 0.00),
+    (0.97, 0.24, 1.20),
+    (0.96, 0.14, 0.70),
+    (0.96, 0.32, 0.00),
+    (0.95, 0.14, 0.00),
+    (0.95, 0.24, 0.90),
+    (0.94, 0.08, 0.00),
+    (0.94, 0.24, 1.00),
+    (0.92, 0.14, 0.00),
+    (0.92, 0.30, 0.70),
 )
 
 
@@ -1221,7 +1245,7 @@ def process_swap(
                     # Require an observable improvement, not a tiny change
                     # from embedding / image-encoding measurement noise.
                     if value is not None and (
-                        best_value is None or value > best_value + 0.012
+                        best_value is None or value > best_value + 0.006
                     ):
                         best_index, best_value = i, value
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
@@ -1242,7 +1266,7 @@ def process_swap(
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
                 single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
-                if single is not None and double is not None and double > single + 0.012:
+                if single is not None and double is not None and double > single + 0.008:
                     identity_source = reinforced_output
                     reinforced = True
                 print(
@@ -1401,7 +1425,7 @@ def process_swap(
         chosen_index = 0
         best_score = final_score if final_score is not None else -1.0
         for index, value in enumerate(candidate_scores[1:], start=1):
-            if value is not None and value > best_score + 0.015:
+            if value is not None and value > best_score + 0.006:
                 chosen_index, best_score = index, value
         selected_identity = rescue_candidates[chosen_index][0]
         if final_score is None and best_score < -0.99:
@@ -1466,8 +1490,22 @@ def process_swap(
             + (f", orijinal {before_similarity:.3f}" if before_similarity is not None else ""),
             flush=True
         )
+        try:
+            detail_score, detail_regions = check_photo_detail(
+                target_path, final_output, metadata["faceBounds"]
+            )
+        except Exception as error:
+            detail_score, detail_regions = None, {}
+            print(f"[Ultra] Bölgesel doku ölçümü atlandı: {error}", flush=True)
+        if detail_score is not None:
+            print(
+                f"[Ultra] Göz/burun/ağız/alt yüz detay korunumu: {detail_score:.3f}; "
+                f"bölgesel oranlar={detail_regions}.",
+                flush=True
+            )
         result = final_output.read_bytes()
         headers = {
+            "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -1512,7 +1550,8 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
-    clock=None
+    clock=None, sleeper=None, on_hold=None,
+    min_duration_seconds: float | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
 
@@ -1520,6 +1559,8 @@ def run_ultra_search(
     not destroy an already verified image. No blind recursive re-swapping.
     """
     clock = clock or time.monotonic
+    sleeper = sleeper or time.sleep
+    minimum = ULTRA_MIN_SECONDS if min_duration_seconds is None else max(0.0, min_duration_seconds)
     started = clock()
     best_result: bytes | None = None
     best_headers: dict[str, str] | None = None
@@ -1566,6 +1607,18 @@ def run_ultra_search(
             raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
+    # Spend the available interval trying distinct variants; when the GPU
+    # finishes them faster, honor the explicit seven-minute minimum without
+    # pointlessly running the identical model again. Failed jobs return early.
+    remaining = minimum - (clock() - started)
+    while remaining > 0:
+        if on_hold is not None:
+            on_hold(remaining)
+        sleeper(min(5.0, remaining))
+        remaining = minimum - (clock() - started)
+    if on_hold is not None:
+        on_hold(0.0)
+
     final = {
         **best_headers,
         "X-Retake-Ultra": "on",
@@ -1585,6 +1638,13 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     """Worker thread: long swaps must not depend on one open HTTP response
     (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
     timings: StageTimings | None = getattr(server, "stage_timings", None)
+
+    def hold(remaining: float) -> None:
+        job["stage"] = "Ultra · kalite taraması tamamlandı, 7 dakika süresi doluyor"
+        job["minimum_remaining_seconds"] = round(remaining, 1)
+        # Actual inference has finished; mark 99% until requested minimum.
+        job["step"] = job["total"] - 1
+        job["stage_started"] = None  # do not log final waiting as GPU inference
 
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
@@ -1619,12 +1679,14 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None)
-            }
+            },
+            on_hold=hold
         )
         close_stage(time.time())
         job["result"] = result
         job["headers"] = headers
         job["step"] = job["total"]
+        job["minimum_remaining_seconds"] = 0.0
         job["stage"] = "Ultra · en iyi sonuç seçildi"
         job["status"] = "done"
     except Exception as error:  # reported to the client through the job
@@ -1636,8 +1698,14 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
 
 
 def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> float | None:
-    if timings is None or job["status"] not in {"queued", "running"}:
+    if job["status"] not in {"queued", "running"}:
         return None
+    minimum_remaining = (
+        max(0.0, ULTRA_MIN_SECONDS - (time.time() - job["created"]))
+        if "minimum_remaining_seconds" in job and "created" in job else 0.0
+    )
+    if timings is None:
+        return minimum_remaining if minimum_remaining > 0 else None
     total = job.get("total", len(JOB_STAGES))
     step = min(job.get("step", 0), total - 1)
     pending = [
@@ -1645,15 +1713,16 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
         for index in range(step, total) if index not in job["skipped"]
     ]
     if not pending:
-        return 0.0
+        return minimum_remaining
     in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
-    return timings.remaining(pending, 0, in_current)
+    return max(minimum_remaining, timings.remaining(pending, 0, in_current))
 
 
 def create_job(realism: bool = False) -> dict[str, Any]:
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
-        "stage": "Ultra 1/4 · " + JOB_STAGES[0], "created": time.time(),
+        "stage": f"Ultra 1/{len(ULTRA_VARIATIONS)} · " + JOB_STAGES[0], "created": time.time(),
+        "minimum_remaining_seconds": ULTRA_MIN_SECONDS,
         "total": len(JOB_STAGES) * len(ULTRA_VARIATIONS),
         "round": 1,
         # Without realism, each round skips that step. It must never appear
@@ -1727,7 +1796,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
-            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed"
+            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
+            "X-Retake-Detail-Score"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -1796,6 +1866,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "profile_references": MAX_REFERENCES,
             "ultra_mode": True,
             "ultra_rounds": len(ULTRA_VARIATIONS),
+            "ultra_min_seconds": ULTRA_MIN_SECONDS,
             "ultra_search_budget_seconds": ULTRA_SEARCH_BUDGET_SECONDS,
             "async_jobs": True,
             "caches": True,
@@ -1827,6 +1898,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 "total": job.get("total", len(JOB_STAGES)),
                 "round": job.get("round", 1),
                 "ultra": True,
+                "minimum_remaining_seconds": (
+                    max(0.0, round(ULTRA_MIN_SECONDS - (time.time() - job["created"]), 1))
+                    if job["status"] in {"running", "queued"}
+                    else 0.0
+                ),
                 "stage": job["stage"],
                 "elapsed": round((job.get("finished") or time.time()) - job["created"], 1),
                 "error": job.get("error"),

@@ -102,8 +102,9 @@ class LocalEngineTest(EngineServerTest):
         self.assertTrue(health["async_jobs"])
         self.assertFalse(health["paired"])
         self.assertTrue(health["ultra_mode"])
-        self.assertEqual(health["ultra_rounds"], 4)
-        self.assertEqual(health["ultra_search_budget_seconds"], 240)
+        self.assertEqual(health["ultra_rounds"], 24)
+        self.assertEqual(health["ultra_min_seconds"], 420)
+        self.assertEqual(health["ultra_search_budget_seconds"], 420)
 
     def test_requests_addressed_to_another_host_are_refused(self):
         response, _ = self.request("GET", "/health", host="evil.example")
@@ -119,7 +120,7 @@ class LocalEngineTest(EngineServerTest):
             return PNG, {"X-Retake-Variation": "0", "X-Retake-Similarity": "0.80"}
 
         body, content_type = multipart_body()
-        with patch.object(srv, "process_swap", fake_swap):
+        with patch.object(srv, "process_swap", fake_swap), patch.object(srv, "ULTRA_MIN_SECONDS", 0):
             response, payload = self.request("POST", "/api/face-swap", body, {"Content-Type": content_type})
             self.assertEqual(response.status, 202)
             accepted = json.loads(payload)
@@ -134,7 +135,7 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(response.getheader("Content-Type"), "image/png")
         self.assertEqual(response.getheader("X-Retake-Variation"), "0")
         self.assertEqual(response.getheader("X-Retake-Ultra"), "on")
-        self.assertEqual(response.getheader("X-Retake-Ultra-Rounds"), "4")
+        self.assertEqual(response.getheader("X-Retake-Ultra-Rounds"), "24")
         self.assertEqual(payload, PNG)
 
     def test_failed_swap_is_reported_through_the_job_and_frees_the_engine(self):
@@ -566,7 +567,9 @@ class RealismChoiceTest(unittest.TestCase):
     def test_choice_needs_a_verified_identity(self):
         renders = [Path("a.png"), Path("b.png")]
         self.assertEqual(srv.choose_realism_render(0.40, renders, [0.38, 0.51]), (Path("b.png"), 0.51))
-        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.395, None]), (Path("a.png"), 0.395))
+        self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.395, None]),
+                          "v16 rejects even 0.005 cosine loss for optional realism")
+        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.398, None]), (Path("a.png"), 0.398))
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.30, 0.38]))
         self.assertIsNone(srv.choose_realism_render(None, renders, [0.9, 0.9]), "unverifiable")
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [None, None]))

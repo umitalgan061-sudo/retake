@@ -1,32 +1,40 @@
-"""Retake's always-on Ultra identity search policy.
+"""Always-on seven-minute Retake Ultra search policy.
 
-Never feed generated pixels back into the source identity model. Each pass
-receives the *original* target and same verified 25 references; only model
-weight, compositing/detail strength and head fitting vary. Select the highest
-verified ArcFace cosine result, preferring photorealistic texture on a near tie.
+One identity transfer always starts from the unmodified original crop and the
+verified 25 reference photographs. Results are *never* recursively used as a
+new target. Search across distinct identity/model-weight and head-fit options,
+keeping the best verified result; one candidate is returned to the browser.
 
-240 seconds is a search *budget*, not a mandatory delay, a real-time
-guarantee, or a reason to discard a good first candidate. A CUDA operation
-already in progress is allowed to finish before checking the budget again.
+The seven-minute minimum is a user-requested elapsed-time contract, not a
+promise that extra model calls magically improve identity. CUDA passes can
+take longer than seven minutes, and verified jobs may spend the remaining
+interval in the clearly labelled final waiting phase.
 """
-
 from __future__ import annotations
 
 import math
 from typing import Any
 
-ULTRA_VARIATIONS = (0, 1, 2, 3)
-ULTRA_SEARCH_BUDGET_SECONDS = 240
-ULTRA_SIMILARITY_GAIN = 0.008
-ULTRA_REALISM_TIE_LOSS = 0.003
+# 24 genuinely different blend/weight/head-shape candidates. The execution
+# budget cuts off new CUDA rounds after 420s; active CUDA work isn't cancelled.
+ULTRA_VARIATIONS = tuple(range(24))
+ULTRA_MIN_SECONDS = 420
+ULTRA_SEARCH_BUDGET_SECONDS = 420
+ULTRA_REALISM_TIE_LOSS = 0.002
+ULTRA_SCORE_EPS = 0.001
+ULTRA_DETAIL_GAIN = 0.06
 
 
 def with_variation(parsed: tuple, variation: int) -> tuple:
-    """Return a fresh validated-job payload; never mutate the original target."""
+    """Deep-copy only the metadata dictionary, preserving original image bytes."""
     if not isinstance(parsed, tuple) or len(parsed) != 7:
         raise ValueError("Ultra işlem isteği eksik.")
+    if not isinstance(variation, int) or variation not in ULTRA_VARIATIONS:
+        raise ValueError("Ultra varyasyonu geçersiz.")
+    if not isinstance(parsed[6], dict):
+        raise ValueError("Ultra metadata alanı geçersiz.")
     values = list(parsed)
-    values[6] = {**values[6], "variation": variation}
+    values[6] = {**parsed[6], "variation": variation}
     return tuple(values)
 
 
@@ -38,10 +46,15 @@ def score_from_headers(headers: dict[str, str]) -> float | None:
     return score if math.isfinite(score) and -1.0 <= score <= 1.0 else None
 
 
+def detail_from_headers(headers: dict[str, str]) -> float | None:
+    try:
+        score = float(headers.get("X-Retake-Detail-Score", ""))
+    except (TypeError, ValueError):
+        return None
+    return score if math.isfinite(score) and 0.0 <= score <= 1.0 else None
+
+
 def _photo_detail(headers: dict[str, str]) -> int:
-    # A real, non-averaged reference texture or identity-safe diffusion may
-    # preserve fine skin detail. Only use this as a tiebreaker; the engine has
-    # already checked ArcFace and rejected poor photographic texture.
     return (
         int(headers.get("X-Retake-Realism") == "on")
         + int(headers.get("X-Retake-Texture-Source", "average") != "average")
@@ -52,22 +65,39 @@ def _photo_detail(headers: dict[str, str]) -> int:
 def prefer_ultra_candidate(
     candidate: dict[str, str], best: dict[str, str] | None
 ) -> bool:
-    if best is None:
-        return score_from_headers(candidate) is not None
-    new_score = score_from_headers(candidate)
-    old_score = score_from_headers(best)
-    if new_score is None:
+    """Identity-first with *bounded* regional sharpness / realism tie-breaking.
+
+    ArcFace cosine is NOT a calibrated percentage or proof of identity.
+    Do not discard a measurable gain solely because it is smaller than an
+    arbitrary old threshold. Also don't trade meaningful identity for beauty.
+    """
+    new = score_from_headers(candidate)
+    if new is None:
         return False
-    if old_score is None:
+    if best is None:
         return True
-    if new_score > old_score + ULTRA_SIMILARITY_GAIN:
+    old = score_from_headers(best)
+    if old is None:
         return True
-    # Never trade more than 0.003 absolute cosine similarity for an optional
-    # realism/detail benefit; 0.003 is smaller than the engine's rescue gate.
-    return (
-        new_score >= old_score - ULTRA_REALISM_TIE_LOSS
-        and _photo_detail(candidate) > _photo_detail(best)
-    )
+    if new > old + ULTRA_REALISM_TIE_LOSS:
+        return True
+    if old > new + ULTRA_REALISM_TIE_LOSS:
+        return False
+
+    new_detail = detail_from_headers(candidate)
+    old_detail = detail_from_headers(best)
+    if new_detail is not None and old_detail is not None:
+        if new_detail > old_detail + ULTRA_DETAIL_GAIN and new >= old - ULTRA_REALISM_TIE_LOSS:
+            return True
+        if old_detail > new_detail + ULTRA_DETAIL_GAIN and new <= old + ULTRA_SCORE_EPS:
+            return False
+
+    if new > old + ULTRA_SCORE_EPS:
+        return True
+    if old > new + ULTRA_SCORE_EPS:
+        # A near tie can still select a reliably more photographic candidate.
+        return _photo_detail(candidate) > _photo_detail(best)
+    return _photo_detail(candidate) > _photo_detail(best)
 
 
 def should_continue_ultra(
@@ -75,4 +105,4 @@ def should_continue_ultra(
     total_rounds: int = len(ULTRA_VARIATIONS),
     budget_seconds: float = ULTRA_SEARCH_BUDGET_SECONDS
 ) -> bool:
-    return completed_rounds < total_rounds and elapsed_seconds < budget_seconds
+    return 0 <= completed_rounds < total_rounds and elapsed_seconds < budget_seconds

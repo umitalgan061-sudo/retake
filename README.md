@@ -35,7 +35,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - **Kafa oranı oturtma:** Tarayıcı 25 referansın 478 noktalı ağından kişinin yüz uzunluğu/genişliği oranını (3B ölçüm, baş dönüklüğüne dayanıklı ağırlıklı medyan) ve hedef fotoğraftaki kafanın oranını ölçer. Fark %1,5'ten büyükse kafa, yüz merkezinden dışa doğru yumuşakça sönen bir çarpıtmayla uzatılır/kısaltılır/genişletilir/daraltılır; oran farkının tamamı uygulanır (eksen başına en çok %15, güçlü alternatifte %18), çene hattı düzeltmesiyle birlikteyken dörtte üçü. Yüz, saç çizgisi, çene ve hemen çevresi birlikte hareket ettiği için yüz kenarında boşluk veya çift kenar oluşmaz; çarpıtma kırpım kenarına varmadan sıfırlanır.
 - Hedef kırpım yerel motora mümkün olduğunda piksel piksel (1024–2048 px yükseklik aralığında yeniden örneklemesiz) gönderilir; yüz çevresi küçült-büyüt bulanıklığına uğramaz.
 - Hedef fotoğrafta yüz iki aşamada aranır: FaceLandmarker, ardından BlazeFace tam/kısa menzil. İlk geçişin kaçırdığı küçük, uzak veya dönük yüzlerde bölgeye yakınlaşılıp 478 noktalı ağ yeniden çıkarılır.
-- **Her zaman Ultra Mod (v15):** "Oluştur" ve "Yeniden oluştur" işlemleri, birbirinden farklı dört kalite varyasyonunu 240 saniyelik arama bütçesi içinde değerlendirir. Her turda değiştirilmeyen **orijinal hedef** ve aynı 25 referans kullanılır; bir turun ürettiği fotoğraf bir sonraki turda kör biçimde tekrar kaynak olarak kullanılmaz. ArcFace ile ölçülen ve doku kontrollerinden geçmiş adayların içinden en iyi **tek** sonuç kullanıcıya gösterilir. Varyasyonlar kimlik ve doğal doku açısından eşitse mevcut en iyi sonuç korunur. Zaman bütçesi garanti edilmiş işlem süresi veya bekleme zorunluluğu değildir; başlamış bir CUDA geçişi bütçeyi aşabilir. Web arayüzü güncellenmemiş yerel motorda Ultra adı altında yanıltıcı sonuç göstermez.
+- **Her zaman Ultra-420 (v16):** 24 birbirinden farklı ağırlık, geometrik uyarlama ve alt yüz doku ayarı denenir. İlk fotoğraf ve 25 referans her turda korunur; ara AI çıktıları tekrar kaynak yapılmaz. Yerel ArcFace kimlik puanı + göz/burun/ağız/alt yüz fotoğraf ayrıntısı (gerçekçilik için sezgisel ölçüm) kullanılır. **Yalnızca en iyi doğrulanmış fotoğraf** gösterilir. Yeni adaylara 420 saniye içinde başlanır; kullanıcı isteğine göre başarılı sonuç **en az 7 dakika sonra** sunulur. GPU aramayı daha erken bitirirse kalan süre dürüstçe bekleme aşamasıdır, aynı görüntü defalarca işlenmez. Gerçek GPU süresi bazen 7 dakikayı aşabilir. Kimlik ve gerçekçilikte yüzde yüz eşleşme garanti edilemez.
 - Sayfanın en üstünde ve işlem sürerken sonuç panelinde, dokununca sıvı gibi dağılıp yeniden toplanan parçacık heykel animasyonu (`src/forma-sculpture.js`, WebGL2) ve geçen süre gösterilir. Motor ve görseller, Guglielmo Giannattasio'nun "Forma — Liquid Sculpture" 21st.dev bileşeninden alınmıştır (https://guglielmogiannattasio.it); görseller `assets/forma/` altında barındırılır ve servis çalışanı tarafından önbelleğe alınır.
 - Arayüz buzlu cam yüzeyleri ve temaya uyumlu uyarı/onay pencereleriyle hem açık hem koyu modda çalışır.
 - Son PNG, birleştirmenin ve kafa oturtmanın dokunduğu alanı kapsayan alfa matı taşır. Tarayıcı bu matı kullanarak yalnızca o alanı orijinal fotoğrafa uygular; alfa 0 olan her piksel bayt bayt korunur.
@@ -184,3 +184,16 @@ Yerel FaceFusion Windows servisi Python tarafında `tools/facefusion_local_serve
 ## Native iOS
 
 `ios/Retake.xcodeproj` SwiftUI uygulama kabuğu ve PhotosPicker/Vision altyapısını içerir. FaceFusion'ın Windows/CUDA motoru iOS üzerinde çalışmaz; native iOS için ayrı Core ML uyumlu model, model lisansları ve performans çalışması gereklidir. Şu an native iOS inference tamamlanmış değildir.
+
+## 7 dakikalık Ultra-420 v16'ya geçiş
+
+Github'a kod eklenmesi **Firebase Hosting** sürümünü ya da Windows üzerinde zaten açık FaceFusion sürecini değiştirmez. Canlı sayfada eski `app.js` ve `/health.model=retake_hybrid_25_reference_v11` görülüyorsa yeni sürüm hâlâ kullanılmıyor demektir. Retake klasöründe PowerShell:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\\tools\\update_retake_ultra.ps1
+```
+
+Bu komut `git pull --ff-only origin main` yapar, Firebase CLI mevcut ve oturum açıksa `projelerim-8fecd` projesindeki `hosting:retake06` hedefine yayınlamayı dener; yalnızca Retake'nin eski Python köprüsünü durdurup FaceFusion sunucusunu v16 ile yeniden başlatır. Eşleştirme açıksa korunmaya çalışılır. CUDA/FaceFusion ve isteğe bağlı gerçekçilik modelleri zaten kurulu olmalıdır; ilk kez kurmak için `docs/LOCAL_FACEFUSION_SETUP.md` dosyasına bak. Firebase yoksa `npm install -g firebase-tools` ve `firebase login` kullan.
+
+Güncel motorun sağlık değerleri: `model=retake_hybrid_25_reference_ultra_v16`, `ultra_mode=true`, `ultra_rounds=24`, `ultra_min_seconds=420`. ArcFace'in `0.83` değeri kalibre edilmiş %83 kimlik ihtimali değildir.

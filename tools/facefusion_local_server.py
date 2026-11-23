@@ -1707,7 +1707,7 @@ def process_swap(
             "X-Retake-Variation": str(variation),
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
-            "X-Retake-Jaw-Focused": "on" if jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
+            "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
             "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
             "X-Retake-Identity-Selection": selected_identity,

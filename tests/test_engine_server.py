@@ -293,6 +293,10 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
+        if names == ["retake-rim-clean.png"]:
+            # The optional post-render cleanup uses a second score probe.
+            # Keep the preceding full-rescue probe available to existing tests.
+            return [self.candidate_scores.get(names[0], 0.74) if self.candidate_scores else 0.74]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)
@@ -508,6 +512,36 @@ class CachedPipelineTest(unittest.TestCase):
 
 
 class RemainingTimeTest(unittest.TestCase):
+    def test_24_round_eta_stops_at_search_deadline_not_all_24_rounds(self):
+        from tools.retake_cache import StageTimings
+        with tempfile.TemporaryDirectory() as directory:
+            timings = StageTimings(Path(directory) / "times.json")
+            for name, seconds in zip(srv.JOB_STAGES, (40, 120, 30, 90, 5, 60, 8)):
+                timings.record(name, seconds)
+            job = srv.create_job(realism=True)
+            job.update(
+                status="running",
+                step=19,
+                created=time.time() - 260,
+                stage_started=time.time() - 30
+            )
+            estimate = srv.estimate_remaining(job, timings)
+            self.assertIsNotNone(estimate)
+            self.assertGreaterEqual(estimate, 150)
+            self.assertLess(estimate, 300, "do not project 24 complete model passes (73 minutes)")
+
+    def test_wait_stage_has_no_gpu_eta_and_incomplete_history_does_not_crash(self):
+        from tools.retake_cache import StageTimings
+        with tempfile.TemporaryDirectory() as directory:
+            empty = StageTimings(Path(directory) / "empty.json")
+            job = srv.create_job(realism=True)
+            job.update(status="running", created=time.time() - 270, stage_started=None)
+            remaining = srv.estimate_remaining(job, empty)
+            self.assertIsNotNone(remaining)
+            self.assertAlmostEqual(remaining, 150, delta=2)
+            job["stage_started"] = time.time()
+            self.assertIsNotNone(srv.estimate_remaining(job, empty))
+
     def test_estimate_skips_cached_stages(self):
         from tools.retake_cache import StageTimings
         with tempfile.TemporaryDirectory() as directory:

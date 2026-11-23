@@ -23,6 +23,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail
+    from .retake_rim_cleanup import repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -33,6 +34,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail
+    from retake_rim_cleanup import repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
@@ -81,7 +83,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v16"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v17"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1476,6 +1478,31 @@ def process_swap(
                 f"({listed}; FaceFusion {result_similarity:.3f}).",
                 flush=True
             )
+        # An ink-like one-pixel face outline can survive the global ArcFace
+        # gate. Attempt a narrow, local cleanup on the existing face matte,
+        # then keep it only if ArcFace still verifies the same identity.
+        rim_cleaned = False
+        rim_candidate = temp_dir / "retake-rim-clean.png"
+        try:
+            rim_stats = repair_dark_rim_file(
+                target_path, final_output, rim_candidate, metadata["faceBounds"]
+            )
+            if rim_stats.get("corrected_pixels", 0) > 0 and centroid:
+                corrected_score = score_identity(facefusion_dir, centroid, [rim_candidate])[0]
+                if corrected_score is not None and corrected_score >= result_similarity - 0.004:
+                    shutil.copyfile(rim_candidate, final_output)
+                    result_similarity = corrected_score
+                    rim_cleaned = True
+                    print(
+                        f"[Retake] Koyu yüz konturu temizlendi "
+                        f"({rim_stats['corrected_pixels']:.0f} piksel; "
+                        f"ArcFace={corrected_score:.3f}).", flush=True
+                    )
+                else:
+                    print("[Retake] Kontur adayı kimliği koruyamadı; atlandı.", flush=True)
+        except Exception as error:
+            print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
+
         # An unverifiable or measurably worse identity is a failed edit, not
         # a successful-looking photo. This relative guard avoids claiming a
         # universal fixed cosine threshold for every angle and lighting.
@@ -1506,6 +1533,7 @@ def process_swap(
         result = final_output.read_bytes()
         headers = {
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
+            "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -1704,7 +1732,7 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
         max(0.0, ULTRA_MIN_SECONDS - (time.time() - job["created"]))
         if "minimum_remaining_seconds" in job and "created" in job else 0.0
     )
-    if timings is None:
+    if timings is None or not isinstance(job.get("stage_started"), (int, float)) and "created" in job:
         return minimum_remaining if minimum_remaining > 0 else None
     total = job.get("total", len(JOB_STAGES))
     step = min(job.get("step", 0), total - 1)
@@ -1714,8 +1742,21 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
     ]
     if not pending:
         return minimum_remaining
-    in_current = time.time() - job.get("stage_started", time.time()) if step not in job["skipped"] else 0.0
-    return max(minimum_remaining, timings.remaining(pending, 0, in_current))
+    started = job.get("stage_started")
+    in_current = max(0.0, time.time() - started) if step not in job["skipped"] and isinstance(started, (int, float)) else 0.0
+    estimate = timings.remaining(pending, 0, in_current)
+    if estimate is None:
+        return minimum_remaining if minimum_remaining > 0 else None
+    if "created" in job:
+        # The v16 ETA projected ALL 24 potential rounds and claimed 73min
+        # even though new rounds are forbidden after 420 seconds. Count only
+        # the remaining search window plus the currently running CUDA stage.
+        elapsed = max(0.0, time.time() - job["created"])
+        remaining_window = max(0.0, ULTRA_SEARCH_BUDGET_SECONDS - elapsed)
+        current_stage = JOB_STAGES[step % len(JOB_STAGES)]
+        current_eta = timings.remaining([current_stage], 0, in_current)
+        estimate = min(estimate, remaining_window + max(0.0, current_eta or 0.0))
+    return max(minimum_remaining, estimate)
 
 
 def create_job(realism: bool = False) -> dict[str, Any]:
@@ -1797,7 +1838,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score"
+            "X-Retake-Detail-Score, X-Retake-Rim-Cleanup"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

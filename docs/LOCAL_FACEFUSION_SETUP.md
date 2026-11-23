@@ -190,3 +190,20 @@ firebase deploy --only hosting:retake06 --project projelerim-8fecd
 ```
 
 Sonrasında `(Invoke-RestMethod 'http://127.0.0.1:8765/health') | Select-Object model,ultra_mode,ultra_rounds,ultra_min_seconds` komutuyla `retake_hybrid_25_reference_ultra_v16 / True / 24 / 420` görmelisin. Canlı `app.js` içinde `X-Retake-Ultra` bulunmalıdır. Kişisel LoRA eğitimi ayrı adımdır ve bu özellik, gerçek cihaz üzerinde kimlik skorunda kesin iyileşme vaat etmez.
+
+
+## 12. v18 — Aşağı yüz sakal-bıyık/çene gerçek referans adayları
+
+Web arayüzü artık **realFace anahtarının açık olmasını beklemeden** hedef fotoğrafın pozu ve ifadesiyle uyumlu referansları (en fazla üç) alt yüz adayı olarak hazırlar. Bunun için hedefte 478 noktalı yüz ağı ve yeterli referans kalitesi gerekir; aksi takdirde sistem eski FaceFusion akışına döner. `realFace.mode="lower"` durumunda gerçek fotoğrafın *yalnızca alt yüzü* üçgen ağla aktarılır, iç dudak/ağız açıklığı ve göz çevresi korunur. `mode="full"` yalnızca kullanıcının ayrı tam yüz nakli seçeneği için geçerlidir.
+
+Bazı Ultra varyasyonları kaynak/çıktı çene formunu daha agresif şekilde ölçülen referans çenesine yaklaştırır. Hem aktarım hem çene varyasyonu **opsiyonel adaylardır**, otomatik olarak nihai çıktı seçilmez; puanlama karşılaştırmasında kimliği daha iyi koruyan aday tercih edilir. Böylece çene/sakal değişebilsin ama kesme çizgileri, düşük kimlik puanı ve hatalı mimik korunarak eski sonucu gölgelemeye devam etmesin. Yüz aktarımının başarısı gerçek referansların pozuna ve çözünürlüğüne bağlıdır; birebirlik garanti edilemez.
+
+### v18 sürümünü etkinleştirme
+
+```powershell
+Set-Location "C:\\AI\\retake"
+.\\tools\\update_retake_ultra.ps1
+(Invoke-RestMethod "http://127.0.0.1:8765/health").model
+```
+
+Beklenen: `retake_hybrid_25_reference_ultra_v18`. Yeni `app.js` ve `X-Retake-Lower-Face-Transfer` başlıkları Firebase'e ancak hosting deploy ile gider. Ultra-420 minimum 420 sn kalır.

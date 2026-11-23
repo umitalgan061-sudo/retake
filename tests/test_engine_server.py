@@ -268,6 +268,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
         self.arcface_calls = 0
         self.facefusion_calls = []
+        self.transplant_modes = []
         rng = np.random.default_rng(5)
         target = np.full((512, 391, 3), (120, 150, 205), np.uint8)
         target = np.clip(target + rng.normal(0, 3, target.shape), 0, 255).astype(np.uint8)
@@ -341,6 +342,7 @@ class CachedPipelineTest(unittest.TestCase):
         return boost
 
     def fake_transplant(self, result, target, real_face, face_width):
+        self.transplant_modes.append(real_face.get("mode"))
         painted = result.copy()
         cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
         return painted, True
@@ -528,6 +530,11 @@ class CachedPipelineTest(unittest.TestCase):
             headers = self.run_swap(0, [], real_face="both")
         self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
         self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+
+    def test_real_reference_warp_is_cached_across_three_tone_variants(self):
+        self.run_swap(0, [], real_face="both")
+        self.assertEqual(self.transplant_modes.count("lower"), 1)
+        self.assertEqual(self.transplant_modes.count("full"), 1)
 
     def test_measured_jaw_variant_has_dedicated_header(self):
         jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}

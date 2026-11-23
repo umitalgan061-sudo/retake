@@ -62,6 +62,50 @@ class UltraPhotoDetailTest(unittest.TestCase):
         )
 
 
+    def test_invalid_or_missing_identity_scores_do_not_change_winner(self):
+        for invalid in (None, float("nan"), float("inf"), True, "0.84"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(
+                    choose_detail_safe_tie([.84, invalid], [.50, .99], 0), 0
+                )
+                self.assertEqual(
+                    choose_detail_safe_tie([invalid, .84], [.50, .99], 0), 0
+                )
+
+    def test_invalid_detail_and_out_of_range_scores_are_ignored(self):
+        for invalid in (None, float("nan"), float("inf"), -1, 1.1, "1.0"):
+            with self.subTest(invalid=invalid):
+                self.assertEqual(
+                    choose_detail_safe_tie([.84, .839], [.5, invalid], 0), 0
+                )
+                self.assertEqual(
+                    choose_detail_safe_tie([.84, .839], [invalid, .9], 0), 0
+                )
+
+    def test_close_candidate_must_also_be_near_best_measured_identity(self):
+        # A legacy winner can be behind an unselected candidate by .005
+        # because the initial identity gate requires a meaningful .006 gain.
+        # The extra quality tie-break must not trade away another .003.
+        self.assertEqual(
+            choose_detail_safe_tie([.835, .840, .833], [.5, .6, .99], 0), 0
+        )
+
+    def test_missing_or_invalid_parameters_leave_selection_unchanged(self):
+        self.assertEqual(choose_detail_safe_tie([.84], [.8], 5), 5)
+        self.assertEqual(choose_detail_safe_tie([.84, .839], [.8], 0), 0)
+        self.assertEqual(
+            choose_detail_safe_tie([.84, .839], [.8, .99], 0, identity_tolerance=float("nan")), 0
+        )
+        self.assertEqual(
+            choose_detail_safe_tie([.84, .839], [.8, .99], 0, minimum_detail_gain=-.1), 0
+        )
+
+    def test_equal_detail_does_not_overrule_original_identity_choice(self):
+        self.assertEqual(
+            choose_detail_safe_tie([.840, .839], [.81, .825], 0), 0
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

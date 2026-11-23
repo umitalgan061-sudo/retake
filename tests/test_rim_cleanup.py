@@ -33,6 +33,35 @@ class FaceRimCleanupTest(unittest.TestCase):
         self.assertTrue(np.array_equal(repaired[0:20], result[0:20]))
         self.assertTrue(np.array_equal(repaired[-20:], result[-20:]))
 
+    def test_continuous_three_pixel_ink_outline_is_actually_removed(self):
+        source = self.make_source()
+        edited = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)
+        cv2.ellipse(edited, (135, 150), (80, 102), 0, 0, 360, (181, 181, 181, 255), -1)
+        # Median blur alone cannot fix a 3-px dark ring, as observed
+        # on the real Retake output around forehead and lower jaw.
+        cv2.ellipse(edited, (135, 150), (80, 102), 0, 0, 360, (5, 5, 5, 255), 3)
+        outside = edited[0:25].copy()
+        original_alpha = edited[:, :, 3].copy()
+        cleaned, stats = repair_dark_rim(source, edited, self.bounds)
+        self.assertGreater(stats["dark_line_pixels"], 200)
+        self.assertGreater(stats["dark_line_reduction"], .50)
+        self.assertLess(stats["dark_line_remaining"], stats["dark_line_pixels"] * .5)
+        self.assertGreater(stats["corrected_pixels"], 200)
+        # No dark ink should be left along the reconstructed face ellipse.
+        self.assertLess(np.count_nonzero(cleaned[:, :, 0] < 20), 80)
+        self.assertTrue(np.array_equal(cleaned[:, :, 3], original_alpha))
+        self.assertTrue(np.array_equal(cleaned[0:25], outside))
+        self.assertTrue(np.array_equal(cleaned[150, 135], edited[150, 135]))
+
+    def test_dark_beard_inside_face_is_not_oversmoothed(self):
+        source, edited = self.make_ink_outline()
+        cv2.rectangle(edited, (108, 199), (165, 226), (28, 31, 35, 255), -1)
+        beard = edited[201:225, 110:164].copy()
+        cleaned, _ = repair_dark_rim(source, edited, self.bounds)
+        self.assertTrue(np.array_equal(cleaned[201:225, 110:164], beard),
+                        "real inner beard detail must not be inpainted")
+        self.assertTrue(np.array_equal(cleaned[:, :, 3], edited[:, :, 3]))
+
     def test_no_halo_means_byte_for_byte_unchanged(self):
         source = self.make_source()
         same = cv2.cvtColor(source, cv2.COLOR_BGR2BGRA)

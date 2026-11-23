@@ -22,8 +22,9 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
+    from .ultra_quality import check_photo_detail
     from .ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
@@ -31,8 +32,9 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
+    from ultra_quality import check_photo_detail
     from ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 
@@ -79,7 +81,7 @@ IDENTITY_MODEL = "alphaface_256"
 # the measurement confirms it for the photo at hand.
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
-HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v15"
+HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v16"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -102,10 +104,32 @@ HEAD_FIT_MAX = 1.18
 # FaceFusion passes and only redoes blending and head fitting (seconds, not
 # minutes). The fourth is a genuinely different, softer identity pass.
 FACE_SWAP_VARIATIONS = (
-    (1.00, 0.20, 1.0),
-    (1.00, 0.24, 0.0),
-    (1.00, 0.12, 1.5),
-    (0.94, 0.30, 0.5)
+    # Four legacy v15 variants plus 20 v16 search alternatives.
+    # Different swapper weights reuse GPU passes when possible.
+    (1.00, 0.20, 1.00),
+    (1.00, 0.24, 0.00),
+    (1.00, 0.12, 1.50),
+    (0.94, 0.30, 0.50),
+    (1.00, 0.08, 0.00),
+    (1.00, 0.32, 0.00),
+    (1.00, 0.14, 0.65),
+    (1.00, 0.28, 1.20),
+    (0.99, 0.10, 0.00),
+    (0.99, 0.28, 0.85),
+    (0.99, 0.36, 0.00),
+    (0.98, 0.10, 1.10),
+    (0.98, 0.18, 0.00),
+    (0.98, 0.30, 0.65),
+    (0.97, 0.08, 0.00),
+    (0.97, 0.24, 1.20),
+    (0.96, 0.14, 0.70),
+    (0.96, 0.32, 0.00),
+    (0.95, 0.14, 0.00),
+    (0.95, 0.24, 0.90),
+    (0.94, 0.08, 0.00),
+    (0.94, 0.24, 1.00),
+    (0.92, 0.14, 0.00),
+    (0.92, 0.30, 0.70),
 )
 
 

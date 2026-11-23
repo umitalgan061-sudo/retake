@@ -25,6 +25,37 @@ REGIONS = {
 }
 
 
+def choose_detail_safe_tie(
+    identity_scores: list[float | None],
+    detail_scores: list[float | None],
+    incumbent: int,
+    identity_tolerance: float = 0.003,
+    minimum_detail_gain: float = 0.025,
+) -> int:
+    """Break an ArcFace near-tie with photographic detail, never replace a clear winner.
+
+    Identity remains the primary safety gate. This narrow tie-break exists
+    because a cosmetically smoother candidate can score virtually the same in
+    ArcFace while visibly losing beard, skin and hair-adjacent texture.
+    """
+    if not (0 <= incumbent < len(identity_scores) == len(detail_scores)):
+        return incumbent
+    identity = identity_scores[incumbent]
+    incumbent_detail = detail_scores[incumbent]
+    if identity is None or incumbent_detail is None:
+        return incumbent
+    eligible = [
+        index for index, (score, detail) in enumerate(zip(identity_scores, detail_scores))
+        if score is not None and detail is not None and score >= identity - identity_tolerance
+    ]
+    if not eligible:
+        return incumbent
+    best = max(eligible, key=lambda index: (float(detail_scores[index]), float(identity_scores[index])))
+    if float(detail_scores[best]) >= incumbent_detail + minimum_detail_gain:
+        return best
+    return incumbent
+
+
 def _detail_energy(gray: np.ndarray) -> float:
     if min(gray.shape[:2]) < 8:
         return 0.0
@@ -90,3 +121,4 @@ def check_photo_detail(
     original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
     result = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
     return regional_photo_detail(original, result, bounds)
+

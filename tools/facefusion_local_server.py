@@ -1474,15 +1474,62 @@ def process_swap(
         # an unmasked raw FaceFusion output. It can rescue cases where
         # beautifying and geometric edits have pulled the person off-identity.
         identity_fallback = temp_dir / "retake-identity-only.png"
+        identity_border_report: dict[str, Any] = {}
         try:
             blend_lower_face(
                 target_path, identity_source, appearance_output, identity_fallback,
                 metadata["faceBounds"], 0.0, metadata["targetSize"],
-                shading_strength=0.0, harmonize_strength=0.35
+                shading_strength=0.0, harmonize_strength=0.35,
+                report=identity_border_report
             )
         except Exception as error:
             print(f"Yedek saf kimlik bileşimi oluşturulamadı: {error}", flush=True)
             identity_fallback = None
+
+        # v19's biggest practical failure: the pure-identity fallback won
+        # ArcFace in every real round (0.833), deleting the reference beard
+        # and all jaw changes. Give that strong ID base its OWN local,
+        # feathered beard and chin geometry alternatives. These are rescue
+        # candidates, not blind pasted faces. The next ArcFace check must
+        # approve them, and a significantly worse matte border disqualifies
+        # them before candidate selection.
+        identity_regional_candidates: list[tuple[str, Path]] = []
+        if identity_fallback is not None:
+            original_border = float(identity_border_report.get("border", 0.0))
+            max_regional_border = max(BORDER_STEP_FLOOR, original_border * 1.15)
+            if real_face and real_face.get("mode") in ("lower", "both") and variation in lower_reference_rounds:
+                for transfer_strength in (0.35, 0.65):
+                    path = temp_dir / f"retake-identity-beard-{int(transfer_strength * 100)}.png"
+                    report: dict[str, Any] = {}
+                    try:
+                        used = blend_lower_face(
+                            target_path, identity_source, appearance_output, path,
+                            metadata["faceBounds"], 0.0, metadata["targetSize"],
+                            shading_strength=0.0,
+                            real_face={**real_face, "mode": "lower", "strength": transfer_strength},
+                            harmonize_strength=0.35, report=report
+                        )
+                        border = float(report.get("border", float("inf")))
+                        if used and math.isfinite(border) and border <= max_regional_border:
+                            identity_regional_candidates.append(("identity-beard", path))
+                        else:
+                            print(
+                                f"[Retake] Güvenli sakal adayı atlandı "
+                                f"(kenar {border:.2f}, sınır {max_regional_border:.2f}).", flush=True
+                            )
+                    except Exception as error:
+                        print(f"[Retake] Kimlik üstü sakal nakli atlandı: {error}", flush=True)
+            if jaw_warp and jaw_scale > 0:
+                jaw_candidate = temp_dir / "retake-identity-jaw.png"
+                try:
+                    shutil.copyfile(identity_fallback, jaw_candidate)
+                    reshape_jawline(
+                        jaw_candidate, jaw_warp, metadata["faceBounds"]["width"],
+                        min(1.25, jaw_scale)
+                    )
+                    identity_regional_candidates.append(("identity-jaw", jaw_candidate))
+                except Exception as error:
+                    print(f"[Retake] Kimlik üstü çene uyarlaması atlandı: {error}", flush=True)
 
         # Photographic realism (optional): re-render the face with a diffusion
         # model steered by the person's ArcFace identity.

@@ -22,10 +22,13 @@ class IdentitySourcePlanTests(unittest.TestCase):
         report = self.report()
         report["outlier_indices"] = [24]
         pools = plan_identity_source_sets([1] * 25, report)
-        self.assertEqual([name for name, _ in pools], ["all-25", "consensus"])
-        self.assertEqual(len(pools[1][1]), 12)
+        self.assertEqual([name for name, _ in pools], ["all-25", "trusted-24", "consensus"])
+        self.assertEqual(len(pools[1][1]), 24)
         self.assertNotIn(24, pools[1][1])
-        self.assertEqual(pools[1][1], tuple(range(12, 24)))
+        self.assertEqual(pools[1][1], tuple(range(24)))
+        self.assertEqual(len(pools[2][1]), 12)
+        self.assertNotIn(24, pools[2][1])
+        self.assertEqual(pools[2][1], tuple(range(12, 24)))
 
     def test_pose_matched_pool_needs_six_valid_descriptors(self):
         distances = [None] * 25
@@ -45,8 +48,19 @@ class IdentitySourcePlanTests(unittest.TestCase):
         report = self.report()
         report["outlier_indices"] = [0]
         pools = plan_identity_source_sets([1] * 25, report, distances)
-        self.assertEqual([name for name, _ in pools], ["all-25", "consensus", "pose-match"])
+        self.assertEqual([name for name, _ in pools], ["all-25", "trusted-24", "consensus", "pose-match"])
         self.assertNotIn(0, pools[-1][1])
+
+    def test_trusted_full_keeps_quality_weights_without_a_flagged_photo(self):
+        report = self.report()
+        report["outlier_indices"] = [1, 4]
+        weights = [3, 1, 2, 1, 3] * 5
+        pools = plan_identity_source_sets(weights, report)
+        trusted = dict(pools)["trusted-23"]
+        self.assertEqual(trusted.count(0), 3)
+        self.assertEqual(trusted.count(2), 2)
+        self.assertNotIn(1, trusted)
+        self.assertNotIn(4, trusted)
 
     def test_single_texture_is_a_real_photo_with_identity_and_sharpness(self):
         from tools.identity_selection import select_texture_reference

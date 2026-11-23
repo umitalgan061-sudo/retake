@@ -803,6 +803,18 @@ def choose_composite(
     if not scored:
         return blends[0][0]
     value, path, border = max(scored, key=lambda item: item[0])
+    # The global ArcFace embedding can barely notice beard and chin texture.
+    # When a verified, seamless reference lower-face candidate is within
+    # 0.002 cosine of the best globally-scored option, prefer genuine
+    # reference details instead of a synthetic smoothed beard. Full-face
+    # transplants do NOT receive this preference.
+    matched_lower = [
+        item for item in scored
+        if names[item[1]].find("referans alt yüz") >= 0
+        and item[0] >= value - 0.002
+    ]
+    if matched_lower:
+        value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
         f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
         for item, score in zip(allowed, scores)
@@ -1332,9 +1344,15 @@ def process_swap(
         blends: list[tuple[Path, float]] = []
         labels: list[str] = []
         transplanted: set[Path] = set()
-        # The experimental photo transplant is a candidate, never forced: on a
-        # night photo it cost ArcFace similarity (0.853 raw swap -> 0.639).
-        transplant_options = [None, real_face] if real_face else [None]
+        # v18 automatically tries pose-matched lower-face reference detail,
+        # but only in several targeted rounds: heavy piecewise warps in all
+        # 24 rounds would waste the 420-second search budget.
+        # Full-face transplants remain a separate explicit user choice.
+        lower_reference_rounds = (0, 2, 7, 11, 15, 19, 21, 23)
+        try_reference = bool(real_face) and (
+            real_face.get("mode") == "full" or variation in lower_reference_rounds
+        )
+        transplant_options = [None, real_face] if try_reference else [None]
         for index, (harmonize, shading_cap) in enumerate(COMPOSITE_VARIANTS):
             shading = user_shading if user_shading is not None else None
             if index > 0:
@@ -1350,7 +1368,10 @@ def process_swap(
                 ):
                     transplanted.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
-                labels.append(f"ton {harmonize:g}" + (" + doku nakli" if path in transplanted else ""))
+                label = f"ton {harmonize:g}"
+                if path in transplanted:
+                    label += " + referans alt yüz" if real_face and real_face.get("mode") == "lower" else " + doku nakli"
+                labels.append(label)
         texture_blends: set[Path] = set()
         if texture_output is not None:
             for harmonize in (0.60, 0.35):

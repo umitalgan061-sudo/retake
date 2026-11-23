@@ -23,6 +23,9 @@ ULTRA_SEARCH_BUDGET_SECONDS = 420
 ULTRA_REALISM_TIE_LOSS = 0.002
 ULTRA_SCORE_EPS = 0.001
 ULTRA_DETAIL_GAIN = 0.06
+# Require a visible 2.5-percentage-point residual halo improvement in an
+# identity near-tie before preferring a cleaner photographic boundary.
+ULTRA_RIM_GAIN = 0.025
 
 
 def with_variation(parsed: tuple, variation: int) -> tuple:
@@ -54,6 +57,15 @@ def detail_from_headers(headers: dict[str, str]) -> float | None:
     return score if math.isfinite(score) and 0.0 <= score <= 1.0 else None
 
 
+def rim_from_headers(headers: dict[str, str]) -> float | None:
+    """Uncalibrated residual dark seam fraction (lower is visually better)."""
+    try:
+        value = float(headers.get("X-Retake-Rim-Fraction", ""))
+    except (ValueError, TypeError):
+        return None
+    return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+
+
 def _photo_detail(headers: dict[str, str]) -> int:
     return (
         int(headers.get("X-Retake-Realism") == "on")
@@ -83,6 +95,17 @@ def prefer_ultra_candidate(
         return True
     if old > new + ULTRA_REALISM_TIE_LOSS:
         return False
+
+    # ArcFace gets first priority; in a tight identity tie, favor a genuinely
+    # less visible hairline/jaw outline BEFORE generic texture sharpness.
+    # Never treat a missing/invalid quality measurement as a perfect seam.
+    new_rim = rim_from_headers(candidate)
+    old_rim = rim_from_headers(best)
+    if new_rim is not None and old_rim is not None:
+        if new_rim + ULTRA_RIM_GAIN < old_rim:
+            return True
+        if old_rim + ULTRA_RIM_GAIN < new_rim:
+            return False
 
     new_detail = detail_from_headers(candidate)
     old_detail = detail_from_headers(best)

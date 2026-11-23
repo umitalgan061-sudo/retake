@@ -355,7 +355,7 @@ class CachedPipelineTest(unittest.TestCase):
             "headFit": {"scaleX": 0.97, "scaleY": 1.04}
         }
         if real_face:
-            metadata["realFace"] = {"targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
+            metadata["realFace"] = {"mode": "lower" if real_face == "lower" else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
             metadata["realReferenceBytes"] = [b"photo"]
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
@@ -502,6 +502,22 @@ class CachedPipelineTest(unittest.TestCase):
         self.blend_scores = [0.60, 0.80, 0.61, 0.70, 0.62, 0.71]
         headers = self.run_swap(1, [], real_face=True)
         self.assertEqual(headers["X-Retake-Real-Face"], "on")
+
+    def test_lower_face_candidate_can_win_when_arcface_prefers_reference_beard(self):
+        self.blend_scores = [0.70, 0.88, 0.69, 0.75, 0.68, 0.72]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(2, [], real_face="lower")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Real-Face"], "off",
+                         "lower-only mode must not pretend to have pasted the whole face")
+        self.assertEqual(headers["X-Retake-Variation"], "2")
+
+    def test_measured_jaw_variant_has_dedicated_header(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
+        focused = self.run_swap(2, [], jaw_warp=jaw)
+        ordinary = self.run_swap(0, [], jaw_warp=jaw)
+        self.assertEqual(focused["X-Retake-Jaw-Focused"], "on")
+        self.assertEqual(ordinary["X-Retake-Jaw-Focused"], "off")
 
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])

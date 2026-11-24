@@ -1,6 +1,7 @@
 import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
 import {
   formatBytes,
+  findExactReferenceFile,
   getLandmarkBounds,
   settleWithLimit,
   MAX_IMAGE_BYTES,
@@ -2026,6 +2027,28 @@ async function runFaceFusionEdit() {
 
   let generatedUrl = null;
   try {
+    const targetSnapshot = state.target;
+    const exactReference = await findExactReferenceFile(targetSnapshot.file, state.references);
+    if (exactReference) {
+      const regenerate = await showAppDialog({
+        title: "Bu fotoğraf referans bankanda birebir mevcut",
+        message: "Dosya baytları tamamen aynı. Orijinali korumak, gereksiz yüz değişimi ve yeni kontur riskini önler. İstersen yine de Ultra ile yeni bir görünüm oluşturabilirsin.",
+        confirmLabel: "Yine düzenle",
+        cancelLabel: "Orijinali koru"
+      });
+      if (state.target !== targetSnapshot) throw new Error("Hedef fotoğraf değişti; işlemi yeniden başlat.");
+      if (!regenerate) {
+        const canvas = document.createElement("canvas");
+        canvas.width = targetSnapshot.image.naturalWidth;
+        canvas.height = targetSnapshot.image.naturalHeight;
+        canvas.getContext("2d").drawImage(targetSnapshot.image, 0, 0);
+        addResult(await canvasToBlob(canvas), "Orijinal korundu · birebir referans dosyası");
+        elements.disabledNote.textContent = "Fotoğraf zaten referans bankasında mevcut. Yapay zekâ ile değiştirilmedi; kimlik puanı üretilmedi.";
+        setRuntimeStatus("Orijinal fotoğraf korundu · GPU işlemi yapılmadı");
+        showToast("Orijinal fotoğraf korundu.");
+        return;
+      }
+    }
     const {
       targetCanvas,
       referenceBlobs,

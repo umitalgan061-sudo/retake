@@ -102,6 +102,7 @@ class LocalEngineTest(EngineServerTest):
         self.assertTrue(health["async_jobs"])
         self.assertFalse(health["paired"])
         self.assertTrue(health["ultra_mode"])
+        self.assertTrue(health["lossless_preblended_transport"])
         self.assertEqual(health["ultra_rounds"], 24)
         self.assertEqual(health["ultra_min_seconds"], 420)
         self.assertEqual(health["ultra_search_budget_seconds"], 420)
@@ -323,6 +324,8 @@ class CachedPipelineTest(unittest.TestCase):
         """Two 'renders': the result with a visibly re-rendered face."""
         self.realism_calls = getattr(self, "realism_calls", 0) + 1
         image = cv2.imread(str(final_output), cv2.IMREAD_COLOR)
+        target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
+        self.assertEqual(image.shape, target.shape, "realism receives native-size target, not padded inference copy")
         paths = []
         for index, shade in enumerate((40, 60), start=1):
             render = image.copy()
@@ -371,6 +374,11 @@ class CachedPipelineTest(unittest.TestCase):
                 lambda step, cached=False: stages.append((step, cached)), {**self.caches, "realism": realism}
             )
         self.last_result = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
+        self.assertEqual(headers["X-Retake-Alpha-Transport"], "binary")
+        self.assertTrue(set(np.unique(self.last_result[:, :, 3])) <= {0, 255})
+        original = cv2.imdecode(np.frombuffer(self.target_png, np.uint8), cv2.IMREAD_COLOR)
+        outside = self.last_result[:, :, 3] == 0
+        np.testing.assert_array_equal(self.last_result[outside, :3], original[outside])
         self.assertEqual(cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED).shape[:2], (512, 391))
         return headers
 
@@ -494,6 +502,12 @@ class CachedPipelineTest(unittest.TestCase):
     def test_photo_transplant_is_a_candidate_not_forced(self):
         # Order: tone 0.9 plain, + transplant, tone 0.6 plain, + transplant, ...
         self.blend_scores = [0.70, 0.60, 0.72, 0.61, 0.69, 0.62]
+        # Model the same weak identity in the independently measured full-face
+        # rescue candidates; native-size detail scoring now really runs here.
+        # Otherwise the fake ArcFace assigns these candidates the default .74
+        # (a tie), incorrectly simulating a successful identity-preserving rescue.
+        self.candidate_scores = {"retake-identity-full-20.png": 0.60,
+                                 "retake-identity-full-40.png": 0.61}
         guard = patch.object(srv, "BORDER_STEP_FLOOR", 1e9)   # the selection is what is tested here
         guard.start()
         self.addCleanup(guard.stop)

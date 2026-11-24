@@ -146,3 +146,12 @@ export function alphaMaskFromRGBA(rgba, width, height) {
   }
   return mask;
 }
+
+/** The already-feathered RGB must never be decoded with fractional alpha. */
+export function binaryExtentFromRGBA(rgba, width, height) {
+  const mask = alphaMaskFromRGBA(rgba, width, height);
+  if (mask.some(alpha => alpha !== 0 && alpha !== 1)) {
+    throw new Error("Yerel motorun kayıpsız alfa maskesi geçersiz.");
+  }
+  return mask;
+}

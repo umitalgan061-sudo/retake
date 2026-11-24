@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { alphaMaskFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
+import { alphaMaskFromRGBA, binaryExtentFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "../src/face-only.js";
 
 test("copies every pixel outside the face mask byte-for-byte", () => {
   const source = new Uint8Array([
@@ -123,4 +123,26 @@ test("the photo stays fully opaque: the patch's matte alpha never leaks into the
   assert.deepEqual([...out.slice(0, 3)], [10, 20, 30]);
   assert.deepEqual([...out.slice(8, 11)], [200, 100, 50]);
   assert.ok(out[4] > 10 && out[4] < 200, "ring pixel is a colour blend");
+});
+
+test("binary preblended transport refuses fractional-alpha RGB", () => {
+  for (const alpha of [1, 2, 5, 128, 254]) {
+    assert.throws(() => binaryExtentFromRGBA(new Uint8Array([120, 150, 180, alpha]), 1, 1), /alfa/);
+  }
+});
+
+test("binary transport preserves opaque RGB exactly and copies no transparent pixel", () => {
+  const source = new Uint8Array([120, 140, 180, 255, 126, 146, 186, 255]);
+  const engine = new Uint8Array([0, 0, 0, 0, 127, 147, 187, 255]);
+  const extent = binaryExtentFromRGBA(engine, 2, 1);
+  assert.deepEqual([...compositePreblendedRGBA(source, engine, extent, 2, 1)],
+    [120, 140, 180, 255, 127, 147, 187, 255]);
+});
+
+test("fully opaque preblended result is a valid binary extent, not an ellipse fallback", () => {
+  const source = new Uint8Array([10, 20, 30, 255, 20, 30, 40, 255]);
+  const engine = new Uint8Array([11, 21, 31, 255, 21, 31, 41, 255]);
+  const extent = binaryExtentFromRGBA(engine, 2, 1);
+  assert.deepEqual([...extent], [1, 1]);
+  assert.deepEqual([...compositePreblendedRGBA(source, engine, extent, 2, 1)], [...engine]);
 });

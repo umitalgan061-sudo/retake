@@ -31,7 +31,7 @@ CROP_SCALE = 1.55             # crop side ÷ larger face side
 # on real photos: 0.45-0.55 with guidance 1.2-1.3 is photographic and keeps
 # (usually raises) ArcFace similarity; at 0.65 the score can still rise while
 # the nose and cheeks start to look swollen, so the engine never goes there.
-PLANS = ((1.2, 0.45), (1.3, 0.55), (1.3, 0.55))
+PLANS = ((1.3, 0.30), (1.2, 0.45), (1.3, 0.55))
 # With the person's own model the render knows their face, beard and skin,
 # so it can go a little further; ArcFace still decides per photo.
 PERSONAL_PLANS = ((1.0, 0.45), (1.0, 0.55), (1.1, 0.62))
@@ -163,9 +163,13 @@ def lower_face_weight(points: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     return cv2.GaussianBlur(region.astype(np.float32), (0, 0), max(1.5, face_width * 0.04))
 
 
-def lower_face_hybrid(swapped: np.ndarray, rendered: np.ndarray, points: np.ndarray) -> np.ndarray:
-    """The swap with the render's lower face (uint8 BGR)."""
-    weight = lower_face_weight(points, swapped.shape[:2])[:, :, None]
+def lower_face_hybrid(swapped: np.ndarray, rendered: np.ndarray, points: np.ndarray, strength: float = 1.0) -> np.ndarray:
+    """Blend only lower-face detail; strength is independent of diffusion denoise."""
+    if swapped.shape != rendered.shape or not math.isfinite(strength) or not 0 <= strength <= 1:
+        raise ValueError("Alt yüz adayının boyutu veya karışım gücü geçersiz.")
+    if np.asarray(points).shape != (478, 2) or not np.isfinite(points).all():
+        raise ValueError("Alt yüz mesh noktaları geçersiz.")
+    weight = lower_face_weight(points, swapped.shape[:2])[:, :, None] * strength
     blended = swapped.astype(np.float32) * (1.0 - weight) + rendered.astype(np.float32) * weight
     return np.clip(np.rint(blended), 0, 255).astype(np.uint8)
 
@@ -173,6 +177,17 @@ def lower_face_hybrid(swapped: np.ndarray, rendered: np.ndarray, points: np.ndar
 def changed_mask(swapped: np.ndarray, target: np.ndarray) -> np.ndarray:
     changed = (np.max(cv2.absdiff(swapped, target), axis=2) >= 3).astype(np.uint8)
     return cv2.morphologyEx(changed, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+
+
+def validated_identity(identity: np.ndarray) -> np.ndarray:
+    """Validate a single finite ArcFace centroid before supplying FaceID embeds."""
+    embeds = np.asarray(identity, np.float32)
+    if embeds.shape != (512,) or not np.isfinite(embeds).all():
+        raise ValueError("FaceID için 512 geçerli kimlik bileşeni gerekli.")
+    norm = float(np.linalg.norm(embeds))
+    if not math.isfinite(norm) or norm <= 1e-6:
+        raise ValueError("FaceID kimlik vektörü sıfır veya geçersiz.")
+    return embeds / norm
 
 
 class Renderer:
@@ -199,8 +214,6 @@ class Renderer:
         pipe.scheduler = DPMSolverMultistepScheduler.from_config(
             pipe.scheduler.config, use_karras_sigmas=True, algorithm_type="dpmsolver++"
         )
-        pipe.safety_checker = None
-        pipe.requires_safety_checker = False
         pipe.set_progress_bar_config(disable=True)
         self.identity = False
         if faceid_dir:
@@ -257,12 +270,11 @@ class Renderer:
         if self.identity:
             if identity is None:
                 raise ValueError("kimlik vektörü gerekli")
-            embeds = np.asarray(identity, np.float32).reshape(-1, 512)
-            embeds = embeds / np.maximum(np.linalg.norm(embeds, axis=1, keepdims=True), 1e-6)
+            embeds = validated_identity(identity).reshape(1, 512)
             positive = self.torch.from_numpy(embeds).unsqueeze(0)          # (1, n, 512)
             stacked = self.torch.cat([self.torch.zeros_like(positive), positive])
             extra["ip_adapter_image_embeds"] = [stacked.to(device=self.device, dtype=self.dtype)]
-        result = self.pipe(
+        response = self.pipe(
             **extra,
             prompt=self.prompt,
             negative_prompt=NEGATIVE_PROMPT,
@@ -274,7 +286,10 @@ class Renderer:
             generator=generator,
             height=size,
             width=size,
-        ).images[0]
+        )
+        if any(getattr(response, 'nsfw_content_detected', None) or []):
+            raise ValueError("Gerçekçilik güvenlik kontrolü adayı reddetti.")
+        result = response.images[0]
         rendered = cv2.cvtColor(np.asarray(result), cv2.COLOR_RGB2BGR)
         side = crop_bgr.shape[0]
         return cv2.resize(rendered, (side, side), interpolation=cv2.INTER_LANCZOS4 if side > size else cv2.INTER_AREA)

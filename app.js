@@ -18,7 +18,7 @@ import {
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
-import { alphaMaskFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
+import { alphaMaskFromRGBA, binaryExtentFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
   canonicalJaw,
@@ -1810,6 +1810,7 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
     // Resample opaque preblended RGB independently from its binary extent.
     // Use nearest-neighbor extent; never read resampled low-alpha RGB.
     const nativeRGBA = generatedCrop.data;
+    binaryExtentFromRGBA(nativeRGBA, outputWidth, outputHeight);
     const maskCanvas = document.createElement("canvas");
     maskCanvas.width = outputWidth;
     maskCanvas.height = outputHeight;
@@ -1824,7 +1825,6 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
     const nativeSource = nativeContext.getImageData(0, 0, outputWidth, outputHeight).data;
     for (let i = 0; i < nativeRGBA.length; i += 4) {
       const a = nativeRGBA[i + 3];
-      if (a !== 0 && a !== 255) throw new Error("Yerel motorun alfa maskesi geçersiz.");
       if (a === 0) opaque.set(nativeSource.subarray(i, i + 3), i);
       opaque[i + 3] = 255;
       extent.set([a, a, a, 255], i);
@@ -1843,11 +1843,13 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
     const maskPixels = scaledContext.getImageData(0, 0, crop.width, crop.height).data;
     for (let i = 0; i < generatedCrop.data.length; i += 4) generatedCrop.data[i + 3] = maskPixels[i];
   }
-  const parserAlphaMask = alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
+  const parserAlphaMask = binaryTransport
+    ? binaryExtentFromRGBA(generatedCrop.data, crop.width, crop.height)
+    : alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
   const hasTransparentPixels = parserAlphaMask.some((alpha) => alpha < 0.999);
   // New local FaceFusion server embeds its parser/occlusion-derived change matte
   // in PNG alpha. Retain the ellipse only as a backward-compatible fallback.
-  if (binaryTransport && (!preblended || parserAlphaMask.some((alpha) => alpha !== 0 && alpha !== 1))) {
+  if (binaryTransport && !preblended) {
     throw new Error("Yerel motorun kayıpsız alfa maskesi geçersiz; bozuk görüntü gösterilmedi.");
   }
   const alphaMask = binaryTransport || hasTransparentPixels

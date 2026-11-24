@@ -84,6 +84,36 @@ class UltraSelectionTest(unittest.TestCase):
         self.assertEqual(positions, list(range(len(srv.JOB_STAGES) * len(ULTRA_VARIATIONS))))
         self.assertEqual(visits, [(b"original photo", index) for index in ULTRA_VARIATIONS])
 
+
+    def test_near_ties_cannot_accumulate_identity_loss_across_rounds(self):
+        def fake_swap(*args):
+            index = args[3][6]["variation"]
+            return f"photo-{index}".encode(), {
+                **score(.900 - index * .0015),
+                "X-Retake-Rim-Fraction": str(max(0.0, .9 - index * .04))
+            }
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_a, **_k: None, min_duration_seconds=0
+            )
+        self.assertGreaterEqual(score_from_headers(headers), .898)
+        self.assertEqual(float(headers["X-Retake-Ultra-Peak-Identity"]), .9)
+        self.assertEqual(headers["X-Retake-Ultra-Attempted"], "24")
+
+    def test_invalid_scores_are_attempted_but_not_verified(self):
+        def fake_swap(*args):
+            index = args[3][6]["variation"]
+            return b"verified" if index == 1 else b"invalid", score(.84 if index == 1 else "nan")
+        with patch.object(srv, "process_swap", fake_swap):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_a, **_k: None, min_duration_seconds=0
+            )
+        self.assertEqual(photo, b"verified")
+        self.assertEqual(headers["X-Retake-Ultra-Rounds"], "1")
+        self.assertEqual(headers["X-Retake-Ultra-Attempted"], "24")
+
     def test_diffusion_is_run_only_for_best_identity_finalist(self):
         calls = []
         finalist_calls = []

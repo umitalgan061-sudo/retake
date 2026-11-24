@@ -23,6 +23,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
@@ -34,6 +35,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
@@ -685,6 +687,7 @@ def blend_enhanced_hybrid_output(hybrid_path: Path, enhanced_path: Path, output_
     enhanced = cv2.imread(str(enhanced_path), cv2.IMREAD_COLOR)
     if hybrid is None or enhanced is None or hybrid.ndim != 3 or hybrid.shape[2] != 4:
         raise RuntimeError("GFPGAN çıktısı ve alfa maskeli hibrit görüntü okunamadı.")
+    enhanced = crop_to_size(enhanced, {"width": hybrid.shape[1], "height": hybrid.shape[0]})
     if hybrid.shape[:2] != enhanced.shape[:2]:
         raise RuntimeError("GFPGAN ve hibrit yüz çıktı boyutları eşleşmiyor.")
     blend = FACE_ENHANCER_BLEND / 100.0
@@ -1169,6 +1172,8 @@ def process_swap(
     caches: dict[str, Any] | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Run the full hybrid pipeline for one parsed request."""
+    import cv2
+
     caches = caches or {}
     identity_cache: IdentityReportCache | None = caches.get("identity")
     pass_cache: PassCache | None = caches.get("passes")
@@ -1180,7 +1185,9 @@ def process_swap(
         temp_dir = Path(temp_name)
         target_path = temp_dir / ("target" + target_ext)
         target_path.write_bytes(target_bytes)
-        pad_image_to_even(target_path)
+        # Only the model input is padded. Every quality gate and final RGB
+        # composite must use the native-size, untouched target.
+        inference_target = prepare_inference_target(target_path, metadata["targetSize"], temp_dir)
         appearance_path = temp_dir / ("appearance-profile" + appearance_ext)
         appearance_path.write_bytes(appearance_bytes)
 
@@ -1263,10 +1270,10 @@ def process_swap(
             flush=True
         )
 
-        target_key_bytes = target_path.read_bytes()
+        target_key_bytes = inference_target.read_bytes()
 
         def cached_pass(step: int, sources: list[Path], output: Path, model: str, source_image: Path | None = None) -> str:
-            image = source_image or target_path
+            image = source_image or inference_target
             key = None
             if pass_cache is not None:
                 key = PassCache.key(
@@ -1774,7 +1781,10 @@ def process_swap(
                 f"bölgesel oranlar={detail_regions}.",
                 flush=True
             )
-        result = final_output.read_bytes()
+        # The RGB has already been feathered and blended. Soft alpha is an
+        # internal matte, not display opacity: browser canvas premultiplication
+        # loses RGB precision at tiny alpha, causing colored contour lines.
+        result = encode_preblended_result(target_path, final_output)
         headers = {
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
@@ -1796,6 +1806,7 @@ def process_swap(
             "X-Retake-Identity-Source": identity_pool,
             "X-Retake-Texture-Source": chosen_texture,
             "X-Retake-Compositing": "preblended",
+            "X-Retake-Alpha-Transport": "binary",
             "X-Retake-Realism": "on" if used_realism else ("off" if realism else "unavailable")
         }
         print(
@@ -2119,7 +2130,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
-            "X-Retake-Realism, X-Retake-Compositing, X-Retake-Identity-Selection, "
+            "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
@@ -2178,6 +2189,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "engine": "facefusion",
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
+            "lossless_preblended_transport": True,
             "identity_model": IDENTITY_MODEL,
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",

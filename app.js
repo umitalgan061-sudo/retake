@@ -287,9 +287,10 @@ async function checkFaceFusionStatus() {
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
       if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
-          health.model !== "retake_hybrid_25_reference_ultra_v22") {
+          health.model !== "retake_hybrid_25_reference_ultra_v22" ||
+          health.lossless_preblended_transport !== true) {
         throw new Error(
-          "Retake Ultra v22 motoru gerekli: GitHub'dan güncelleyip FaceFusion servisini yeniden başlat."
+          "Kayıpsız kontur düzeltmeli Retake motoru gerekli: GitHub’dan güncelleyip FaceFusion servisini yeniden başlat."
         );
       }
       state.faceFusionStatus = {
@@ -1769,7 +1770,7 @@ async function cropRealReference(reference) {
   };
 }
 
-function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false, binaryTransport = false) {
+function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false, binaryTransport = false, renderSize = crop) {
   if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
   const sourceImage = state.target.image;
   const imageWidth = sourceImage.naturalWidth;
@@ -1787,17 +1788,60 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
   const outputWidth = generatedTargetImage.naturalWidth || generatedTargetImage.width;
   const outputHeight = generatedTargetImage.naturalHeight || generatedTargetImage.height;
-  if (binaryTransport && (outputWidth !== crop.width || outputHeight !== crop.height)) {
+  if (binaryTransport && (outputWidth !== renderSize.width || outputHeight !== renderSize.height)) {
     throw new Error("Yerel motor kayıpsız çıktı boyutunu koruyamadı.");
+  }
+  // Binary extent must be decoded at native render size before scaling. A
+  // scaled transparent bitmap would reintroduce fractional-alpha artifacts.
+  if (binaryTransport) {
+    generatedCanvas.width = outputWidth;
+    generatedCanvas.height = outputHeight;
   }
   generatedContext.drawImage(
     generatedTargetImage,
     0, 0, outputWidth, outputHeight,
-    0, 0, crop.width, crop.height
+    0, 0, generatedCanvas.width, generatedCanvas.height
   );
-  const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
+  let generatedCrop = generatedContext.getImageData(0, 0, generatedCanvas.width, generatedCanvas.height);
   if (preblended && !binaryTransport) {
     throw new Error("Eski yerel motor yumuşak alfa taşıyor. Kontur hatasını önlemek için Retake motorunu güncelleyip yeniden başlat.");
+  }
+  if (binaryTransport && (outputWidth !== crop.width || outputHeight !== crop.height)) {
+    // Resample opaque preblended RGB independently from its binary extent.
+    // Use nearest-neighbor extent; never read resampled low-alpha RGB.
+    const nativeRGBA = generatedCrop.data;
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = outputWidth;
+    maskCanvas.height = outputHeight;
+    const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+    const opaque = new Uint8ClampedArray(nativeRGBA);
+    const extent = new Uint8ClampedArray(nativeRGBA.length);
+    const targetNative = document.createElement("canvas");
+    targetNative.width = outputWidth;
+    targetNative.height = outputHeight;
+    const nativeContext = targetNative.getContext("2d", { willReadFrequently: true });
+    nativeContext.drawImage(cropCanvas, 0, 0, outputWidth, outputHeight);
+    const nativeSource = nativeContext.getImageData(0, 0, outputWidth, outputHeight).data;
+    for (let i = 0; i < nativeRGBA.length; i += 4) {
+      const a = nativeRGBA[i + 3];
+      if (a !== 0 && a !== 255) throw new Error("Yerel motorun alfa maskesi geçersiz.");
+      if (a === 0) opaque.set(nativeSource.subarray(i, i + 3), i);
+      opaque[i + 3] = 255;
+      extent.set([a, a, a, 255], i);
+    }
+    generatedContext.putImageData(new ImageData(opaque, outputWidth, outputHeight), 0, 0);
+    maskContext.putImageData(new ImageData(extent, outputWidth, outputHeight), 0, 0);
+    const scaled = document.createElement("canvas");
+    scaled.width = crop.width;
+    scaled.height = crop.height;
+    const scaledContext = scaled.getContext("2d", { willReadFrequently: true });
+    scaledContext.imageSmoothingQuality = "high";
+    scaledContext.drawImage(generatedCanvas, 0, 0, crop.width, crop.height);
+    generatedCrop = scaledContext.getImageData(0, 0, crop.width, crop.height);
+    scaledContext.imageSmoothingEnabled = false;
+    scaledContext.drawImage(maskCanvas, 0, 0, crop.width, crop.height);
+    const maskPixels = scaledContext.getImageData(0, 0, crop.width, crop.height).data;
+    for (let i = 0; i < generatedCrop.data.length; i += 4) generatedCrop.data[i + 3] = maskPixels[i];
   }
   const parserAlphaMask = alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
   const hasTransparentPixels = parserAlphaMask.some((alpha) => alpha < 0.999);
@@ -2072,7 +2116,7 @@ async function runFaceFusionEdit() {
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(
       generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended",
-      response.headers.get("X-Retake-Alpha-Transport") === "binary"
+      response.headers.get("X-Retake-Alpha-Transport") === "binary", targetSize
     );
     state.nextVariation = 0;
     const ultraLabel = "Ultra-420 · en iyi sonuç" + (

@@ -1,6 +1,7 @@
 import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
 import {
   formatBytes,
+  findExactReferenceFile,
   getLandmarkBounds,
   settleWithLimit,
   MAX_IMAGE_BYTES,
@@ -2026,6 +2027,28 @@ async function runFaceFusionEdit() {
 
   let generatedUrl = null;
   try {
+    const targetSnapshot = state.target;
+    const exactReference = await findExactReferenceFile(targetSnapshot.file, state.references);
+    if (exactReference) {
+      const regenerate = await showAppDialog({
+        title: "Bu fotoğraf referans bankanda birebir mevcut",
+        message: "Dosya baytları tamamen aynı. Orijinali korumak, gereksiz yüz değişimi ve yeni kontur riskini önler. İstersen yine de Ultra ile yeni bir görünüm oluşturabilirsin.",
+        confirmLabel: "Yine düzenle",
+        cancelLabel: "Orijinali koru"
+      });
+      if (state.target !== targetSnapshot) throw new Error("Hedef fotoğraf değişti; işlemi yeniden başlat.");
+      if (!regenerate) {
+        const canvas = document.createElement("canvas");
+        canvas.width = targetSnapshot.image.naturalWidth;
+        canvas.height = targetSnapshot.image.naturalHeight;
+        canvas.getContext("2d").drawImage(targetSnapshot.image, 0, 0);
+        addResult(await canvasToBlob(canvas), "Orijinal korundu · birebir referans dosyası");
+        elements.disabledNote.textContent = "Fotoğraf zaten referans bankasında mevcut. Yapay zekâ ile değiştirilmedi; kimlik puanı üretilmedi.";
+        setRuntimeStatus("Orijinal fotoğraf korundu · GPU işlemi yapılmadı");
+        showToast("Orijinal fotoğraf korundu.");
+        return;
+      }
+    }
     const {
       targetCanvas,
       referenceBlobs,
@@ -2085,6 +2108,7 @@ async function runFaceFusionEdit() {
       throw new Error("Yerel motor Ultra Mod sonucunu doğrulamadı. Motoru güncelleyip tekrar başlat.");
     }
     const completedRounds = Number(response.headers.get("X-Retake-Ultra-Rounds"));
+    const attemptedRounds = Number(response.headers.get("X-Retake-Ultra-Attempted"));
     const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
     const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
@@ -2123,7 +2147,7 @@ async function runFaceFusionEdit() {
     state.nextVariation = 0;
     const ultraLabel = "Ultra-420 · en iyi sonuç" + (
       Number.isInteger(completedRounds) && completedRounds >= 1
-        ? ` (${completedRounds} tur)` : ""
+        ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
     );
     addResult(resultBlob, ultraLabel, scores);
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";

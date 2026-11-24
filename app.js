@@ -2108,6 +2108,7 @@ async function runFaceFusionEdit() {
       throw new Error("Yerel motor Ultra Mod sonucunu doğrulamadı. Motoru güncelleyip tekrar başlat.");
     }
     const completedRounds = Number(response.headers.get("X-Retake-Ultra-Rounds"));
+    const attemptedRounds = Number(response.headers.get("X-Retake-Ultra-Attempted"));
     const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
     const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
@@ -2146,7 +2147,7 @@ async function runFaceFusionEdit() {
     state.nextVariation = 0;
     const ultraLabel = "Ultra-420 · en iyi sonuç" + (
       Number.isInteger(completedRounds) && completedRounds >= 1
-        ? ` (${completedRounds} tur)` : ""
+        ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
     );
     addResult(resultBlob, ultraLabel, scores);
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";

@@ -26,7 +26,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
@@ -38,7 +38,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
-        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS,
+        ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 
@@ -1852,6 +1852,9 @@ def run_ultra_search(
     best_result: bytes | None = None
     best_headers: dict[str, str] | None = None
     best_round = 0
+    strongest: tuple[bytes, dict[str, str], int] | None = None
+    peak_identity = -math.inf
+    attempted = 0
     completed = 0
     errors: list[Exception] = []
     # Diffusion is expensive and stochastic. Running 2–3 diffusion renders
@@ -1866,6 +1869,7 @@ def run_ultra_search(
         if not should_continue_ultra(completed, clock() - started):
             break
         round_number = index + 1
+        attempted += 1
         print(
             f"[Ultra] Tur {round_number}/{len(ULTRA_VARIATIONS)}: "
             f"orijinal hedef + 25 referans; varyasyon {variation}.",
@@ -1885,8 +1889,19 @@ def run_ultra_search(
             print(f"[Ultra] Aday atlandı: {error}", flush=True)
             # The best already verified result remains usable.
             continue
+        identity = score_from_headers(headers)
+        if identity is None:
+            print('[Ultra] Adayın kimlik ölçümü geçersiz; doğrulanmış tur sayılmadı.', flush=True)
+            continue
         completed += 1
-        if prefer_ultra_candidate(headers, best_headers):
+        if identity > peak_identity:
+            peak_identity = identity
+            strongest = (image, headers, round_number)
+        # Keep a global identity anchor: pairwise near-ties must not drift
+        # downward over 24 rounds. Retain only two full images in memory.
+        if best_headers is not None and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS:
+            best_result, best_headers, best_round = strongest
+        if identity >= peak_identity - ULTRA_REALISM_TIE_LOSS and prefer_ultra_candidate(headers, best_headers):
             best_result, best_headers, best_round = image, headers, round_number
             print(
                 f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
@@ -1913,7 +1928,10 @@ def run_ultra_search(
                 with_variation(parsed, ULTRA_VARIATIONS[best_round - 1]),
                 lambda *_args, **_kwargs: None, caches
             )
-            if prefer_ultra_candidate(upgraded_headers, best_headers):
+            upgraded_identity = score_from_headers(upgraded_headers)
+            if (upgraded_identity is not None
+                    and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
+                    and prefer_ultra_candidate(upgraded_headers, best_headers)):
                 best_result, best_headers = upgraded_image, upgraded_headers
                 print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
             else:
@@ -1938,6 +1956,8 @@ def run_ultra_search(
         **best_headers,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),
+        "X-Retake-Ultra-Attempted": str(attempted),
+        "X-Retake-Ultra-Peak-Identity": str(max(peak_identity, score_from_headers(best_headers))),
         "X-Retake-Ultra-Winner": str(best_round),
         "X-Retake-Ultra-Elapsed": str(round(clock() - started, 1)),
         "X-Retake-Ultra-Realism-Policy": "finalist-only" if has_realism else "not-installed",

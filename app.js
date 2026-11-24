@@ -1769,7 +1769,7 @@ async function cropRealReference(reference) {
   };
 }
 
-function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false) {
+function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false, binaryTransport = false) {
   if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
   const sourceImage = state.target.image;
   const imageWidth = sourceImage.naturalWidth;
@@ -1787,23 +1787,32 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false)
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
   const outputWidth = generatedTargetImage.naturalWidth || generatedTargetImage.width;
   const outputHeight = generatedTargetImage.naturalHeight || generatedTargetImage.height;
+  if (binaryTransport && (outputWidth !== crop.width || outputHeight !== crop.height)) {
+    throw new Error("Yerel motor kayıpsız çıktı boyutunu koruyamadı.");
+  }
   generatedContext.drawImage(
     generatedTargetImage,
     0, 0, outputWidth, outputHeight,
     0, 0, crop.width, crop.height
   );
   const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
+  if (preblended && !binaryTransport) {
+    throw new Error("Eski yerel motor yumuşak alfa taşıyor. Kontur hatasını önlemek için Retake motorunu güncelleyip yeniden başlat.");
+  }
   const parserAlphaMask = alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
   const hasTransparentPixels = parserAlphaMask.some((alpha) => alpha < 0.999);
   // New local FaceFusion server embeds its parser/occlusion-derived change matte
   // in PNG alpha. Retain the ellipse only as a backward-compatible fallback.
-  const alphaMask = hasTransparentPixels
+  if (binaryTransport && (!preblended || parserAlphaMask.some((alpha) => alpha !== 0 && alpha !== 1))) {
+    throw new Error("Yerel motorun kayıpsız alfa maskesi geçersiz; bozuk görüntü gösterilmedi.");
+  }
+  const alphaMask = binaryTransport || hasTransparentPixels
     ? parserAlphaMask
     : createFaceAlphaMask(crop.width, crop.height, crop.face);
   // A local engine may deliver final, already-masked RGB + an edit-extent
   // alpha. Never blend that image a second time: alpha squared erases identity
   // characteristics along facial transitions.
-  const blended = preblended && hasTransparentPixels
+  const blended = preblended && (binaryTransport || hasTransparentPixels)
     ? compositePreblendedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height)
     : compositeMaskedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height);
 
@@ -2062,7 +2071,8 @@ async function runFaceFusionEdit() {
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
     const resultBlob = await applyGeneratedFacePatch(
-      generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended"
+      generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended",
+      response.headers.get("X-Retake-Alpha-Transport") === "binary"
     );
     state.nextVariation = 0;
     const ultraLabel = "Ultra-420 · en iyi sonuç" + (

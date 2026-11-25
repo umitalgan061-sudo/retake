@@ -49,3 +49,15 @@ test("the result is compared with the person's own photos", async () => {
   assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80,0 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
   assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80,0 · Çok güçlü");
 });
+
+test("original cosine below zero is not silently displayed as zero", () => {
+  assert.match(describeSimilarity(.87, -.12), /orijinal -12,00 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, .001), /orijinal 0,10 \(kosinüs\)/);
+});
+test("FLUX configuration is not evidence of a selected candidate", async () => {
+  const {describeFluxStatus} = await import("../src/quality.js");
+  assert.match(describeFluxStatus("accepted"), /kullanıldı/);
+  assert.match(describeFluxStatus("worker-error"), /hatası/);
+  assert.match(describeFluxStatus("quality-rejected"), /elendi/);
+  assert.equal(describeFluxStatus("unknown"), "");
+});

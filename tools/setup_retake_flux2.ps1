@@ -11,6 +11,7 @@ param(
     [switch]$Install,
     [switch]$Download,
     [switch]$ProbeOnly,
+    [switch]$EnableManaged,
     [string]$PythonExe = "python",
     [string]$EnvironmentDir = "$HOME\retake-flux2-venv",
     [string]$ModelDir = "$HOME\retake-models\FLUX.2-klein-4B",
@@ -20,6 +21,7 @@ param(
     [ValidateRange(1024,65535)][int]$Port = 8004
 )
 $ErrorActionPreference = "Stop"
+if ($EnableManaged -and (-not $ProbeOnly -or $Offload -ne "sequential" -or $MaxEdge -ne 512)) { throw "Use -EnableManaged -ProbeOnly -Offload sequential -MaxEdge 512." }
 if ($Port -eq 8765) { throw "Use a separate port, not the FaceFusion bridge." }
 if (-not (Get-Command nvidia-smi -ErrorAction SilentlyContinue)) { throw "NVIDIA driver/nvidia-smi not found." }
 nvidia-smi --query-gpu=name,memory.total,memory.free,driver_version --format=csv
@@ -47,6 +49,7 @@ if (-not (Test-Path (Join-Path $ModelDir "model_index.json"))) { throw "Model no
 $Runner = Join-Path $PSScriptRoot "local_flux2_editor.py"
 $RunnerArgs = @($Runner,"--model-dir",$ModelDir,"--port","$Port","--max-edge","$MaxEdge","--offload",$Offload)
 if ($ProbeOnly) { $RunnerArgs += "--probe-only" }
+if ($EnableManaged) { $RunnerArgs += "--enable-managed" }
 Write-Host "Running the real GPU synthetic edit. Keep the editor window open only after the probe succeeds." -ForegroundColor Cyan
 if (-not $ProbeOnly) {
     Write-Host "After READY, use a separate Retake PowerShell window: " -ForegroundColor Yellow

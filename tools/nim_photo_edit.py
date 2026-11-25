@@ -11,6 +11,11 @@ import json
 import os
 from pathlib import Path
 
+try:
+    from .managed_flux2 import MODEL as MANAGED_MODEL, managed_config, managed_request
+except ImportError:
+    from managed_flux2 import MODEL as MANAGED_MODEL, managed_config, managed_request
+
 MODELS = {
     "qwen/qwen-image-edit-2511": 3,
     "qwen/qwen-image-edit-2509": 3,
@@ -43,6 +48,8 @@ def configured_editors(value: str | None = None) -> dict[str, int]:
             raise ValueError("RETAKE_NIM_EDITORS: yalnız listelenen model=yerel_port çiftleri; portlar ayrı olmalı.")
         configured[name] = int(port)
         ports.add(int(port))
+    if value is None and MANAGED_MODEL not in configured and managed_config() is not None:
+        configured[MANAGED_MODEL] = 0  # internal one-shot worker, not a port
     return configured
 
 def local_json(port: int, path: str, payload=None, timeout=180):
@@ -79,6 +86,8 @@ def edit_payload(model: str, image: Path, refs: list[Path]):
     return {"model":model,"prompt":PROMPT,"image":images if count>1 else images[0],"n":1,"response_format":"b64_json"}
 
 def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], bounds, output: Path, request=local_json):
+    if model == MANAGED_MODEL and port == 0:
+        request = managed_request
     import cv2
     import numpy as np
     # Strict mask: NIM never gets to enlarge the existing authorized matte.

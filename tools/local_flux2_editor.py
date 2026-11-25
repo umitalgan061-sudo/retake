@@ -12,6 +12,7 @@ import gc
 import io
 import json
 import os
+import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -222,12 +223,35 @@ def main():
     parser.add_argument("--max-edge",type=int,choices=(512,768,1024),default=768)
     parser.add_argument("--offload",choices=("model","sequential"),default="model")
     parser.add_argument("--probe-only",action="store_true")
+    parser.add_argument("--enable-managed",action="store_true")
+    parser.add_argument("--one-shot-output",type=Path)
     args=parser.parse_args()
     if not 1024<=args.port<=65535 or args.port==8765:
         parser.error("choose a separate local port")
+    if args.enable_managed and (not args.probe_only or args.offload != "sequential" or args.max_edge != 512):
+        parser.error("managed mode requires --probe-only --offload sequential --max-edge 512")
+    if args.one_shot_output and args.probe_only:
+        parser.error("one-shot and probe modes are exclusive")
     os.environ["HF_HUB_OFFLINE"]="1"
     os.environ["TRANSFORMERS_OFFLINE"]="1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"]="1"
+    if args.one_shot_output:
+        raw = sys.stdin.buffer.read(MAX_BODY + 1)
+        if len(raw) > MAX_BODY:
+            raise ValueError("body limit")
+        prompt, images = parse_edit(json.loads(raw))
+        pipe, torch, _ = load_local_pipeline(args.model_dir, args.offload)
+        try:
+            output = edit_image(pipe, torch, prompt, images, args.max_edge)
+            buffer = io.BytesIO()
+            output.save(buffer, format="PNG")
+            response = {"data": [{"b64_json": base64.b64encode(buffer.getvalue()).decode("ascii")}]}
+        finally:
+            output = images = buffer = None
+            if not cleanup_editor(pipe, torch):
+                raise RuntimeError("GPU cleanup failed")
+        args.one_shot_output.write_text(json.dumps(response), encoding="utf-8")
+        return
     pipe,torch,info=load_local_pipeline(args.model_dir,args.offload)
     try:
         proof={**info,**smoke_edit(pipe,torch,args.max_edge)}
@@ -235,7 +259,19 @@ def main():
         if not cleanup_editor(pipe,torch):
             raise RuntimeError('GPU cleanup failed; editor will not be enabled')
     if args.probe_only:
-        print(json.dumps({"model":MODEL_ALIAS,"ready":True,**proof}),flush=True)
+        record = {"model":MODEL_ALIAS,"ready":True,"max_edge":args.max_edge,**proof}
+        if args.enable_managed:
+            expected_python = Path.home() / "retake-flux2-venv" / "Scripts" / "python.exe"
+            expected_model = Path.home() / "retake-models" / "FLUX.2-klein-4B"
+            if Path(sys.executable).resolve() != expected_python.resolve() or Path(args.model_dir).resolve() != expected_model.resolve():
+                raise RuntimeError("Managed mode requires the default local environment and model directories")
+            path = Path.home() / ".retake" / "flux2-managed.json"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(record), encoding="utf-8")
+            temporary.replace(path)
+            record["managed_enabled"] = True
+        print(json.dumps(record),flush=True)
     else:
         serve(pipe,torch,proof,args.port,args.max_edge)
 

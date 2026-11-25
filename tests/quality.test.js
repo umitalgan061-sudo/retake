@@ -64,17 +64,6 @@ test("the engine's naturalness score reads as a short verdict", async () => {
   assert.equal(describeNaturalness(parseNaturalness("90")), "Gerçeklik 90/100");
 });
 
-test("the NVIDIA judge verdict reads as a short second opinion", async () => {
-  const { describeJudge, parseJudge } = await import("../src/quality.js");
-  const judge = parseJudge("8.5", "eyes,made_up,seam,tone", "yes");
-  assert.deepEqual(judge, { score: 8.5, issues: ["eyes", "seam", "tone"], switched: true });
-  assert.equal(describeJudge(judge), "NVIDIA hakem 8,5/10 · gözler, kenar dikişi · hakem seçti");
-  assert.equal(describeJudge(parseJudge("7", "", "no")), "NVIDIA hakem 7,0/10");
-  assert.equal(parseJudge(""), null);
-  assert.equal(parseJudge("12"), null);
-  assert.equal(describeJudge(null), "");
-});
-
 test("original cosine below zero is not silently displayed as zero", () => {
   assert.match(describeSimilarity(.87, -.12), /orijinal -12,00 \(kosinüs\)/);
   assert.match(describeSimilarity(.87, .001), /orijinal 0,10 \(kosinüs\)/);

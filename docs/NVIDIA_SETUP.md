@@ -10,7 +10,7 @@ Yeni isteğe bağlı finalist katmanı, NVIDIA'nın [resmî görüntü düzenlem
 | FLUX 3 Image Klein / Base | Çoklu görselden ayrıntı | Yerel API adaptörü |
 | FLUX.2 Klein 4B | Daha hafif çoklu görsel düzenleme | Yerel API adaptörü |
 | FLUX.1 Kontext dev | Tek fotoğrafta fotogerçekçilik | Yerel API adaptörü |
-| Nemotron 3.5 Super VL → Mistral Large 4 → GLM 5.3 → Step 5 | Ultra görsel hakemi (barındırılan, ücretsiz uç nokta) | Bağlı: `tools/nvidia_judge.py`; canlı test kullanıcı bilgisayarında `set_nvidia_key.ps1` ile |
+| Nemotron Super VL, Mistral Large 4, Step 5, Gemma 4 | İsteğe bağlı görsel kalite yorumu | Aday, henüz bağlı değil |
 | Relighting, 3D Body Pose, Video Super Resolution | İleride video/ışık/poz işlemleri | Aday, henüz bağlı değil |
 
 NVIDIA'nın [kurulum rehberi](https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html) ve GPU destek matrisi üzerinden kendi donanımına uygun imajı, lisansı ve sürümü seç. Her servisi yalnız yerel 127.0.0.1 üzerinde ayrı porta bağla. Örnek, Qwen gerçekten 8001'de hazırsa PowerShell:
@@ -78,28 +78,3 @@ FaceFusion result. Existing mask/identity/detail gates remain unchanged.
 No FLUX HTTP listener, paid API, remote image transfer or permanently loaded
 23.7 GB model. Extra loading time is expected. To disable managed FLUX, delete
 only ~/.retake/flux2-managed.json while Retake is idle; model weights are retained.
-
-## NVIDIA görsel hakemi (Ultra, 25 Kasım 2026)
-
-Kullanıcının isteğiyle Retake, Hafize'de de kullanılan NVIDIA API anahtarıyla build.nvidia.com'un
-ücretsiz barındırılan görsel modellerini **kalite hakemi** olarak kullanır. Barındırılan görsel
-*düzenleme* bu anahtarla kişisel fotoğraflarda çalışmaz (Hafize ölçümü: FLUX.2 Klein yalnız
-sağlayıcının örnek görsellerini düzenler; FLUX/Qwen düzenleyicileri yalnız indirilebilir NIM).
-
-- Ne gönderilir: orijinal yüz kırpımı + kimlikte berabere kalan en çok 3 Ultra adayının yüz
-  kırpımı (512 px JPEG). 25 referans, tam fotoğraf, embedding ve dosya adı gönderilmez.
-- Ne yapar: model her adaya 0–10 gerçekçilik puanı ve sabit listeden kusur (kenar dikişi,
-  plastik cilt, ten, ışık, gözler, ağız, bulanıklık, aşırı keskinlik, bozulma, saç, gren) verir.
-  Aday sırası ters çevrilerek iki kez sorulur; seçim yalnız iki cevap da aynı adayı en az
-  1 puan farkla öne koyarsa değişir. Kimlik farkı 0,010 ArcFace'i aşan aday hakeme hiç
-  gösterilmez; hakem benzerliği güzellik için feda ettiremez.
-- Tek görsel kabul eden model için kırpımlar numaralı tek karşılaştırma görseline dönüşür.
-- Hata, kota (429) veya zaman aşımında Ultra'nın doğrulanmış sonucu aynen kalır.
-- Anahtar sırası: `NVIDIA_API_KEY` ortam değişkeni → Retake klasöründeki `.env`,
-  `functions\.env`, `.dev.vars` (hepsi git dışında) → `RETAKE_ENV_FILE` ile gösterilen
-  dosya. Cloudflare/Firebase gizli değerleri yerel motor tarafından okunamaz.
-  `.\tools\set_nvidia_key.ps1` anahtarı bulursa yalnız sentetik görselle test eder;
-  bulamazsa gizli girişle sorar. Açılış logu anahtarın kaynağını (değerini değil) yazar.
-- Kapatma: `RETAKE_NVIDIA_JUDGE=0`. Arayüz rozeti: "NVIDIA hakem 8,5/10 · gözler".
-- Sentetik video/deepfake dedektörü bilerek kullanılmaz: amaç tespit atlatmak değil,
-  fotoğrafın kendi içinde tutarlı görünmesidir.

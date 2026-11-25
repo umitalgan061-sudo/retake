@@ -45,8 +45,6 @@ import {
   describeFluxStatus,
   describeSimilarity,
   describeNaturalness,
-  describeJudge,
-  parseJudge,
   parseNaturalness,
   parseSimilarity,
   similarityScore
@@ -646,7 +644,6 @@ function selectResult(index) {
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
     describeNaturalness(item.naturalness),
-    describeJudge(item.judge),
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     describeFluxStatus(item.fluxStatus),
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
@@ -691,8 +688,7 @@ function addResult(blob, label, scores = {}) {
     realism: scores.realism === true,
     texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null,
-    naturalness: scores.naturalness ?? null,
-    judge: scores.judge ?? null
+    naturalness: scores.naturalness ?? null
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -2149,10 +2145,6 @@ async function runFaceFusionEdit() {
       referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity")),
       naturalness: parseNaturalness(
         response.headers.get("X-Retake-Naturalness"), response.headers.get("X-Retake-Naturalness-Checks")
-      ),
-      judge: parseJudge(
-        response.headers.get("X-Retake-Judge"), response.headers.get("X-Retake-Judge-Issues"),
-        response.headers.get("X-Retake-Judge-Switched")
       )
     };
     showProfileHealth(
@@ -2183,8 +2175,7 @@ async function runFaceFusionEdit() {
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = [
       describeSimilarity(scores.similarity, scores.before, scores.referenceMedian),
-      describeNaturalness(scores.naturalness),
-      describeJudge(scores.judge)
+      describeNaturalness(scores.naturalness)
     ].filter(Boolean).join(" · ");
     showToast(
       "Ultra sonuç hazır" +

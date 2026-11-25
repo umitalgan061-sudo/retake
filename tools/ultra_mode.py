@@ -33,10 +33,6 @@ ULTRA_NATURALNESS_GAIN = 6.0         # points that count as clearly more natural
 ULTRA_NATURALNESS_BAND = 0.010       # ArcFace lead such a gain outweighs
 ULTRA_NATURALNESS_FLOOR = 65.0       # below this a result reads as edited
 ULTRA_NATURALNESS_FLOOR_BAND = 0.030 # ArcFace lead the floor outweighs
-# NVIDIA vision judge (tools/nvidia_judge.py, 0-10). It re-ranks only the
-# identity near-ties; both order-reversed passes must prefer the switch.
-ULTRA_JUDGE_GAIN = 1.0               # realism points (of 10) a switch needs
-ULTRA_JUDGE_POOL = 3                 # candidates shown to the judge
 
 
 def with_variation(parsed: tuple, variation: int) -> tuple:
@@ -122,53 +118,6 @@ def identity_slack(headers: dict[str, str], strongest: dict[str, str] | None) ->
     if mine >= theirs + ULTRA_NATURALNESS_GAIN:
         return ULTRA_NATURALNESS_BAND
     return ULTRA_REALISM_TIE_LOSS
-
-
-def judge_pool(best: tuple, others: list[tuple], limit: int = ULTRA_JUDGE_POOL) -> list[tuple]:
-    """The current best first, then the strongest identity near-ties.
-
-    Items are (image bytes, headers, label). Only candidates within
-    ULTRA_NATURALNESS_BAND ArcFace of the best and not clearly less natural
-    by Retake's own measurement are shown; duplicates are skipped.
-    """
-    best_identity = score_from_headers(best[1])
-    if best_identity is None:
-        return [best]
-    best_nat = naturalness_from_headers(best[1])
-    pool = [best]
-    seen = {best[0]}
-    ranked = sorted(others, key=lambda item: score_from_headers(item[1]) or -1.0, reverse=True)
-    for item in ranked:
-        if len(pool) >= limit:
-            break
-        identity = score_from_headers(item[1])
-        if item[0] in seen or identity is None or identity < best_identity - ULTRA_NATURALNESS_BAND:
-            continue
-        nat = naturalness_from_headers(item[1])
-        if nat is not None and (nat < ULTRA_NATURALNESS_FLOOR
-                                or (best_nat is not None and nat < best_nat - ULTRA_NATURALNESS_GAIN)):
-            continue
-        pool.append(item)
-        seen.add(item[0])
-    return pool
-
-
-def judge_pick(passes: list[list[float]], gain: float = ULTRA_JUDGE_GAIN) -> int:
-    """Index of the pool entry the judge's passes justify (0 = keep best).
-
-    A switch needs two passes (the second with the order reversed), each
-    ranking the candidate above the current best, and a mean lead of `gain`.
-    """
-    if len(passes) < 2 or any(len(row) != len(passes[0]) for row in passes):
-        return 0
-    count = len(passes[0])
-    means = [sum(row[index] for row in passes) / len(passes) for index in range(count)]
-    choice = 0
-    for index in range(1, count):
-        if all(row[index] > row[0] for row in passes) and means[index] >= means[0] + gain \
-                and means[index] > means[choice]:
-            choice = index
-    return choice
 
 
 def _photo_detail(headers: dict[str, str]) -> int:

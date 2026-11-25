@@ -30,12 +30,7 @@ try:
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        ULTRA_NATURALNESS_FLOOR_BAND, ULTRA_JUDGE_POOL, identity_slack, judge_pick, judge_pool,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
-    )
-    from .nvidia_judge import (
-        api_key as nvidia_api_key, describe as describe_judge, face_crop, flatten,
-        judge as nvidia_judge_call, key_source as nvidia_key_source
+        identity_slack, prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -48,12 +43,7 @@ except ImportError:
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        ULTRA_NATURALNESS_FLOOR_BAND, ULTRA_JUDGE_POOL, identity_slack, judge_pick, judge_pool,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
-    )
-    from nvidia_judge import (
-        api_key as nvidia_api_key, describe as describe_judge, face_crop, flatten,
-        judge as nvidia_judge_call, key_source as nvidia_key_source
+        identity_slack, prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 
 MAX_REFERENCES = 25
@@ -2043,64 +2033,11 @@ def _swap_error(error: Exception) -> tuple[int, str]:
     return 500, f"Yerel Retake hibrit profil işlemi başarısız: {error}"
 
 
-def default_judge():
-    """The NVIDIA vision judge when this computer has NVIDIA_API_KEY, else None."""
-    key = nvidia_api_key()
-    if key is None:
-        return None
-    return lambda original, candidates: nvidia_judge_call(original, candidates, key)
-
-
-def ultra_judge(parsed: tuple, best: tuple, contenders: list[tuple], judge) -> tuple[tuple, dict[str, str]]:
-    """Let the vision judge re-rank the identity near-ties. Never raises.
-
-    best/contenders are (image bytes, headers, round). Returns the (possibly
-    new) best and the X-Retake-Judge* headers to add.
-    """
-    if judge is None:
-        return best, {}
-    pool = judge_pool(best, contenders)
-    bounds = parsed[6].get("faceBounds") if isinstance(parsed[6], dict) else None
-    try:
-        original = flatten(parsed[0], parsed[0])
-        crops = []
-        for image, _headers, _round in pool:
-            flat = flatten(image, parsed[0])
-            if flat is None or original is None:
-                raise ValueError("Aday görüntüsü okunamadı.")
-            crops.append(face_crop(flat, bounds))
-        print(f"[Ultra] NVIDIA hakemi: {len(pool)} aday (yalnız yüz kırpımları) gönderiliyor.", flush=True)
-        report = judge(face_crop(original, bounds), crops)
-    except Exception as error:
-        print(f"[Ultra] NVIDIA hakemi atlandı: {error}", flush=True)
-        return best, {}
-    choice = judge_pick(report["passes"])
-    chosen = pool[choice]
-    scores = report["scores"]
-    print(
-        "[Ultra] NVIDIA hakemi (" + report["model"] + "): " + ", ".join(
-            f"tur {item[2]} = {scores[index]:.1f}/10" for index, item in enumerate(pool))
-        + (f"; tur {chosen[2]} daha gerçekçi bulundu ve seçildi." if choice else "; seçim değişmedi."),
-        flush=True
-    )
-    issues = report["issues"][choice]
-    headers = {
-        "X-Retake-Judge": f"{scores[choice]:.1f}",
-        "X-Retake-Judge-Model": report["model"],
-        "X-Retake-Judge-Issues": ",".join(issues),
-        "X-Retake-Judge-Switched": "yes" if choice else "no",
-    }
-    text = describe_judge(scores[choice], issues)
-    if text:
-        print(f"[Ultra] {text}", flush=True)
-    return chosen, headers
-
-
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
     clock=None, sleeper=None, on_hold=None, on_finalist=None,
-    min_duration_seconds: float | None = None, judge="default"
+    min_duration_seconds: float | None = None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
 
@@ -2115,8 +2052,6 @@ def run_ultra_search(
     best_headers: dict[str, str] | None = None
     best_round = 0
     strongest: tuple[bytes, dict[str, str], int] | None = None
-    # Identity near-ties kept for the optional NVIDIA vision judge.
-    contenders: list[tuple[bytes, dict[str, str], int]] = []
     peak_identity = -math.inf
     attempted = 0
     completed = 0
@@ -2162,12 +2097,6 @@ def run_ultra_search(
         if identity > peak_identity:
             peak_identity = identity
             strongest = (image, headers, round_number)
-        contenders.append((image, headers, round_number))
-        contenders = sorted(
-            (item for item in contenders
-             if score_from_headers(item[1]) >= peak_identity - ULTRA_NATURALNESS_FLOOR_BAND),
-            key=lambda item: score_from_headers(item[1]), reverse=True
-        )[:ULTRA_JUDGE_POOL + 1]
         # Keep a global identity anchor: pairwise near-ties must not drift
         # downward over 24 rounds. Retain only two full images in memory.
         # A clearly more natural photo earns a little identity room (see
@@ -2212,11 +2141,6 @@ def run_ultra_search(
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):
                 best_result, best_headers = upgraded_image, upgraded_headers
                 print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
-            elif upgraded_identity is not None:
-                contenders.append((upgraded_image, upgraded_headers, best_round))
-                if flux_outcome == "accepted":
-                    flux_outcome = "finalist-not-selected"
-                print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
             else:
                 if flux_outcome == "accepted":
                     flux_outcome = "finalist-not-selected"
@@ -2226,22 +2150,6 @@ def run_ultra_search(
             if flux_outcome == "not-attempted":
                 flux_outcome = "finalist-error"
             print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
-
-    # A second opinion that looks at the photo: NVIDIA's hosted vision model
-    # compares the identity near-ties (face crops only). Runs inside the
-    # seven-minute window, so it normally costs no extra waiting.
-    judge_headers: dict[str, str] = {}
-    if judge == "default":
-        judge = default_judge()
-    if judge is not None:
-        before_judge = best_result
-        (best_result, best_headers, best_round), judge_headers = ultra_judge(
-            parsed, (best_result, best_headers, best_round), contenders, judge)
-        if best_result is not before_judge and flux_outcome in ("accepted", "finalist-not-selected"):
-            # The FLUX finalist's status follows what is actually delivered.
-            flux_outcome = best_headers.get("X-Retake-FLUX-Status", "finalist-not-selected")
-            if flux_outcome == "accepted" and best_result is not upgraded_image:
-                flux_outcome = "finalist-not-selected"
 
     # Spend the available interval trying distinct variants; when the GPU
     # finishes them faster, honor the explicit seven-minute minimum without
@@ -2257,7 +2165,6 @@ def run_ultra_search(
 
     final = {
         **best_headers,
-        **judge_headers,
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),
@@ -2505,7 +2412,6 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, "
-            "X-Retake-Judge, X-Retake-Judge-Model, X-Retake-Judge-Issues, X-Retake-Judge-Switched, "
             "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -2564,7 +2470,6 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
-            "nvidia_judge": nvidia_api_key() is not None,
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
@@ -2816,20 +2721,6 @@ def main() -> int:
         flush=True
     )
     print("Servis yalnızca loopback adresini dinler.", flush=True)
-    if nvidia_api_key():
-        print(
-            f"NVIDIA görsel hakemi AÇIK (anahtar: {nvidia_key_source()[1]}): Ultra'da kimlikte berabere kalan en çok 3 adayın yalnız yüz "
-            "kırpımları (orijinal dahil) NVIDIA'nın barındırılan görsel modeline gönderilir; 25 referans "
-            "ve tam fotoğraf gönderilmez. Kapatmak için: RETAKE_NVIDIA_JUDGE=0",
-            flush=True
-        )
-    else:
-        print(
-            "NVIDIA görsel hakemi kapalı: NVIDIA_API_KEY ortam değişkeninde ya da Retake klasöründeki "
-            ".env / functions\\.env / .dev.vars dosyalarında bulunamadı (RETAKE_ENV_FILE ile başka dosya "
-            "gösterilebilir). Test: .\\tools\\set_nvidia_key.ps1",
-            flush=True
-        )
     if server.pairing_token:  # type: ignore[attr-defined]
         print(
             "Telefon/PWA eşleştirmesi AÇIK. Bu bilgisayara bir HTTPS tünel aç "

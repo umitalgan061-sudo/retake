@@ -2143,7 +2143,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None),
-                "nim_editors": getattr(server, "nim_editors", None)
+                "nim_editors": configured_editors() if getattr(server, "dynamic_editors", False) else getattr(server, "nim_editors", None)
             },
             on_hold=hold, on_finalist=finalist
         )
@@ -2342,7 +2342,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "model": HYBRID_PROFILE_VERSION,
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
-            "nim_editors_configured": list(getattr(self.server, 'nim_editors', {}) or {}),
+            "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
+            "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",
@@ -2573,6 +2574,7 @@ def main() -> int:
     server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
     try:
         server.nim_editors = configured_editors()
+        server.dynamic_editors = True
     except ValueError as error:
         print(str(error), file=sys.stderr)
         return 2

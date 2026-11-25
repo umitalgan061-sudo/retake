@@ -85,7 +85,7 @@ def edit_payload(model: str, image: Path, refs: list[Path]):
     images=[image_url(image),*(image_url(p) for p in refs[:count-1])]
     return {"model":model,"prompt":PROMPT,"image":images if count>1 else images[0],"n":1,"response_format":"b64_json"}
 
-def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], bounds, output: Path, request=local_json):
+def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], bounds, output: Path, request=local_json, extra_strengths=()):
     if model == MANAGED_MODEL and port == 0:
         request = managed_request
     import cv2
@@ -121,9 +121,14 @@ def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], b
     yy,xx=np.ogrid[:h,:w]
     radius=((xx+.5-x-fw*.5)/(fw*.43))**2+((yy+.5-y-fh*.5)/(fh*.46))**2
     feather=np.clip((1-radius)*2.5,0,1)
-    # Bound optional generative texture to the interior and existing alpha.
-    weight=(feather*np.minimum(original[:,:,3].astype(np.float32)/255,1)*.35).astype(np.float32)
-    merged=original.copy()
-    merged[:,:,:3]=np.clip(np.rint(original[:,:,:3]*(1-weight[:,:,None])+generated*weight[:,:,None]),0,255).astype(np.uint8)
-    if not cv2.imwrite(str(output),merged): raise OSError("NIM adayı yazılamadı.")
+    # One inference, several bounded composites: compare the actual pixels
+    # rather than repeating diffusion or blindly accepting a stronger edit.
+    for strength in (0.35, *extra_strengths):
+        if not isinstance(strength, (int, float)) or not 0 < strength <= .50:
+            raise ValueError("Yerel düzenleme karışım gücü geçersiz.")
+        weight=(feather*np.minimum(original[:,:,3].astype(np.float32)/255,1)*strength).astype(np.float32)
+        merged=original.copy()
+        merged[:,:,:3]=np.clip(np.rint(original[:,:,:3]*(1-weight[:,:,None])+generated*weight[:,:,None]),0,255).astype(np.uint8)
+        path=output if strength==.35 else output.with_name(f"{output.stem}-{round(strength*100)}{output.suffix}")
+        if not cv2.imwrite(str(path),merged): raise OSError("NIM adayı yazılamadı.")
     return output

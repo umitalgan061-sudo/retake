@@ -2161,7 +2161,7 @@ def run_ultra_search(
     # quality gates. Only local editors are used on extra finalists; avoid
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
-    if has_nim and needs_extra_finalist(best_headers):
+    if needs_extra_finalist(best_headers):
         for variation in choose_extra_variations(round_scores, best_round):
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
                 break
@@ -2172,7 +2172,7 @@ def run_ultra_search(
                 candidate_image, candidate_headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
                     with_variation(parsed, variation), lambda *_a, **_k: None,
-                    {**caches, "realism": None}
+                    {**(caches or {}), "realism": None}
                 )
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":

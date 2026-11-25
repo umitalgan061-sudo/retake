@@ -2604,6 +2604,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
+            "neck_harmonization": True,
+            "regional_edit_evidence": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),

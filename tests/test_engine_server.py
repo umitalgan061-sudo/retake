@@ -415,9 +415,11 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertLess(float(headers["X-Retake-Similarity"]), .99)
         self.assertEqual(headers["X-Retake-Detail-Gate"], "passed")
 
-    def test_all_blurry_candidates_fail_without_success_image(self):
-        with self.assertRaisesRegex(srv.NoOpSwapError, "bölgesel fotoğraf"):
-            self.run_swap(0, [], detail_gate=lambda *_a: (False, "eyes-blur", .5, {"eyes": .4}))
+    def test_when_no_candidate_passes_the_detail_gate_the_best_identity_is_labelled_not_lost(self):
+        headers = self.run_swap(0, [], detail_gate=lambda *_a: (False, "eyes-blur", .5, {"eyes": .4}))
+        self.assertIsNotNone(srv.score_from_headers(headers))
+        self.assertEqual(headers["X-Retake-Detail-Gate"], "failed:eyes-blur")
+        self.assertEqual(headers["X-Retake-Photo-Balance"], "off")
 
     def test_regenerating_reuses_arcface_and_both_gpu_passes(self):
         first, second = [], []

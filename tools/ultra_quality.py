@@ -174,7 +174,20 @@ def detail_gate(score, ratios):
     return True, "passed"
 
 def check_detail_gate(original_path, result_path, bounds):
-    score, ratios = check_photo_detail(original_path, result_path, bounds)
+    """(accepted, reason, score, ratios) for a result file against the original.
+
+    A soft original (slightly out of focus, re-compressed, upscaled) has no
+    region with enough texture to compare (regional_photo_detail skips
+    them); there is nothing to call blurred then, so it passes as
+    "soft-original" instead of rejecting every candidate.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    result = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
+    if original is None or result is None or original.shape != result.shape:
+        return False, "unreadable", None, {}
+    score, ratios = regional_photo_detail(original, result, bounds)
+    if score is None and not ratios:
+        return True, "soft-original", None, {}
     accepted, reason = detail_gate(score, ratios)
     return accepted, reason, score, ratios
 

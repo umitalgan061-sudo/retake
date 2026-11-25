@@ -651,6 +651,7 @@ function selectResult(index) {
     describeFluxStatus(item.fluxStatus),
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
+    item.detailGate.startsWith("failed:") ? "uyarı: bölgesel ayrıntı zayıf (" + ({eyes:"gözler",nose:"burun",mouth:"ağız",lower_face:"çene"}[item.detailGate.slice(7).split("-")[0]] || "yüz") + ")" : "",
     item.photoBalance ? "orijinal fotoğraf dokusu dengelendi" : "",
     item.before === null ? "orijinal kimlik ölçülemedi" : "",
     item.realism ? "fotoğraf gerçekçiliği" : "",

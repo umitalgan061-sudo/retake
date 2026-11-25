@@ -120,6 +120,21 @@ class DetailGateTest(unittest.TestCase):
         self.assertTrue(detail_gate(.9, {"eyes":.9,"mouth":.8,"lower_face":2.1})[0])
         self.assertFalse(detail_gate(None, {})[0])
 
+    def test_a_soft_original_is_not_a_reason_to_reject_every_candidate(self):
+        import tempfile
+        from pathlib import Path
+        from tools.ultra_quality import check_detail_gate
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            rng = np.random.default_rng(7)
+            soft = cv2.GaussianBlur(np.clip(128 + rng.normal(0, 20, (360, 330, 3)), 0, 255).astype(np.uint8), (0, 0), 3)
+            cv2.imwrite(str(root / "original.png"), soft)
+            cv2.imwrite(str(root / "result.png"), cv2.GaussianBlur(soft, (0, 0), 1))
+            self.assertEqual(check_detail_gate(root / "original.png", root / "result.png", BOUNDS)[:2],
+                             (True, "soft-original"))
+            self.assertEqual(check_detail_gate(root / "missing.png", root / "result.png", BOUNDS)[:2],
+                             (False, "unreadable"))
+
     def test_recovery_preserves_alpha_and_outside_pixels(self):
         import tempfile
         from pathlib import Path

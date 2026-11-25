@@ -25,7 +25,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
@@ -43,7 +43,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
@@ -1689,23 +1689,10 @@ def process_swap(
         if identity_fallback is not None:
             rescue_candidates.append(("identity-only", identity_fallback))
         rescue_candidates.extend(identity_regional_candidates)
-        # Add bounded recovery alternatives only when the base composite
-        # destroys native detail. Score each actual new image independently.
-        recovery_candidates = []
-        for label, candidate_path in rescue_candidates:
-            if label not in ("head-fit", "identity-only"):
-                continue
-            try:
-                if check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
-                    continue
-                for strength in (.35, .60):
-                    repaired = temp_dir / f"photo-balance-{label}-{int(strength * 100)}.png"
-                    balance_with_original(target_path, candidate_path, repaired, strength)
-                    if check_detail_gate(target_path, repaired, metadata["faceBounds"])[0]:
-                        recovery_candidates.append(("photo-balance", repaired))
-            except (ValueError, OSError, cv2.error):
-                continue
-        rescue_candidates.extend(recovery_candidates)
+        # No "photo-balance" recovery: mixing 35-60% of the original face
+        # back into a swapped one ghosts the old brows/expression over the new
+        # face and fades a new beard (measured on real photos), which works
+        # against identity. The detail gate below ranks instead.
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
         # Filter unchanged interiors before selection, not only before blending.
@@ -1713,14 +1700,26 @@ def process_swap(
         had_verified_identity = any(value is not None for value in scores[:len(rescue_candidates)])
         if not had_verified_identity:
             raise IdentityVerificationError('Üretilen yüz ArcFace ile doğrulanamadı.')
+        gate_failures: dict[int, str] = {}
         for idx, (_, candidate_path) in enumerate(rescue_candidates):
             try:
                 if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
                     scores[idx] = None
-                elif not check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
-                    scores[idx] = None
+                    continue
+                accepted_detail, detail_reason = check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[:2]
+                if not accepted_detail:
+                    gate_failures[idx] = detail_reason
             except (ValueError, OSError, cv2.error):
                 scores[idx] = None
+        # Regional detail is a preference, not a reason to deliver nothing:
+        # blurred / over-sharpened candidates are dropped when a verified one
+        # passes the gate; otherwise the best identity is kept and labelled.
+        if any(scores[idx] is not None and idx not in gate_failures for idx in range(len(rescue_candidates))):
+            for idx in gate_failures:
+                scores[idx] = None
+        elif gate_failures:
+            print("Bölgesel ayrıntı kontrolünü geçen aday yok ("
+                  + ", ".join(sorted(set(gate_failures.values()))) + "); en iyi kimlik adayı uyarıyla korunuyor.", flush=True)
         before_similarity = scores[-1]
         candidate_scores = scores[:len(rescue_candidates)]
         final_score = candidate_scores[0]
@@ -1975,8 +1974,10 @@ def process_swap(
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
+        detail_gate_status = reason if accepted else "failed:" + reason
         if not accepted:
-            raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
+            print("Uyarı: son fotoğraf bölgesel ayrıntı kontrolünü geçemedi (" + reason
+                  + "); daha iyi bir aday yoktu, sonuç etiketlenerek teslim ediliyor.", flush=True)
         natural = final_naturalness(target_path, final_output, metadata["faceBounds"])
         if natural.get("score") is not None:
             print(
@@ -1991,7 +1992,7 @@ def process_swap(
             'X-Retake-NIM-Editor': nim_used,
             'X-Retake-FLUX-Status': flux_status,
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
-            'X-Retake-Detail-Gate': 'passed',
+            'X-Retake-Detail-Gate': detail_gate_status,
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",

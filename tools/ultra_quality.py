@@ -229,3 +229,28 @@ def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds:
     _score, ratios = regional_photo_detail(single, reinforced, bounds)
     accepted, reason = reinforcement_detail_decision(ratios)
     return accepted, reason, ratios
+
+def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent):
+    """Prefer measured regional detail only within the verified identity peak."""
+    if not (len(identity_scores) == len(detail_scores) == len(labels)):
+        return incumbent
+    valid = [i for i, score in enumerate(identity_scores)
+             if isinstance(score, (int, float)) and not isinstance(score, bool)
+             and math.isfinite(score) and -1 <= score <= 1]
+    if not valid:
+        return incumbent
+    peak = max(valid, key=lambda i: identity_scores[i])
+    eligible = [i for i in valid if identity_scores[i] >= identity_scores[peak] - .003]
+    current = incumbent if incumbent in eligible else peak
+    current = choose_detail_safe_tie(identity_scores, detail_scores, current)
+    if labels[current] not in ("identity-beard", "identity-full", "identity-jaw"):
+        baseline = detail_scores[current]
+        if isinstance(baseline, (float, int)) and math.isfinite(baseline):
+            regional = [i for i in eligible
+                        if labels[i] in ("identity-beard", "identity-full", "identity-jaw")
+                        and isinstance(detail_scores[i], (float, int))
+                        and math.isfinite(detail_scores[i])
+                        and detail_scores[i] >= baseline - .025]
+            if regional:
+                current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
+    return current

@@ -302,8 +302,11 @@ async function checkFaceFusionStatus() {
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
         nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
+        finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
-        message: health.personal_model
+        message: health.final_face_edit_proof !== true
+          ? 'Eski motor: son yüz değişimi denetimi için yerel Retake motorunu güncelle. Tarayıcı son görüntüyü yine kontrol eder.'
+          : health.personal_model
           ? "Ultra-420 v22 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
           : health.realism
             ? "Ultra-420 v22 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
@@ -637,7 +640,7 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
-    item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama RGB farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
+    item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     item.nimEditor ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
@@ -1683,6 +1686,7 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
   return {
     targetCanvas,
     referenceBlobs: profile.referenceBlobs,
+    exactReferenceIndex: exactReference ? readyReferences.indexOf(exactReference) : -1,
     referenceWeights: profile.weights,
     appearanceProfileBlob: profile.appearanceProfileBlob,
     // Only scalar pose distances leave the device: each reference's mesh
@@ -2048,6 +2052,7 @@ async function runFaceFusionEdit() {
     const {
       targetCanvas,
       referenceBlobs,
+      exactReferenceIndex,
       referenceWeights,
       appearanceProfileBlob,
       poseDistances,
@@ -2068,6 +2073,7 @@ async function runFaceFusionEdit() {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
     const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
+    if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {

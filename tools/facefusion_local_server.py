@@ -352,7 +352,11 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
             )
         ):
             raise ValueError("Referans poz mesafeleri 25 adet geçerli sayı veya null içermeli.")
+    exact_index = metadata.get('exactReferenceIndex')
+    if exact_index is not None and (type(exact_index) is not int or not 0 <= exact_index < reference_count):
+        raise ValueError('Birebir referans indeksi geçersiz.')
     return {
+        'exactReferenceIndex': exact_index,
         "poseDistances": pose_distances,
         "targetLandmarks": target_landmarks,
         "jawWarp": jaw_warp,
@@ -1228,6 +1232,12 @@ def process_swap(
         source_plans = plan_identity_source_sets(
             weights, identity_report, metadata.get("poseDistances")
         )
+        exact_index = metadata.get('exactReferenceIndex')
+        if type(exact_index) is int and 0 <= exact_index < len(reference_paths):
+            # All 25 still build the verifier. Add an independent 24-photo
+            # alternative so a duplicate target does not dominate the search.
+            independent = tuple(i for i in source_plans[0][1] if i != exact_index)
+            source_plans.insert(1, ('independent-24', independent))
         weighted_identity_paths = [reference_paths[i] for i in source_plans[0][1]]
         identity_output = temp_dir / "retake-identity-alpha.png"
         appearance_output = temp_dir / "retake-appearance-uniface.png"
@@ -1368,7 +1378,7 @@ def process_swap(
         # rarely land on identical pixels. Try a crisp real reference as an
         # optional UniFace *detail* source, not as a replacement for identity.
         texture_reference_index = select_texture_reference(
-            weights, identity_report, metadata.get("poseDistances")
+            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index
         )
         texture_output: Path | None = None
         if texture_reference_index is not None:
@@ -1721,7 +1731,7 @@ def process_swap(
         nim_used = ""
         nim_editors = caches.get("nim_editors") or {}
         if nim_editors and centroid:
-            indices = sorted(range(len(weights)), key=lambda i: (-weights[i], i))
+            indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
             nim_candidates = []
             try:

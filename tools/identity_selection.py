@@ -107,6 +107,7 @@ def select_texture_reference(
     weights: Sequence[int],
     identity_report: dict[str, Any],
     pose_distances: Sequence[float | None] | None = None,
+    *, excluded_index: int | None = None,
 ) -> int | None:
     """Choose one real (not pixel-averaged) face for optional UniFace detail.
 
@@ -123,7 +124,7 @@ def select_texture_reference(
     ):
         return None
     outliers = set(identity_report.get("outlier_indices", ()))
-    accepted = [i for i in range(count) if i not in outliers]
+    accepted = [i for i in range(count) if i not in outliers and i != excluded_index]
     if not accepted:
         return None
     poses_ok = isinstance(pose_distances, (list, tuple)) and len(pose_distances) == count

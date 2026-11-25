@@ -295,3 +295,18 @@ class JudgeReasonTest(unittest.TestCase):
         self.assertEqual(nj.judge_headers("error",2,error=error)["X-Retake-NVIDIA-Judge-Reason"],"PROJECT_AI_UPSTREAM_FAILED")
         error = nj.JudgeError("private message","http-502","secret\nheader")
         self.assertNotIn("X-Retake-NVIDIA-Judge-Reason",nj.judge_headers("error",2,error=error))
+
+class JuryDiversityTest(unittest.TestCase):
+    def test_duplicate_images_do_not_consume_finalist_slots(self):
+        headers = {"X-Retake-Similarity": ".8", "X-Retake-Detail-Gate": "passed"}
+        rows = [(b"a",headers,1),(b"a",headers,2),(b"b",headers,1),(b"c",headers,3)]
+        retained = []
+        for row in rows:
+            retained = srv.retain_judge_finalists(retained,row,.8)
+        self.assertEqual(len(retained),3)
+        pool = srv.judge_pool(b"a",headers,1,retained,.8)
+        self.assertEqual({row[0] for row in pool},{b"a",b"b",b"c"})
+    def test_distinct_same_round_upgrade_may_be_judged(self):
+        headers = {"X-Retake-Similarity": ".8", "X-Retake-Detail-Gate": "passed"}
+        pool = srv.judge_pool(b"original",headers,1,[(b"upgrade",headers,1)],.8)
+        self.assertEqual(len(pool),2)

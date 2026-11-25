@@ -25,3 +25,11 @@ Birden fazla hazır servis için virgülle model=port eklenebilir. Hiç ayarlanm
 Blueprint değerlendirmesi: RAG (referans kayıtlarının ve kalite kanıtlarının ayrılması), NemoClaw ajan değerlendirmesi (aday ve hata testleri), DocsFab (sürüm/test belgeleri), CUDA Nsight (profil çıkarma) bu proje için yararlı yaklaşımlar. Bunlar resmî Blueprint dağıtımı değildir. Biyoloji, finans ve konuşma modelleri sabit fotoğraf düzenleme işine doğrudan yarar sağlamaz. Bu sürümde gerçek NIM GPU servisi kurulmadı ve fiziksel fotoğraf testi yapılmadı.
 
 Birebir hedef dosyası bankada varsa tüm 25 fotoğrafın doğrulaması korunur; bağımsız 24 fotoğraf alternatif havuzu denenir ve birebir hedef doğrudan gerçek doku / NIM referansından çıkarılır. Son teslimde yüz içi piksel farkı ölçülür. Piksel farkı görüntü güzelliğinin garantisi değildir; eşik sadece değişmeyen sonucu ayıklar.
+
+## RTX A4000 16 GB: gerçek donanım sınırı
+
+NVIDIA'nın [güncel NIM destek tablosu](https://docs.nvidia.com/nim/visual-genai/latest/support-matrix.html) (25 Kasım 2026 kontrolü): Qwen-Image-Edit NIM ailesi en az 80 GB VRAM; FLUX.2 Klein ve FLUX.3 Image Klein NIM en az 48 GB VRAM ister. FLUX.1 Kontext NIM genel minimumu 16 GB olsa da RTX A4000 için destekli hazır TensorRT profili doğrulanmadı; FaceFusion ile eşzamanlı bellek ihtiyacı da hesaba katılmalı. Bu nedenle 16 GB sistemde bu NIM konteynerlerini otomatik başlatma veya satın alma yapılmaz. Daha düşük bellekli bağımsız açık ağırlık/quantization çalıştırıcıları ayrı entegrasyon ve gerçek GPU testi ister; resmi NIM ile eşdeğer değildir.
+
+Mevcut ücretsiz yerel FaceFusion + isteğe bağlı kişisel LoRA/FaceID gerçekçilik yolu varsayılan kalır. NIM model ismi listelenmiş olması çalıştığı anlamına gelmez. Bir modeli yalnız gerçek yerel servis hazır ve örnek düzenleme başarılıysa etkinleştir; gerçek kişisel fotoğrafları hosted endpoint'lere otomatik gönderme.
+
+Kabul testi: (1) bankadaki birebir dosya, (2) yeniden JPEG kodlanmış aynı fotoğraf, (3) bankada olmayan fotoğraf. Her biri için yüz içi değişim oranı, ortalama RGB farkı, orijinal ve sonuç kimlik cosine, maskenin dışındaki değişen piksel sayısı, doğal sakal/çene/cilt A/B incelemesi kaydedilir. Raporlanamayan veya anlamlı değişim üretmeyen örnek başarılı sayılmaz. Test resimleri ve biyometrik veriler commit edilmez.

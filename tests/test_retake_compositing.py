@@ -384,6 +384,23 @@ class SkinGrainTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[core == 0], composite[core == 0]))
         self.assertTrue(np.array_equal(out, rc.match_skin_grain(composite, photo.astype(np.float32), core, mask, 170.0)))
 
+    def test_a_noisy_face_in_a_soft_photo_is_calmed(self):
+        rng = np.random.default_rng(4)
+        photo = np.full((HEIGHT, WIDTH, 3), (120, 150, 205), np.float32) + rng.normal(0, 3.0, (HEIGHT, WIDTH, 3))
+        mask = np.zeros((HEIGHT, WIDTH), np.uint8)
+        cv2.ellipse(mask, (196, 260), (85, 110), 0, 0, 360, 1, -1)
+        noisy = photo + rng.normal(0, 6.0, photo.shape)
+        composite = np.where(mask[:, :, None] > 0, noisy, photo).astype(np.float32)
+        core = cv2.erode(mask, np.ones((15, 15), np.uint8)).astype(np.float32)
+        luma = lambda image: rc._luma(np.clip(image, 0, 255))
+        before = rc._flat_grain(luma(composite), core > 0.5)
+        out = rc.match_skin_grain(composite, photo.astype(np.float32), core, mask, 170.0)
+        after = rc._flat_grain(luma(out), core > 0.5)
+        self.assertLess(after, before * 0.75)
+        # Bounded: at most SKIN_GRAIN_CALM_MAX of the finest band goes.
+        self.assertGreater(after, before * (1 - rc.SKIN_GRAIN_CALM_MAX) * 0.9)
+        self.assertTrue(np.array_equal(out[core == 0], composite[core == 0]))
+
     def test_a_face_with_enough_grain_is_left_alone(self):
         photo = self.grainy_photo().astype(np.float32)
         mask = np.zeros((HEIGHT, WIDTH), np.uint8)

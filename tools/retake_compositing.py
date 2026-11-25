@@ -236,6 +236,8 @@ def match_photo_texture(composite: np.ndarray, target: np.ndarray, core: np.ndar
 SKIN_GRAIN_SIGMA = 0.7       # the finest band: sensor noise and pores
 SKIN_GRAIN_TOLERANCE = 0.9   # act when the face has under 90% of the grain it should
 SKIN_GRAIN_MAX = 4.0         # never add more than this mean |noise| (8-bit levels)
+SKIN_GRAIN_EXCESS = 1.2      # act when the face has over 120% of the grain it should
+SKIN_GRAIN_CALM_MAX = 0.45   # remove at most this share of the finest band (keeps pores)
 
 
 def _flat_grain(luma: np.ndarray, region: np.ndarray) -> float | None:
@@ -260,13 +262,16 @@ def match_skin_grain(
     face_width: float,
     seed: int = 1234
 ) -> np.ndarray:
-    """Give a too-smooth face the photo's own skin grain.
+    """Give the face the photo's own skin grain level.
 
     Swap models render skin without sensor noise; next to the photo's grainy
     neck and hair it reads as airbrushed. Measured on flat skin, the photo's
     face-to-surround grain relation is restored by adding fine luminance
-    noise (deterministic) where the face is fully swapped. Never removes
-    grain, never adds more than SKIN_GRAIN_MAX.
+    noise (deterministic) where the face is fully swapped, never more than
+    SKIN_GRAIN_MAX. The opposite also happens: a soft phone portrait (smooth
+    face, crisper surroundings) gets a face rendered with crisp, noisy skin
+    from the references. Then part of the finest band (at most
+    SKIN_GRAIN_CALM_MAX) is calmed, so the face sits in the photo's softness.
     """
     inside = core > 0.5
     wide = max(5, int(face_width * 0.22)) | 1
@@ -279,6 +284,11 @@ def match_skin_grain(
         return composite
     face_t, around_t, face_c, around_c = values
     wanted = around_c * (face_t + 0.05) / (around_t + 0.05)
+    if face_c > wanted * SKIN_GRAIN_EXCESS:
+        # Removing a share k of the finest band lowers its level by about k.
+        share = min(SKIN_GRAIN_CALM_MAX, 1.0 - wanted / face_c)
+        residual = luma_c - cv2.GaussianBlur(luma_c, (0, 0), SKIN_GRAIN_SIGMA)
+        return composite - (residual * share * core)[:, :, None]
     if face_c >= wanted * SKIN_GRAIN_TOLERANCE:
         return composite
     rng = np.random.default_rng(seed)

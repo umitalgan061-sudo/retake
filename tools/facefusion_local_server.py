@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from .nim_photo_edit import configured_editors, candidate_from_editor
+    from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
@@ -30,7 +31,8 @@ try:
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
-    from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from nim_photo_edit import configured_editors, candidate_from_editor
+    from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
@@ -350,7 +352,11 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
             )
         ):
             raise ValueError("Referans poz mesafeleri 25 adet geçerli sayı veya null içermeli.")
+    exact_index = metadata.get('exactReferenceIndex')
+    if exact_index is not None and (type(exact_index) is not int or not 0 <= exact_index < reference_count):
+        raise ValueError('Birebir referans indeksi geçersiz.')
     return {
+        'exactReferenceIndex': exact_index,
         "poseDistances": pose_distances,
         "targetLandmarks": target_landmarks,
         "jawWarp": jaw_warp,
@@ -1114,7 +1120,7 @@ def blend_lower_face(
     changed_ratio = float(np.count_nonzero(face_delta >= 3) / face_delta.size)
     mean_delta = float(np.mean(face_delta))
     p95_delta = float(np.percentile(face_delta, 95))
-    if is_near_noop(changed_ratio, mean_delta, p95_delta):
+    if real_face is None and is_near_noop(changed_ratio, mean_delta, p95_delta):
         raise NoOpSwapError(
             "FaceFusion iki geçişte de hedef yüze anlamlı bir değişiklik uygulamadı "
             f"(değişen piksel oranı %{changed_ratio * 100:.3f}, ortalama fark {mean_delta:.3f}). "
@@ -1226,6 +1232,12 @@ def process_swap(
         source_plans = plan_identity_source_sets(
             weights, identity_report, metadata.get("poseDistances")
         )
+        exact_index = metadata.get('exactReferenceIndex')
+        if type(exact_index) is int and 0 <= exact_index < len(reference_paths):
+            # All 25 still build the verifier. Add an independent 24-photo
+            # alternative so a duplicate target does not dominate the search.
+            independent = tuple(i for i in source_plans[0][1] if i != exact_index)
+            source_plans.insert(1, ('independent-24', independent))
         weighted_identity_paths = [reference_paths[i] for i in source_plans[0][1]]
         identity_output = temp_dir / "retake-identity-alpha.png"
         appearance_output = temp_dir / "retake-appearance-uniface.png"
@@ -1366,7 +1378,7 @@ def process_swap(
         # rarely land on identical pixels. Try a crisp real reference as an
         # optional UniFace *detail* source, not as a replacement for identity.
         texture_reference_index = select_texture_reference(
-            weights, identity_report, metadata.get("poseDistances")
+            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index
         )
         texture_output: Path | None = None
         if texture_reference_index is not None:
@@ -1413,10 +1425,18 @@ def process_swap(
                 report: dict[str, Any] = {}
                 number = len(blends)
                 path = hybrid_output if number == 0 else temp_dir / f"retake-hybrid-{number}.png"
-                if blend_lower_face(
-                    target_path, identity_source, appearance_output, path, metadata["faceBounds"],
-                    detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
-                ):
+                try:
+                    used = blend_lower_face(
+                        target_path, identity_source, appearance_output, path, metadata["faceBounds"],
+                        detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
+                    )
+                    if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                        continue
+                except NoOpSwapError:
+                    # An unchanged neural pass must not prevent the independent
+                    # real-reference transplant from being attempted.
+                    continue
+                if used:
                     transplanted[path] = transplant.get("mode", "full") if transplant else "full"
                 blends.append((path, float(report.get("border", 0.0))))
                 label = f"ton {harmonize:g}"
@@ -1438,9 +1458,13 @@ def process_swap(
                 except Exception as error:
                     print(f"Gerçek referans dokusu adayı atlandı: {error}", flush=True)
                     continue
+                if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                    continue
                 texture_blends.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
+        if not blends:
+            raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
         used_lower_face = transplanted.get(chosen_blend) == "lower"
@@ -1583,6 +1607,17 @@ def process_swap(
         rescue_candidates.extend(identity_regional_candidates)
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
+        # Filter unchanged interiors before selection, not only before blending.
+        # This prevents a high ArcFace score on an almost original face winning.
+        had_verified_identity = any(value is not None for value in scores[:len(rescue_candidates)])
+        if not had_verified_identity:
+            raise IdentityVerificationError('Üretilen yüz ArcFace ile doğrulanamadı.')
+        for idx, (_, candidate_path) in enumerate(rescue_candidates):
+            try:
+                if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
+                    scores[idx] = None
+            except (ValueError, OSError, cv2.error):
+                scores[idx] = None
         before_similarity = scores[-1]
         candidate_scores = scores[:len(rescue_candidates)]
         final_score = candidate_scores[0]
@@ -1639,6 +1674,8 @@ def process_swap(
                     f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
                     f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
                 )
+        if selected_identity not in ('head-fit','no-head-warp'):
+            chosen_texture = 'average'
         if selected_identity in ("identity-only", "identity-jaw"):
             used_lower_face = False
             used_full_face = False
@@ -1651,6 +1688,8 @@ def process_swap(
             used_lower_face = False
             used_full_face = True
             used_real_face = True
+        if all(value is None for value in candidate_scores):
+            raise NoOpSwapError('Hiçbir aday doğrulanabilir ve anlamlı yüz içi değişim sağlamadı.')
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1699,6 +1738,37 @@ def process_swap(
                 f"({listed}; FaceFusion {result_similarity:.3f}).",
                 flush=True
             )
+        # Optional local NIM finalist candidates. Actual selected pixels, never
+        # a model's own claims, must pass identity, texture and edit checks.
+        nim_used = ""
+        nim_editors = caches.get("nim_editors") or {}
+        if nim_editors and centroid:
+            indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
+            nim_refs = [reference_paths[i] for i in indices]
+            nim_candidates = []
+            try:
+                base_detail, _ = check_photo_detail(target_path, final_output, metadata['faceBounds'])
+            except Exception:
+                base_detail = None
+            for index, (model, port) in enumerate(nim_editors.items()):
+                try:
+                    path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png")
+                    acceptable, reason = check_render_file(final_output, path, metadata["faceBounds"])
+                    if not acceptable or not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                        print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
+                        continue
+                    value = score_identity(facefusion_dir, centroid, [path])[0]
+                    detail, _ = check_photo_detail(target_path, path, metadata["faceBounds"])
+                    if value is not None and value >= result_similarity - ULTRA_REALISM_TIE_LOSS and (
+                        value > result_similarity + .001 or (base_detail is not None and detail is not None and detail > base_detail + .06)
+                    ):
+                        nim_candidates.append((value, detail or 0., model, path))
+                except Exception as error:
+                    print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
+            if nim_candidates:
+                result_similarity, _, nim_used, path = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                shutil.copyfile(path, final_output)
+                print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
         # An ink-like one-pixel face outline can survive the global ArcFace
         # gate. Attempt a narrow, local cleanup on the existing face matte,
         # then keep it only if ArcFace still verifies the same identity.
@@ -1784,8 +1854,14 @@ def process_swap(
         # The RGB has already been feathered and blended. Soft alpha is an
         # internal matte, not display opacity: browser canvas premultiplication
         # loses RGB precision at tiny alpha, causing colored contour lines.
+        edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
+        if not edit['meaningful']:
+            raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-NIM-Editor': nim_used,
+            'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
+            'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
@@ -1863,7 +1939,8 @@ def run_ultra_search(
     # all feasible identity candidates first, then invest the heavy GPU
     # realism pass in the single best validated finalist.
     has_realism = bool(caches and caches.get("realism"))
-    search_caches = {**caches, "realism": None} if has_realism else caches
+    has_nim = bool(caches and caches.get('nim_editors'))
+    search_caches = {**caches, 'realism': None, 'nim_editors': None} if has_realism or has_nim else caches
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -1919,7 +1996,7 @@ def run_ultra_search(
     # One GPU realism investment on the best identity, not 24. This
     # evaluation always uses the untouched original target and reference
     # sources; it never feeds a generated face back as identity input.
-    if has_realism:
+    if has_realism or has_nim:
         try:
             if on_finalist is not None:
                 on_finalist()
@@ -2021,7 +2098,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "identity": getattr(server, "identity_cache", None),
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
-                "realism": getattr(server, "realism", None)
+                "realism": getattr(server, "realism", None),
+                "nim_editors": getattr(server, "nim_editors", None)
             },
             on_hold=hold, on_finalist=finalist
         )
@@ -2155,7 +2233,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
-            "X-Retake-Ultra-Realism-Policy"
+            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2210,6 +2288,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
             "lossless_preblended_transport": True,
+            "final_face_edit_proof": True,
+            "nim_editors_configured": list(getattr(self.server, 'nim_editors', {}) or {}),
             "identity_model": IDENTITY_MODEL,
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",
@@ -2428,6 +2508,11 @@ def main() -> int:
         print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
         return 2
     server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
+    try:
+        server.nim_editors = configured_editors()
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     server.realism = find_realism(args.realism_python, args.realism_models)  # type: ignore[attr-defined]
     if server.realism:  # type: ignore[attr-defined]
         print(f"Fotoğraf gerçekçiliği AÇIK (difüzyon + kimlik yönlendirmesi): {args.realism_models}", flush=True)

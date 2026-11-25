@@ -40,6 +40,7 @@ import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
 import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
+  measureFaceEdit,
   describeProfileHealth,
   describeSimilarity,
   parseSimilarity,
@@ -300,8 +301,12 @@ async function checkFaceFusionStatus() {
         model: health.model || "uniface_256",
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
+        nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
+        finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
-        message: health.personal_model
+        message: health.final_face_edit_proof !== true
+          ? 'Eski motor: son yüz değişimi denetimi için yerel Retake motorunu güncelle. Tarayıcı son görüntüyü yine kontrol eder.'
+          : health.personal_model
           ? "Ultra-420 v22 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
           : health.realism
             ? "Ultra-420 v22 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
@@ -635,6 +640,8 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
+    item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
+    item.nimEditor ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : "",
@@ -656,6 +663,8 @@ function addResult(blob, label, scores = {}) {
     blob,
     url: createObjectURL(blob),
     label,
+    faceEdit: scores.faceEdit ?? null,
+    nimEditor: scores.nimEditor || '',
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
@@ -1463,7 +1472,7 @@ function createAppearanceProfile(candidates) {
   };
 }
 
-async function buildLocalFaceFusionInputs() {
+async function buildLocalFaceFusionInputs(exactReference=null) {
   state.profileIsBuilding = true;
   updateProfileIndicator({
     title: "Yüz profili oluşturuluyor",
@@ -1667,7 +1676,7 @@ async function buildLocalFaceFusionInputs() {
   // Always prepare pose-matched real-reference crops for the lower-face-only
   // candidate. This does NOT activate the full-face transplant switch.
   // If the mesh/pose is unreliable, the FaceFusion identity path continues.
-  const realFace = await prepareRealFace(face, profile, readyReferences, toCanvas);
+  const realFace = await prepareRealFace(face, profile, readyReferences, toCanvas, exactReference);
   // The face's mesh in crop pixels: the engine finds the beard and cheeks
   // with it to give the person's own facial-hair tone.
   const targetLandmarks = face.mesh
@@ -1677,6 +1686,7 @@ async function buildLocalFaceFusionInputs() {
   return {
     targetCanvas,
     referenceBlobs: profile.referenceBlobs,
+    exactReferenceIndex: exactReference ? readyReferences.indexOf(exactReference) : -1,
     referenceWeights: profile.weights,
     appearanceProfileBlob: profile.appearanceProfileBlob,
     // Only scalar pose distances leave the device: each reference's mesh
@@ -1725,10 +1735,12 @@ function restoreRealFacePreference() {
 // engine warps each onto the target face and keeps the one that fits best, so
 // real skin, nose and lips replace the generated ones. Returns null when no
 // reference is close enough; the AI swap alone is then used.
-async function prepareRealFace(face, profile, readyReferences, toCanvas) {
+async function prepareRealFace(face, profile, readyReferences, toCanvas, exactReference=null) {
   if (!face.mesh || !face.pose || !Array.isArray(profile.poseDescriptors)) return null;
   const candidates = [];
-  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose)) {
+  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose, undefined, readyReferences.length)) {
+    if(readyReferences[index]===exactReference)continue;
+    if(candidates.length>=3)break;
     try {
       const candidate = await cropRealReference(readyReferences[index]);
       if (candidate) candidates.push(candidate);
@@ -1887,8 +1899,12 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
     throw new Error("Güvenlik kontrolü başarısız: yüz maskesi dışında " + integrity.changedPixels + " piksel değişti.");
   }
 
+  // Measure the actual delivered crop at native resolution, after all scaling
+  // and masks. A high embedding score alone never proves an edit occurred.
+  const faceEdit=measureFaceEdit(sourceCrop.data,blended,crop.width,crop.height,crop.face);
+  if(!faceEdit.meaningful)throw new Error('Son görüntüde yüz içi değişim yetersiz; düzenlenmemiş fotoğraf başarılı sonuç olarak gösterilmedi.');
   fullContext.putImageData(output, 0, 0);
-  return canvasToBlob(fullCanvas);
+  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit}));
 }
 
 const stones = { hero: null, wait: null, timer: null };
@@ -2029,29 +2045,14 @@ async function runFaceFusionEdit() {
   try {
     const targetSnapshot = state.target;
     const exactReference = await findExactReferenceFile(targetSnapshot.file, state.references);
-    if (exactReference) {
-      const regenerate = await showAppDialog({
-        title: "Bu fotoğraf referans bankanda birebir mevcut",
-        message: "Dosya baytları tamamen aynı. Orijinali korumak, gereksiz yüz değişimi ve yeni kontur riskini önler. İstersen yine de Ultra ile yeni bir görünüm oluşturabilirsin.",
-        confirmLabel: "Yine düzenle",
-        cancelLabel: "Orijinali koru"
-      });
-      if (state.target !== targetSnapshot) throw new Error("Hedef fotoğraf değişti; işlemi yeniden başlat.");
-      if (!regenerate) {
-        const canvas = document.createElement("canvas");
-        canvas.width = targetSnapshot.image.naturalWidth;
-        canvas.height = targetSnapshot.image.naturalHeight;
-        canvas.getContext("2d").drawImage(targetSnapshot.image, 0, 0);
-        addResult(await canvasToBlob(canvas), "Orijinal korundu · birebir referans dosyası");
-        elements.disabledNote.textContent = "Fotoğraf zaten referans bankasında mevcut. Yapay zekâ ile değiştirilmedi; kimlik puanı üretilmedi.";
-        setRuntimeStatus("Orijinal fotoğraf korundu · GPU işlemi yapılmadı");
-        showToast("Orijinal fotoğraf korundu.");
-        return;
-      }
-    }
+    if (state.target !== targetSnapshot) throw new Error("Hedef fotoğraf değişti; işlemi yeniden başlat.");
+    // All 25 references still build the identity profile. Do not copy the
+    // identical target back as the direct photographic reference.
+    if(exactReference)setWaitProgress(0,1,"Aynı dosya referans bankasında mevcut; diğer referanslardan yeni yüz ayrıntıları işleniyor…");
     const {
       targetCanvas,
       referenceBlobs,
+      exactReferenceIndex,
       referenceWeights,
       appearanceProfileBlob,
       poseDistances,
@@ -2062,7 +2063,7 @@ async function runFaceFusionEdit() {
       realFace,
       targetLandmarks,
       crop
-    } = await buildLocalFaceFusionInputs();
+    } = await buildLocalFaceFusionInputs(exactReference);
     const targetBlob = await canvasToBlob(targetCanvas);
 
     const form = new FormData();
@@ -2072,6 +2073,7 @@ async function runFaceFusionEdit() {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
     const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
+    if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {
@@ -2112,6 +2114,7 @@ async function runFaceFusionEdit() {
     const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
     const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
+      nimEditor: response.headers.get('X-Retake-NIM-Editor') || '',
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
@@ -2140,7 +2143,7 @@ async function runFaceFusionEdit() {
     }
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
-    const resultBlob = await applyGeneratedFacePatch(
+    const delivered = await applyGeneratedFacePatch(
       generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended",
       response.headers.get("X-Retake-Alpha-Transport") === "binary", targetSize
     );
@@ -2149,7 +2152,7 @@ async function runFaceFusionEdit() {
       Number.isInteger(completedRounds) && completedRounds >= 1
         ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
     );
-    addResult(resultBlob, ultraLabel, scores);
+    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
     showToast(

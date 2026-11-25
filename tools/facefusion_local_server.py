@@ -35,6 +35,7 @@ try:
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
@@ -54,6 +55,7 @@ except ImportError:
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
@@ -101,7 +103,8 @@ DEFAULT_SHADING_STRENGTH = 0.35
 BORDER_STEP_RATIO = 2.0
 BORDER_STEP_FLOOR = 0.6
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
-IDENTITY_REPORT_VERSION = "centroid-v1"
+# v2 adds the leave-one-out real-photo identity level.
+IDENTITY_REPORT_VERSION = "centroid-v2"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
 # A second identity pass over the first one's result. On the user's photos
@@ -1974,6 +1977,7 @@ def process_swap(
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
+            "X-Retake-Identity-Photo-Level": str(identity_report.get("photo_level_similarity", "")),
             "X-Retake-Identity-Outliers": ",".join(str(index + 1) for index in outlier_indices),
             "X-Retake-Pixel-Boost": f"{identity_boost},{appearance_boost}",
             "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
@@ -2029,11 +2033,14 @@ def retain_judge_finalists(
     """Keep only verified candidates inside the current ArcFace tie band."""
     kept = [
         item for item in [*finalists, candidate]
-        if (score := score_from_headers(item[1])) is not None
-        and score >= peak_identity - ULTRA_REALISM_TIE_LOSS
+        if identity_acceptable(item[1], peak_identity)
         and item[1].get("X-Retake-Detail-Gate") == "passed"
     ]
-    kept.sort(key=lambda item: (score_from_headers(item[1]) or -1.0, item[2] == candidate[2]), reverse=True)
+    # Identity-sufficient candidates compete on realism, the rest on identity.
+    def rank(item):
+        sufficient = is_identity_sufficient(item[1])
+        return (sufficient, realism_order(item[1]) if sufficient else (score_from_headers(item[1]) or -1.0,), item[2] == candidate[2])
+    kept.sort(key=rank, reverse=True)
     return kept[:JUDGE_FINALIST_BUFFER]
 
 
@@ -2044,10 +2051,9 @@ def judge_pool(
     """Local winner first, then the strongest distinct near-ties (max 4)."""
     pool = [(best_result, best_headers, best_round)]
     for item in finalists:
-        score = score_from_headers(item[1])
         if (
             len(pool) >= JUDGE_MAX_CANDIDATES or item[2] == best_round or item[0] == best_result
-            or score is None or score < peak_identity - ULTRA_REALISM_TIE_LOSS
+            or not identity_acceptable(item[1], peak_identity)
             or item[1].get("X-Retake-Detail-Gate") != "passed"
         ):
             continue
@@ -2129,9 +2135,12 @@ def run_ultra_search(
             strongest = (image, headers, round_number)
         # Keep a global identity anchor: pairwise near-ties must not drift
         # downward over 24 rounds. Retain only two full images in memory.
-        if best_headers is not None and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS:
+        # A best that already reaches the person's photo level is not dragged
+        # back to a merely higher-cosine (often 128 px reinforced) candidate.
+        if (best_headers is not None and not is_identity_sufficient(best_headers)
+                and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS):
             best_result, best_headers, best_round = strongest
-        if identity >= peak_identity - ULTRA_REALISM_TIE_LOSS and prefer_ultra_candidate(headers, best_headers):
+        if identity_acceptable(headers, peak_identity) and prefer_ultra_candidate(headers, best_headers):
             best_result, best_headers, best_round = image, headers, round_number
             print(
                 f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
@@ -2168,7 +2177,7 @@ def run_ultra_search(
             flux_diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
             upgraded_identity = score_from_headers(upgraded_headers)
             if (upgraded_identity is not None
-                    and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
+                    and identity_acceptable(upgraded_headers, peak_identity)
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):
                 best_result, best_headers = upgraded_image, upgraded_headers
                 peak_identity = max(peak_identity, upgraded_identity)
@@ -2203,7 +2212,7 @@ def run_ultra_search(
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
                     continue
-                if candidate_score >= peak_identity - ULTRA_REALISM_TIE_LOSS and prefer_ultra_candidate(candidate_headers, best_headers):
+                if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
                     peak_identity = max(peak_identity, candidate_score)
@@ -2274,6 +2283,10 @@ def run_ultra_search(
         "X-Retake-Finalist-Attempts": str(finalist_attempts),
         "X-Retake-Identity-Aspiration": "" if target is None else f"{target:.4f}",
         "X-Retake-Identity-Gain": "" if gain is None else f"{gain:.4f}",
+        "X-Retake-Identity-Sufficient": (
+            "unknown" if identity_sufficiency(best_headers) is None
+            else "yes" if is_identity_sufficient(best_headers) else "no"
+        ),
         **judge_result,
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
@@ -2519,6 +2532,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
+            "X-Retake-Identity-Photo-Level, X-Retake-Identity-Sufficient, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "

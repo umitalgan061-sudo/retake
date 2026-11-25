@@ -1904,7 +1904,7 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
   const faceEdit=measureFaceEdit(sourceCrop.data,blended,crop.width,crop.height,crop.face);
   if(!faceEdit.meaningful)throw new Error('Son görüntüde yüz içi değişim yetersiz; düzenlenmemiş fotoğraf başarılı sonuç olarak gösterilmedi.');
   fullContext.putImageData(output, 0, 0);
-  return {blob:await canvasToBlob(fullCanvas),faceEdit};
+  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit}));
 }
 
 const stones = { hero: null, wait: null, timer: null };

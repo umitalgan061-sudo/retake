@@ -1120,7 +1120,7 @@ def blend_lower_face(
     changed_ratio = float(np.count_nonzero(face_delta >= 3) / face_delta.size)
     mean_delta = float(np.mean(face_delta))
     p95_delta = float(np.percentile(face_delta, 95))
-    if is_near_noop(changed_ratio, mean_delta, p95_delta):
+    if real_face is None and is_near_noop(changed_ratio, mean_delta, p95_delta):
         raise NoOpSwapError(
             "FaceFusion iki geçişte de hedef yüze anlamlı bir değişiklik uygulamadı "
             f"(değişen piksel oranı %{changed_ratio * 100:.3f}, ortalama fark {mean_delta:.3f}). "
@@ -1425,10 +1425,18 @@ def process_swap(
                 report: dict[str, Any] = {}
                 number = len(blends)
                 path = hybrid_output if number == 0 else temp_dir / f"retake-hybrid-{number}.png"
-                if blend_lower_face(
-                    target_path, identity_source, appearance_output, path, metadata["faceBounds"],
-                    detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
-                ):
+                try:
+                    used = blend_lower_face(
+                        target_path, identity_source, appearance_output, path, metadata["faceBounds"],
+                        detail_transfer_strength, metadata["targetSize"], shading, transplant, harmonize, report, beard
+                    )
+                    if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                        continue
+                except NoOpSwapError:
+                    # An unchanged neural pass must not prevent the independent
+                    # real-reference transplant from being attempted.
+                    continue
+                if used:
                     transplanted[path] = transplant.get("mode", "full") if transplant else "full"
                 blends.append((path, float(report.get("border", 0.0))))
                 label = f"ton {harmonize:g}"
@@ -1450,9 +1458,13 @@ def process_swap(
                 except Exception as error:
                     print(f"Gerçek referans dokusu adayı atlandı: {error}", flush=True)
                     continue
+                if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                    continue
                 texture_blends.add(path)
                 blends.append((path, float(report.get("border", 0.0))))
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
+        if not blends:
+            raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
         chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
         used_real_face = chosen_blend in transplanted
         used_lower_face = transplanted.get(chosen_blend) == "lower"

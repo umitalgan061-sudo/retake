@@ -39,6 +39,7 @@ import {
   summarizeReferenceShape
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
+import { buildBenchmarkReport, pickBenchmarkReferences, runBenchmark, summarizeBenchmark, fidelityScore } from "./src/benchmark.js";
 import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
@@ -51,6 +52,7 @@ import {
   describeNvidiaJudge,
   describeIdentitySufficiency,
   describeSelfFidelity,
+  describeUltraSchedule,
   describeSimilarity,
   parseSimilarity,
   similarityScore
@@ -111,6 +113,15 @@ const elements = {
   swapButton: $("#swapButton"),
   realFaceToggle: $("#realFaceToggle"),
   nvidiaJudgeRow: $("#nvidiaJudgeRow"),
+  benchmarkCount: $("#benchmarkCount"),
+  benchmarkStart: $("#benchmarkStart"),
+  benchmarkStop: $("#benchmarkStop"),
+  benchmarkStatus: $("#benchmarkStatus"),
+  benchmarkResults: $("#benchmarkResults"),
+  benchmarkRows: $("#benchmarkRows"),
+  benchmarkSummary: $("#benchmarkSummary"),
+  benchmarkDownload: $("#benchmarkDownload"),
+  benchmarkSummaryNote: $("#benchmarkSummaryNote"),
   nvidiaJudgeToggle: $("#nvidiaJudgeToggle"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
@@ -255,8 +266,9 @@ function updateSwapAvailability() {
     state.target.faces[state.selectedFaceIndex]);
   const enabled = state.faceFusionStatus.configured && state.detector &&
     referenceCount === MAX_REFERENCE_FACES && hasTarget &&
-    !state.targetLoading && !state.referencesLoading && !state.isSwapping;
+    !state.targetLoading && !state.referencesLoading && !state.isSwapping && !state.benchmark?.running;
   elements.swapButton.disabled = !enabled;
+  updateBenchmarkAvailability(referenceCount);
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   elements.shareButton.disabled = !state.result || state.isSwapping;
   const copy = elements.swapButton.querySelector(".button-copy");
@@ -315,6 +327,9 @@ async function checkFaceFusionStatus() {
         nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
         // Only an engine with a Hafize project token may offer the NVIDIA jury.
         nvidiaJudge: health.nvidia_judge === "configured",
+        // Strict leave-one-out self-tests and learned variant order (v22.3+).
+        selfTestBenchmark: health.self_test_benchmark === true,
+        ultraLearning: health.ultra_learning === true,
         finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
         message: health.final_face_edit_proof !== true
@@ -665,6 +680,7 @@ function selectResult(index) {
     describeNvidiaJudge(item.nvidiaJudge, item.nvidiaJudgeVotes, item.nvidiaJudgeAgreement),
     describeIdentitySufficiency(item.identitySufficient),
     describeSelfFidelity(item.selfFidelity),
+    describeUltraSchedule(item.ultraSchedule, item.calibrationSamples),
     item.nvidiaJudge === 'error' ? describeJudgeError(item.nvidiaJudgeError) : '',
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
@@ -702,6 +718,8 @@ function addResult(blob, label, scores = {}) {
     nvidiaJudge: scores.nvidiaJudge || "",
     identitySufficient: scores.identitySufficient || "",
     selfFidelity: scores.selfFidelity || "",
+    ultraSchedule: scores.ultraSchedule || "",
+    calibrationSamples: Number.isInteger(scores.calibrationSamples) ? scores.calibrationSamples : null,
     nvidiaJudgeVotes: Number.isInteger(scores.nvidiaJudgeVotes) ? scores.nvidiaJudgeVotes : null,
     nvidiaJudgeAgreement: Number.isFinite(scores.nvidiaJudgeAgreement) ? scores.nvidiaJudgeAgreement : null,
     fluxStatus: scores.fluxStatus || "",
@@ -2106,7 +2124,9 @@ async function waitForEngineJob(jobId, total) {
   throw new Error("İşlem 45 dakika içinde tamamlanmadı.");
 }
 
-async function runFaceFusionEdit() {
+async function runFaceFusionEdit(options = {}) {
+  // Also used as a click handler: only an explicit benchmark flag counts.
+  const benchmark = options?.benchmark === true;
   if (state.isSwapping) return;
   if (!state.faceFusionStatus.configured) {
     showToast("Önce bilgisayarındaki FaceFusion servisini başlat.");
@@ -2125,7 +2145,8 @@ async function runFaceFusionEdit() {
   const judgeNotice = useNvidiaJudge
     ? " NVIDIA görsel jürisi açık: motor, kimliği eşit en fazla 4 sonuç adayının yüz kırpımını (en çok 512 px) Hafize sunucun üzerinden NVIDIA'nın barındırılan görsel modellerine gönderir. Jüri yalnız bu adaylardan en doğal görüneni seçer; görseller saklanmaz."
     : "";
-  const consent = await showAppDialog({
+  // A benchmark asked for consent once, for all of its photos.
+  const consent = benchmark || await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
     message: (state.engine.remote
       ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
@@ -2182,6 +2203,10 @@ async function runFaceFusionEdit() {
     });
     const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation, neckHarmonize: state.target.faces.length === 1 && Boolean(targetLandmarks) };
     if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
+    if (benchmark) {
+      if (exactReferenceIndex < 0) throw new Error("Öz-test hedefi referans bankasında bulunamadı.");
+      metadata.selfTest = true;
+    }
     if (useNvidiaJudge) metadata.nvidiaJudge = true;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
@@ -2258,6 +2283,8 @@ async function runFaceFusionEdit() {
         ?? parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity")),
       identitySufficient: response.headers.get("X-Retake-Identity-Sufficient") || "",
       selfFidelity: response.headers.get("X-Retake-Self-Fidelity") || "",
+      ultraSchedule: response.headers.get("X-Retake-Ultra-Schedule") || "",
+      calibrationSamples: Number.parseInt(response.headers.get("X-Retake-Calibration-Samples") || "", 10),
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -2292,7 +2319,10 @@ async function runFaceFusionEdit() {
       (scoreText ? ` · ${scoreText}` : "") + "."
     );
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
+    return { ...scores, winnerRound: Number.isInteger(winnerRound) ? winnerRound : null };
   } catch (error) {
+    // The benchmark records the failure in its table and moves on.
+    if (benchmark) throw error;
     state.profileIsBuilding = false;
     if (!state.identityProfile?.validCount) {
       updateProfileIndicator({
@@ -2323,6 +2353,136 @@ async function runFaceFusionEdit() {
     state.isSwapping = false;
     updateSwapAvailability();
   }
+}
+
+// ---- Self-test benchmark ---------------------------------------------
+function updateBenchmarkAvailability(referenceCount) {
+  if (!elements.benchmarkStart) return;
+  const running = Boolean(state.benchmark?.running);
+  const supported = Boolean(state.faceFusionStatus.configured && state.faceFusionStatus.selfTestBenchmark);
+  elements.benchmarkStart.disabled = running || !supported || !state.detector || state.isSwapping ||
+    state.referencesLoading || referenceCount !== MAX_REFERENCE_FACES;
+  elements.benchmarkStop.hidden = !running;
+  if (!running && elements.benchmarkStatus && !state.benchmark?.rows) {
+    elements.benchmarkStatus.textContent = !state.faceFusionStatus.configured
+      ? "Önce bilgisayarındaki motoru başlat."
+      : !supported
+        ? "Bu motor sürümü öz-testi desteklemiyor: git pull ve update_retake_ultra.ps1 ile güncelle."
+        : referenceCount !== MAX_REFERENCE_FACES || state.referencesLoading || !state.detector
+          ? "25 referans ve yüz algılama hazır olunca başlatılabilir."
+          : "Hazır. Görseller yalnız bu cihaz ile yerel motor arasında kalır.";
+  }
+}
+
+function formatNumber(value, digits) {
+  return Number.isFinite(value) ? value.toFixed(digits).replace(".", ",") : "—";
+}
+
+function renderBenchmarkRows(rows) {
+  elements.benchmarkResults.hidden = rows.length === 0;
+  elements.benchmarkRows.replaceChildren(...rows.map((row) => {
+    const tr = document.createElement("tr");
+    const cell = (text, className) => {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (className) td.className = className;
+      return td;
+    };
+    tr.append(cell(`${row.index + 1}. ${row.file || ""}`));
+    if (row.error) {
+      const td = cell(row.error, "benchmark-error");
+      td.colSpan = 5;
+      tr.append(td);
+      return tr;
+    }
+    const score = fidelityScore(row.ssim, row.deltaE);
+    tr.append(
+      cell(formatNumber(row.ssim, 3)), cell(formatNumber(row.deltaE, 1)),
+      cell(score === null ? "—" : formatNumber(score, 3)),
+      cell(Number.isFinite(row.similarity) ? formatNumber(row.similarity * 100, 1) : "—"),
+      cell(row.schedule === "learned-fidelity" ? "öğrenilmiş" : row.schedule === "learned-proxy" ? "öğreniyor" : "varsayılan")
+    );
+    return tr;
+  }));
+}
+
+async function runSelfTestBenchmark() {
+  if (state.isSwapping || state.benchmark?.running) return;
+  if (!state.faceFusionStatus.configured || !state.faceFusionStatus.selfTestBenchmark) {
+    showToast("Öz-test için motorun güncel sürümü çalışıyor olmalı.");
+    return;
+  }
+  const items = pickBenchmarkReferences(state.references, Number(elements.benchmarkCount.value));
+  if (items.length === 0) {
+    showToast("Kıyaslama için hazır referans fotoğrafı yok.");
+    return;
+  }
+  const judgeNotice = isNvidiaJudgeEnabled()
+    ? " NVIDIA görsel jürisi açık olduğu için her testte en fazla 4 sonuç adayının yüz kırpımı Hafize üzerinden NVIDIA'ya da gönderilir."
+    : "";
+  const consent = await showAppDialog({
+    title: "Öz-test kıyaslaması başlatılsın mı?",
+    message: `${items.length} referans fotoğrafın sırayla hedef yapılıp her biri için Ultra çalıştırılır (her biri en az 7 dakika). Her testte o fotoğraf kimlik kaynaklarından tamamen çıkarılır; sonuç orijinal yüze karşı ölçülür ve motor hangi ayarların en doğal göründüğünü bu bilgisayarda öğrenir (yalnız sayılar saklanır). Görseller bu cihaz ile ${state.engine.remote ? "eşleştirdiğin bilgisayardaki" : "bu bilgisayardaki"} motor arasında kalır.` + judgeNotice,
+    confirmLabel: "Kıyaslamayı başlat"
+  });
+  if (!consent) return;
+  state.benchmark = { running: true, stop: false, rows: [] };
+  updateSwapAvailability();
+  renderBenchmarkRows([]);
+  elements.benchmarkDownload.hidden = true;
+  elements.benchmarkSummary.textContent = "";
+  try {
+    const rows = await runBenchmark({
+      items,
+      shouldStop: () => Boolean(state.benchmark?.stop),
+      onProgress: ({ position, total, file, rows: done }) => {
+        renderBenchmarkRows(done);
+        elements.benchmarkStatus.textContent = file
+          ? `Test ${position + 1}/${total}: ${file} · Ultra çalışıyor…`
+          : "Kıyaslama tamamlandı.";
+        elements.benchmarkSummaryNote.textContent = file ? `${position + 1}/${total}` : "Tamamlandı";
+      },
+      runOne: async (item, index) => {
+        const file = new File([item.blob], item.file || `referans-${index + 1}.jpg`, { type: item.blob.type || "image/jpeg" });
+        await setTargetPhoto(file);
+        if (!state.target || state.target.file !== file) throw new Error("Fotoğraf hedef olarak yüklenemedi.");
+        if (state.target.faces.length !== 1) throw new Error(`${state.target.faces.length} yüz algılandı; öz-test için tek yüz gerekir.`);
+        const result = await runFaceFusionEdit({ benchmark: true });
+        if (!result) throw new Error("İşlem başlatılamadı.");
+        return result;
+      }
+    });
+    const summary = summarizeBenchmark(rows);
+    state.benchmark = { running: false, rows, report: buildBenchmarkReport(rows, { engineModel: "retake_hybrid_25_reference_ultra_v22" }) };
+    renderBenchmarkRows(rows);
+    elements.benchmarkSummary.textContent = summary.measured
+      ? `Ortalama: SSIM ${formatNumber(summary.meanSsim, 3)} · ΔE ${formatNumber(summary.meanDeltaE, 1)} · doğallık ${formatNumber(summary.meanFidelity, 3)} (${summary.measured} ölçüm${summary.failed ? `, ${summary.failed} hata` : ""}). Aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 / 1,3 / 0,94.`
+      : "Ölçüm alınamadı; tablodaki hata nedenlerine bak.";
+    elements.benchmarkDownload.hidden = rows.length === 0;
+    elements.benchmarkStatus.textContent = state.benchmark.rows.length < items.length
+      ? "Kıyaslama durduruldu. Toplanan ölçümler motorun öğrenmesine eklendi."
+      : "Kıyaslama tamamlandı. Motor sonraki işlemlerde en doğal ölçülen ayarları önce dener.";
+  } catch (error) {
+    state.benchmark = { running: false, rows: state.benchmark?.rows || [] };
+    elements.benchmarkStatus.textContent = "Kıyaslama durdu: " + (error?.message || "bilinmeyen hata");
+  } finally {
+    if (state.benchmark) state.benchmark.running = false;
+    updateSwapAvailability();
+  }
+}
+
+function downloadBenchmarkReport() {
+  const report = state.benchmark?.report;
+  if (!report) return;
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `retake-oz-test-${new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-")}.json`;
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 async function downloadResult() {
@@ -2557,6 +2717,13 @@ function initializeInteractions() {
     elements.referencesInput.value = "";
   });
   elements.swapButton.addEventListener("click", runFaceFusionEdit);
+  elements.benchmarkStart?.addEventListener("click", runSelfTestBenchmark);
+  elements.benchmarkStop?.addEventListener("click", () => {
+    if (!state.benchmark?.running) return;
+    state.benchmark.stop = true;
+    elements.benchmarkStatus.textContent = "Çalışan test bitince kıyaslama duracak.";
+  });
+  elements.benchmarkDownload?.addEventListener("click", downloadBenchmarkReport);
   elements.downloadButton.addEventListener("click", downloadResult);
   elements.themeButton.addEventListener("click", toggleTheme);
   elements.appDialog.addEventListener("close", () => {

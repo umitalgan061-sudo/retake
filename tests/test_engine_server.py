@@ -107,6 +107,21 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(health["ultra_min_seconds"], 420)
         self.assertEqual(health["ultra_search_budget_seconds"], 420)
 
+    def test_calibration_summary_is_numbers_only_and_health_advertises_learning(self):
+        from tools.ultra_calibration import CalibrationStore
+        self.server.calibration = CalibrationStore(Path(self.temp.name) / "cal.json", signature="s")
+        self.server.calibration.record("bank", [(3, {"X-Retake-Self-Fidelity": "ssim:0.9000,deltaE:2.000"})], self_test=True)
+        response, payload = self.request("GET", "/api/calibration")
+        summary = json.loads(payload)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(summary["banks"]["bank"]["variants"]["3"]["fidelity"], {"n": 1, "mean": 0.86})
+        _response, payload = self.request("GET", "/health")
+        health = json.loads(payload)
+        self.assertTrue(health["ultra_learning"])
+        self.assertTrue(health["self_test_benchmark"])
+        response, _ = self.request("GET", "/api/calibration", host="evil.example")
+        self.assertEqual(response.status, 403)
+
     def test_requests_addressed_to_another_host_are_refused(self):
         response, _ = self.request("GET", "/health", host="evil.example")
         self.assertEqual(response.status, 403)

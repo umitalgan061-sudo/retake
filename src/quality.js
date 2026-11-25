@@ -184,3 +184,15 @@ export function describeSelfFidelity(value) {
   const comma = (number, digits) => number.toFixed(digits).replace(".", ",");
   return `Öz-test (fotoğraf referanslarında da var): orijinale yapısal benzerlik ${comma(ssim, 2)} · renk farkı ΔE ${comma(deltaE, 1)} (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 · 1,3)`;
 }
+
+// Learned Ultra order: which variants ran first, and on what evidence.
+export function describeUltraSchedule(mode, samples) {
+  const count = Number.isInteger(samples) && samples > 0 ? samples : null;
+  if (mode === "learned-fidelity") {
+    return "Öğrenilmiş sıra: öz-testlerde senin yüzünde en doğal ölçülen ayarlar önce denendi" + (count ? ` (${count} ölçüm)` : "");
+  }
+  if (mode === "learned-proxy") {
+    return "Öğrenilmiş sıra: önceki işlemlerde fotoğraf ayrıntısını en iyi koruyan ayarlar önce denendi" + (count ? ` (${count} tur)` : "");
+  }
+  return "";
+}

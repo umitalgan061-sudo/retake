@@ -298,3 +298,19 @@ class UltraSelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FluxOutcomeTest(unittest.TestCase):
+    def test_rejected_finalist_keeps_original_and_reports_real_outcome(self):
+        def fake_swap(*args):
+            if args[5] and args[5].get("nim_editors"):
+                return b"rejected", {**score(.61), "X-Retake-FLUX-Status":"accepted"}
+            return b"verified", score(.87)
+        with patch.object(srv, "process_swap", fake_swap):
+            image, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_a, **_k: None, min_duration_seconds=0,
+                caches={"nim_editors":{"retake-local/flux2-klein-4b":0}}
+            )
+        self.assertEqual(image,b"verified")
+        self.assertEqual(headers["X-Retake-FLUX-Status"],"finalist-not-selected")

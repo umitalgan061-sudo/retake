@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gc
 import io
 import json
 import os
@@ -134,6 +135,25 @@ def load_local_pipeline(model_dir, offload):
                       "offload":offload,"torch":torch.__version__}
 
 
+def cleanup_editor(pipe, torch):
+    """Offload model modules and release unreferenced CUDA allocator blocks."""
+    ok = True
+    try:
+        pipe.maybe_free_model_hooks()
+    except Exception:
+        ok = False
+    gc.collect()
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        ok = False
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        ok = False
+    return ok
+
+
 def serve(pipe, torch, proof, port, max_edge):
     state={"ready":True}
     class Handler(BaseHTTPRequestHandler):
@@ -172,15 +192,24 @@ def serve(pipe, torch, proof, port, max_edge):
                 prompt,images=parse_edit(json.loads(self.rfile.read(size)))
             except (ValueError,TypeError,OSError):
                 return self.reply(400,{"error":"INVALID_LOCAL_IMAGE_EDIT"})
+            response=None
+            output=buffer=None
             try:
                 output=edit_image(pipe,torch,prompt,images,max_edge)
                 buffer=io.BytesIO();output.save(buffer,format="PNG")
-                self.reply(200,{"data":[{"b64_json":base64.b64encode(buffer.getvalue()).decode("ascii")}]})
+                response={"data":[{"b64_json":base64.b64encode(buffer.getvalue()).decode("ascii")}]}
             except Exception as error:
                 # Do not include prompt, paths or image data in error messages.
                 state["ready"]=False
                 print("Local editor inference failed:",type(error).__name__,flush=True)
+            finally:
+                output=buffer=images=prompt=None
+                if not cleanup_editor(pipe,torch):
+                    state["ready"]=False
+            if response is None or not state["ready"]:
                 self.reply(503,{"error":"LOCAL_GPU_EDIT_FAILED"})
+            else:
+                self.reply(200,response)
     with HTTPServer(("127.0.0.1",port),Handler) as server:
         print(json.dumps({"ready":True,"port":port,"model":MODEL_ALIAS,**proof}),flush=True)
         server.serve_forever()
@@ -200,7 +229,11 @@ def main():
     os.environ["TRANSFORMERS_OFFLINE"]="1"
     os.environ["HF_HUB_DISABLE_TELEMETRY"]="1"
     pipe,torch,info=load_local_pipeline(args.model_dir,args.offload)
-    proof={**info,**smoke_edit(pipe,torch,args.max_edge)}
+    try:
+        proof={**info,**smoke_edit(pipe,torch,args.max_edge)}
+    finally:
+        if not cleanup_editor(pipe,torch):
+            raise RuntimeError('GPU cleanup failed; editor will not be enabled')
     if args.probe_only:
         print(json.dumps({"model":MODEL_ALIAS,"ready":True,**proof}),flush=True)
     else:

@@ -34,7 +34,9 @@ try:
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -51,7 +53,9 @@ except ImportError:
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 
 MAX_REFERENCES = 25
@@ -1804,6 +1808,9 @@ def process_swap(
         nim_editors = caches.get("nim_editors") or {}
         flux_model = "retake-local/flux2-klein-4b"
         flux_status = "not-attempted" if flux_model in nim_editors else "not-configured"
+        flux_delta = None
+        flux_detail_delta = None
+        flux_strength = None
         if nim_editors and centroid:
             indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
@@ -1814,32 +1821,49 @@ def process_swap(
                 base_detail = None
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
-                    path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png")
-                    acceptable, reason = check_render_file(final_output, path, metadata["faceBounds"])
+                    path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png",
+                                                 **({"extra_strengths": (.20, .50)} if model == flux_model else {}))
+                    alternatives = [(path, .35)]
                     if model == flux_model:
+                        alternatives.extend((path.with_name(f"{path.stem}-{int(strength*100)}{path.suffix}"), strength) for strength in (.20, .50))
                         flux_status = "quality-rejected"
-                    if not acceptable or not check_detail_gate(target_path, path, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                    measured = []
+                    for candidate, strength in alternatives:
+                        acceptable, reason = check_render_file(final_output, candidate, metadata["faceBounds"])
+                        if not acceptable or not check_detail_gate(target_path, candidate, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, candidate, metadata["faceBounds"])["meaningful"]:
+                            continue
+                        detail, _ = check_photo_detail(target_path, candidate, metadata["faceBounds"])
+                        measured.append((candidate, strength, detail))
+                    if not measured:
                         print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
                         continue
-                    if model == flux_model:
-                        flux_status = "identity-or-detail-rejected"
-                    value = score_identity(facefusion_dir, centroid, [path])[0]
-                    detail, _ = check_photo_detail(target_path, path, metadata["faceBounds"])
-                    if value is not None and value >= result_similarity - ULTRA_REALISM_TIE_LOSS and (
-                        value > result_similarity + .001 or (base_detail is not None and detail is not None and detail > base_detail + .06)
-                    ):
-                        nim_candidates.append((value, detail or 0., model, path))
-                        if model == flux_model:
-                            flux_status = "candidate-not-selected"
+                    values = score_identity(facefusion_dir, centroid, [row[0] for row in measured])
+                    for (candidate, strength, detail), value in zip(measured, values):
+                        if value is None:
+                            continue
+                        delta = value - result_similarity
+                        detail_delta = detail - base_detail if detail is not None and base_detail is not None else None
+                        if model == flux_model and (flux_delta is None or delta > flux_delta):
+                            flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
+                            flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS else "detail-gain-insufficient"
+                        if delta >= -ULTRA_REALISM_TIE_LOSS and (
+                            delta > .001 or (detail_delta is not None and detail_delta > .06)
+                        ):
+                            nim_candidates.append((value, detail or 0., model, candidate, strength, delta, detail_delta))
+                    if model == flux_model and flux_delta is None:
+                        flux_status = "identity-unmeasured"
                 except Exception as error:
                     if model == flux_model:
                         flux_status = "worker-error"
                     print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
             if nim_candidates:
-                result_similarity, _, nim_used, path = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                result_similarity, _, nim_used, path, strength, delta, detail_delta = max(nim_candidates, key=lambda row: (row[0], row[1]))
                 shutil.copyfile(path, final_output)
                 if nim_used == flux_model:
                     flux_status = "accepted"
+                    flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
+                elif any(row[2] == flux_model for row in nim_candidates):
+                    flux_status = "candidate-not-selected"
                 print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
         # An ink-like one-pixel face outline can survive the global ArcFace
         # gate. Attempt a narrow, local cleanup on the existing face matte,
@@ -1936,6 +1960,9 @@ def process_swap(
         headers = {
             'X-Retake-NIM-Editor': nim_used,
             'X-Retake-FLUX-Status': flux_status,
+            'X-Retake-FLUX-Identity-Delta': '' if flux_delta is None else f"{flux_delta:.5f}",
+            'X-Retake-FLUX-Detail-Delta': '' if flux_detail_delta is None else f"{flux_detail_delta:.5f}",
+            'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.2f}",
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
             'X-Retake-Detail-Gate': 'passed',
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
@@ -2064,6 +2091,7 @@ def run_ultra_search(
     judge_consent = bool(isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) and parsed[6].get("nvidiaJudge") is True)
     collect_finalists = judge is not None and judge_consent
     finalists: list[tuple[bytes, dict[str, str], int]] = []
+    round_scores: dict[int, float] = {}
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -2094,6 +2122,7 @@ def run_ultra_search(
             print('[Ultra] Adayın kimlik ölçümü geçersiz; doğrulanmış tur sayılmadı.', flush=True)
             continue
         completed += 1
+        round_scores[variation] = identity
         if identity > peak_identity:
             peak_identity = identity
             strongest = (image, headers, round_number)
@@ -2122,7 +2151,10 @@ def run_ultra_search(
     # evaluation always uses the untouched original target and reference
     # sources; it never feeds a generated face back as identity input.
     flux_outcome = "not-attempted" if ((caches or {}).get("nim_editors") or {}).get("retake-local/flux2-klein-4b") is not None else "not-configured"
+    flux_diagnostics = {}
+    finalist_attempts = 0
     if has_realism or has_nim:
+        finalist_attempts += 1
         try:
             if on_finalist is not None:
                 on_finalist()
@@ -2132,11 +2164,13 @@ def run_ultra_search(
                 lambda *_args, **_kwargs: None, caches
             )
             flux_outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
+            flux_diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
             upgraded_identity = score_from_headers(upgraded_headers)
             if (upgraded_identity is not None
                     and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):
                 best_result, best_headers = upgraded_image, upgraded_headers
+                peak_identity = max(peak_identity, upgraded_identity)
                 print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
             else:
                 if flux_outcome == "accepted":
@@ -2148,6 +2182,41 @@ def run_ultra_search(
                 flux_outcome = "finalist-error"
             print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
 
+    # An under-target result deserves a bounded second search, not lower
+    # quality gates. Only local editors are used on extra finalists; avoid
+    # repeating the expensive multi-render diffusion pipeline.
+    extra_started = clock()
+    if has_nim and needs_extra_finalist(best_headers):
+        for variation in choose_extra_variations(round_scores, best_round):
+            if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
+                break
+            finalist_attempts += 1
+            try:
+                if on_finalist is not None:
+                    on_finalist()
+                candidate_image, candidate_headers = process_swap(
+                    facefusion_dir, pixel_boost, enhancer_enabled,
+                    with_variation(parsed, variation), lambda *_a, **_k: None,
+                    {**caches, "realism": None}
+                )
+                candidate_score = score_from_headers(candidate_headers)
+                if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
+                    continue
+                if candidate_score >= peak_identity - ULTRA_REALISM_TIE_LOSS and prefer_ultra_candidate(candidate_headers, best_headers):
+                    best_result, best_headers = candidate_image, candidate_headers
+                    best_round = ULTRA_VARIATIONS.index(variation) + 1
+                    peak_identity = max(peak_identity, candidate_score)
+                    flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
+                    flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                elif flux_outcome != "accepted":
+                    flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
+                    if flux_outcome == "accepted":
+                        flux_outcome = "finalist-not-selected"
+                    flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                if collect_finalists:
+                    finalists = retain_judge_finalists(finalists, (candidate_image, candidate_headers, ULTRA_VARIATIONS.index(variation) + 1), peak_identity)
+            except Exception as error:
+                print(f"[Ultra] Ek finalist atlandı: {type(error).__name__}", flush=True)
     judge_result = judge_headers("off" if judge is None else "not-consented")
     if collect_finalists:
         pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
@@ -2167,7 +2236,10 @@ def run_ultra_search(
                 else:
                     outcome = "switched"
                     best_result, best_headers, best_round = pool[pick]
-                    if flux_outcome == "accepted":
+                    if best_headers.get("X-Retake-NIM-Editor") == "retake-local/flux2-klein-4b":
+                        flux_outcome = "accepted"
+                        flux_diagnostics = {key: value for key, value in best_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                    elif flux_outcome == "accepted":
                         flux_outcome = "finalist-not-selected"
                 judge_result = judge_headers(outcome, len(pool), verdict)
                 print(
@@ -2177,7 +2249,7 @@ def run_ultra_search(
                 )
             except Exception as error:
                 # The jury is advisory: never lose a verified local result.
-                judge_result = judge_headers("error", len(pool))
+                judge_result = judge_headers("error", len(pool), error=error)
                 print(f"[NVIDIA jüri] Atlandı, yerel seçim korundu: {error}", flush=True)
     finalists = []
 
@@ -2193,8 +2265,14 @@ def run_ultra_search(
     if on_hold is not None:
         on_hold(0.0)
 
+    target = identity_aspiration(best_headers)
+    gain = identity_gain(best_headers)
     final = {
         **best_headers,
+        **flux_diagnostics,
+        "X-Retake-Finalist-Attempts": str(finalist_attempts),
+        "X-Retake-Identity-Aspiration": "" if target is None else f"{target:.4f}",
+        "X-Retake-Identity-Gain": "" if gain is None else f"{gain:.4f}",
         **judge_result,
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
@@ -2448,9 +2526,10 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
-            "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
+            "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
+            "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
-            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, "
+            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
@@ -2508,6 +2587,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
+            "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,

@@ -102,6 +102,9 @@ export function describeFluxStatus(value) {
     "accepted": "FLUX.2 · finalde kullanıldı",
     "quality-rejected": "FLUX.2 · doku kontrolünde elendi",
     "identity-or-detail-rejected": "FLUX.2 · kimlik veya detay kazanımı yetersiz",
+    "identity-loss": "FLUX.2 · kimlik kaybı nedeniyle elendi",
+    "identity-unmeasured": "FLUX.2 · kimlik ölçümü doğrulanamadı",
+    "detail-gain-insufficient": "FLUX.2 · ek doku kazanımı yetersiz",
     "candidate-not-selected": "FLUX.2 · başka aday seçildi",
     "finalist-not-selected": "FLUX.2 · önceki doğrulanmış sonuç korundu",
     "worker-error": "FLUX.2 · yerel düzenleme hatası",
@@ -124,4 +127,41 @@ export function describeNvidiaJudge(outcome, votes = null, agreement = null) {
     "error": "NVIDIA jürisine ulaşılamadı; yerel seçim korundu",
     "single-finalist": "NVIDIA jürisi: kimliği eşit ikinci aday çıkmadı"
   })[outcome] || "";
+}
+
+
+function readFinite(value) {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+export function describeAdaptiveQuality(after, before, target, attempts) {
+  const a = parseSimilarity(after), b = parseSimilarity(before), t = parseSimilarity(target);
+  if (a === null || t === null) return "";
+  const gain = b === null ? null : a-b;
+  const format = n => (n*100).toFixed(1).replace(".", ",");
+  return [
+    a >= t-.001 ? "profil arama hedefi karşılandı" : "profil arama hedefi karşılanamadı",
+    "hedef "+format(t),
+    gain === null ? "" : "kimlik puanı farkı "+(gain>=0?"+":"")+format(gain),
+    Number.isInteger(attempts) && attempts>0 ? attempts+" finalist denemesi" : ""
+  ].filter(Boolean).join(" · ");
+}
+export function describeFluxMetrics(identityDelta, detailDelta, strength) {
+  const i=readFinite(identityDelta), d=readFinite(detailDelta), s=readFinite(strength);
+  const fmt=n=>(n>=0?"+":"")+(n*100).toFixed(1).replace(".",",");
+  return [
+    i!==null && Math.abs(i)<=2 ? "FLUX kimlik farkı "+fmt(i) : "",
+    d!==null && Math.abs(d)<=1 ? "doku puanı farkı "+fmt(d) : "",
+    s!==null && s>0 && s<=.5 ? "karışım %"+Math.round(s*100) : ""
+  ].filter(Boolean).join(" · ");
+}
+export function describeJudgeError(code) {
+  if (/^http-[45][0-9]{2}$/.test(code)) {
+    const status=Number(code.slice(5));
+    if (status===401 || status===403) return "jüri proje yetkilendirmesi reddedildi (HTTP "+status+")";
+    if (status===429) return "jüri kota/hız sınırı (HTTP 429)";
+    return "jüri sunucu yanıtı HTTP "+status;
+  }
+  return ({tls:"jüri TLS sertifika doğrulama sorunu",timeout:"jüri zaman aşımı",network:"jüri ağ bağlantısı sorunu","payload-too-large":"jüri kırpım boyutu sınırı"})[code] || "";
 }

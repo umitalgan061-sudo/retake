@@ -110,3 +110,18 @@ export function describeFluxStatus(value) {
     "not-configured": "FLUX.2 · yapılandırılmadı"
   })[value] || "";
 }
+
+// NVIDIA görsel jürisi (Hafize üzerinden) yalnız kimliği eşit finalistler arasında seçer.
+// Bu bir fotoğraf gerçekliği oylamasıdır; kimlik veya gerçeklik yüzdesi değildir.
+export function describeNvidiaJudge(outcome, votes = null, agreement = null) {
+  const count = Number.isInteger(votes) && votes > 0 ? votes : null;
+  const share = Number.isFinite(agreement) && agreement > 0 && agreement <= 1 ? Math.round(agreement * 100) : null;
+  const detail = count && share !== null ? ` (${count} oy, %${share} uzlaşı)` : "";
+  return ({
+    "switched": "NVIDIA jürisi daha doğal görünen finalisti seçti" + detail,
+    "kept": "NVIDIA jürisi yerel seçimi onayladı" + detail,
+    "abstain": "NVIDIA jürisi kararsız kaldı; yerel seçim korundu",
+    "error": "NVIDIA jürisine ulaşılamadı; yerel seçim korundu",
+    "single-finalist": "NVIDIA jürisi: kimliği eşit ikinci aday çıkmadı"
+  })[outcome] || "";
+}

@@ -13,7 +13,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - Tüm geçerli referanslardan ağırlıklı kimlik gömmesi ortalaması ve ağırlıklı hizalanmış piksel görünüm profili oluşturulur.
 - Profilin kırpılmış referansları ve hizalanmış görünüm görseli tarayıcı IndexedDB alanında cihazda saklanır; aynı referans kümesiyle sayfa yenilendiğinde tekrar hizalama yapılmaz.
 - AlphaFace geçişi tüm referanslardan ağırlıklı kimlik ortalaması alır; UniFace geçişi 25 fotoğrafın tamamından oluşan tek hizalı görünüm profiliyle çalışır.
-- RTX GPU üzerinde CUDA ile çıkarım; NVIDIA hosted API, Firebase Functions veya ücretli inference API kullanılmaz.
+- RTX GPU üzerinde CUDA ile çıkarım; yüzü üreten hiçbir adım NVIDIA hosted API, Firebase Functions veya ücretli inference API kullanmaz. İsteğe bağlı **NVIDIA görsel jürisi** yalnız kimliği eşit finalistler arasında seçim yapar (aşağıya bak).
 - Retake, tek yüz sonucu orijinal fotoğrafa maskeli olarak birleştirir ve maske dışındaki pikseller için bütünlük kontrolü yapar.
 - Yerel FaceFusion servisi yalnızca `127.0.0.1:8765` üzerinde dinler.
 - FaceFusion XSeg occlusion + BiSeNet region parser maskeleri iki üretim geçişinde de aktiftir; gözlük sınıfı değiştirme maskesinin dışında tutulur.
@@ -41,6 +41,26 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 - Son PNG, birleştirmenin ve kafa oturtmanın dokunduğu alanı kapsayan alfa matı taşır. Tarayıcı bu matı kullanarak yalnızca o alanı orijinal fotoğrafa uygular; alfa 0 olan her piksel bayt bayt korunur.
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
+
+### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
+
+Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:
+
+- Ultra, ArcFace eşitlik bandındaki (en iyi skordan en çok 0,002 düşük) ve bölgesel ayrıntı kapısını geçmiş adayları saklar. Yerel kazanan ve en güçlü 3 eşdeğer aday, yüz çevresi bağlamıyla 512 px JPEG kırpım olarak Hafize'nin `/api/project-ai/retake/vision-judge` ucuna gider.
+- Hafize, NVIDIA anahtarını kendisi tutar; `nemotron-3.5-super-vl`, `llama-3.2-11b-vision` ve `nemotron-3-nano-omni` modellerine adayları iki farklı sırayla gösterir (konum yanlılığı dengelenir). Modeller dikiş/hale, ten ve ışık uyumsuzluğu, mumsu cilt, bozuk göz/diş, çarpıklık ve netlik farkına puan verir; kişiyi tanıması istenmez.
+- En az 2 geçerli oy, ⅔ uzlaşı ve belirgin puan farkı yoksa jüri karar vermez; motor da bu eşikleri yerelde yeniden uygular. Hata, zaman aşımı veya kararsızlıkta yerel seçim korunur. Jüri piksel üretmez, kimlik kapısını aşamaz.
+- Varsayılan kapalıdır. Motor yapılandırılmışsa sitede **NVIDIA görsel jürisi** kutusu görünür; kutu açıkken her işlemden önceki onay penceresi neyin nereye gittiğini ayrıca yazar. Sonuç rozeti gerçek sonucu gösterir: "daha doğal görünen finalisti seçti", "yerel seçimi onayladı", "kararsız kaldı" veya "ulaşılamadı".
+- Jüri 7 dakikalık Ultra süresinin içinde çalışır; GPU araması süreyi zaten doldurduysa en çok ~75 sn ekler.
+
+Kurulum (bir kez, PowerShell, Retake klasöründe):
+
+```powershell
+.\tools\setup_hafize_judge.ps1
+```
+
+Betik rastgele bir proje jetonu üretir, ham jetonu yalnız `%USERPROFILE%\.retake\hafize-project-token` dosyasında (yalnız senin kullanıcın okuyabilir) saklar ve Hafize için `{"retake":"<sha256>"}` özetini verir. Bu özeti Hafize deposunda `HAFIZE_PROJECT_AI_TOKEN_HASHES` GitHub Secret'ı olarak ekle ve Hafize'nin Cloud Run dağıtım iş akışını yeniden çalıştır. Sonra Retake motorunu yeniden başlat; `/health` içinde `nvidia_judge: "configured"` görünür. Kontrol: `.\tools\setup_hafize_judge.ps1 -Check`. Kapatmak: `-Disable` veya `RETAKE_NVIDIA_JUDGE=off`. Farklı Hafize adresi için `RETAKE_HAFIZE_JUDGE_URL` yalnız `hafize-ua.web.app`, `hafize-free.onrender.com` veya `*.run.app` üzerindeki aynı yolu kabul eder.
+
+Neden NVIDIA'nın görüntü düzenleme modelleri (FLUX.2 Klein, FLUX.1 Kontext, Qwen-Image-Edit) yüzü üretmek için kullanılmıyor: ücretsiz barındırılan uçlar düzenleme modunda yalnız NVIDIA'nın önceden tanımlı örnek görsellerini kabul ediyor, kişisel fotoğraf yüklenemiyor; yerel NIM konteynerleri ise 48–80 GB VRAM istiyor (bkz. [docs/NVIDIA_SETUP.md](docs/NVIDIA_SETUP.md)).
 
 ## Windows kurulumu
 

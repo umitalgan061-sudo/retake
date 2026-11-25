@@ -110,3 +110,12 @@ class SourcePoolExplorationTests(unittest.TestCase):
     def test_missing_alternatives_do_not_override_a_good_pool(self):
         from tools.identity_selection import choose_identity_pool
         self.assertEqual(choose_identity_pool([None,.81,.65],7),1)
+
+    def test_texture_variants_do_not_reuse_excluded_reference(self):
+        from tools.identity_selection import select_texture_reference
+        weights=[1]*25
+        report={"outlier_indices":[24],"reference_median_similarities":[.50+i*.01 for i in range(25)]}
+        poses=[i*.01 for i in range(25)]
+        choices={select_texture_reference(weights,report,poses,excluded_index=7,variation=i)
+                 for i in (0,3,7,11,15,19,23)}
+        self.assertEqual(choices,{4,5,6})

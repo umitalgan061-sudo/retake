@@ -86,6 +86,18 @@ Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (
 - Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
 - Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
 
+### İnce bölgeler: göz, kirpik, kaş, dudak, burun ucu, diş, göz ışığı ve göz akı (v24)
+
+Yüz genelindeki doku eşleştirmesi tek bir keskinlik oranı kullanır: yanakları keskinleştirirken gözler yumuşak kalabilir. Bir yüz değişiminin "yapay" görünmesinin en sık nedeni de tam bu küçük yerlerdir — kirpik ve göz kapağı çizgisi silinir, kaş kılı mumlaşır, dudak çizgileri kaybolur, gözbebeğindeki ışık yansıması (catchlight) söner, göz akı griye/sarıya kayar. Motor artık her adayda, tarayıcının 478 noktalı yüz ağıyla bu bölgeleri tek tek ölçer (`tools/fine_features.py`):
+
+- **Ölçüm:** Sağ/sol göz (kirpik ve kapak kıvrımı dahil), sağ/sol kaş, dudaklar, burun ucu ve ağız açıksa dişler için ince (kirpik, kıl, gözenek) ve orta (kapak kıvrımı, dudak çizgisi) frekans enerjisi orijinal fotoğrafla karşılaştırılır. Baş oranı ve çene uyarlaması özellikleri birkaç piksel kaydırabildiği için konum faz korelasyonuyla yeniden hizalanır.
+- **Yumuşamış bölge:** Sonucun *kendi* ayrıntısı sınırlı bir kazançla geri kazandırılır (en çok 2,2×). Hedef fotoğraftan doku kopyalanmaz; hedef kişinin özellikleri yeni yüze sızmaz.
+- **Aşırı keskin bölge** (hale, çınlama): fotoğrafın odak düzeyine yumuşatılır.
+- **Sönmüş göz ışığı:** Orijinal fotoğrafın iris içindeki speküler yansıması (sahnenin ışık kaynağı, kimlik değil) kaydırılmış irise geri konur. Kapalı gözlere dokunulmaz.
+- **Göz akı tonu:** Gri, sarı veya patlamış göz akı, aynı ışık altındaki fotoğrafın kendi göz akına doğru sınırlı bir Lab kaymasıyla çekilir; iris boyanmaz.
+- **Doğrulama:** İyileştirme yalnız ArcFace kimliği en çok 0,003 düşerse, bölgesel ayrıntı kapısı geçerse ve ince bölgeler ölçülebilir biçimde fotoğrafa yaklaşırsa (veya göz ışığı/göz akı düzeldiyse) kalır; aksi halde doğrulanmış sonuç aynen korunur. Maskenin dışındaki tek bir piksel bile değişmez.
+- Sonuç rozeti ne yapıldığını yazar ("İnce bölgeler iyileştirildi (fotoğrafa göre ayrıntı: sağ göz 0,61→0,97, …) · göz ışığı 1/2 gözde geri getirildi"). Yanıt başlıkları: `X-Retake-Fine-Features`, `X-Retake-Fine-Detail`, `X-Retake-Catchlights`, `X-Retake-Sclera`. Yüz ağı yoksa (`no-mesh`) adım atlanır.
+
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
 
 Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:

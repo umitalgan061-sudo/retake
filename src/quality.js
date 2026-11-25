@@ -213,3 +213,49 @@ export function describeUltraDepth(depth, refinements = "", realismFinalists = n
   }
   return parts.join(" · ");
 }
+
+// Finest features (engine v24+): eyes, brows, lips, nose tip, teeth and
+// catchlights, each measured against the photo on the target mesh.
+const FINE_FEATURE_LABELS = Object.freeze({
+  eye_r: "sağ göz", eye_l: "sol göz", brow_r: "sağ kaş", brow_l: "sol kaş",
+  lips: "dudak", nose_tip: "burun ucu", mouth_inner: "dişler"
+});
+
+export function parseFineDetail(value) {
+  if (typeof value !== "string" || !value) return [];
+  return value.split(",").map((part) => {
+    const match = /^([a-z_]+):(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)$/.exec(part.trim());
+    if (!match || !Object.hasOwn(FINE_FEATURE_LABELS, match[1])) return null;
+    const before = Number(match[2]);
+    const after = Number(match[3]);
+    return Number.isFinite(before) && Number.isFinite(after) && before <= 10 && after <= 10
+      ? { name: match[1], label: FINE_FEATURE_LABELS[match[1]], before, after }
+      : null;
+  }).filter(Boolean);
+}
+
+function decimal(value) {
+  return value.toFixed(2).replace(".", ",");
+}
+
+export function describeFineFeatures(decision, detail = "", catchlights = "", sclera = "") {
+  const lights = /^(\d+)\/(\d+)$/.exec(typeof catchlights === "string" ? catchlights : "");
+  const restoredLights = lights ? Number(lights[1]) : 0;
+  const whites = /^(\d+)\/(\d+)$/.exec(typeof sclera === "string" ? sclera : "");
+  const correctedWhites = whites ? Number(whites[1]) : 0;
+  if (decision === "applied") {
+    const changed = parseFineDetail(detail)
+      .filter((item) => Math.abs(item.after - item.before) >= 0.02)
+      .slice(0, 4)
+      .map((item) => `${item.label} ${decimal(item.before)}→${decimal(item.after)}`);
+    const parts = ["İnce bölgeler iyileştirildi" + (changed.length ? ` (fotoğrafa göre ayrıntı: ${changed.join(", ")})` : "")];
+    if (restoredLights > 0) parts.push(`göz ışığı ${restoredLights}/${lights[2]} gözde geri getirildi`);
+    if (correctedWhites > 0) parts.push(`göz akı tonu ${correctedWhites}/${whites[2]} gözde fotoğrafın ışığına uyarlandı`);
+    return parts.join(" · ");
+  }
+  if (decision === "unchanged") return "göz, kaş ve dudak ayrıntısı fotoğrafla uyumlu";
+  if (decision === "identity-loss") return "ince bölge iyileştirmesi kimliği korumadığı için uygulanmadı";
+  if (decision === "detail-gate") return "ince bölge adayı ayrıntı kontrolünü geçemedi";
+  if (decision === "no-gain") return "ince bölge düzeltmesi ölçülebilir kazanç sağlamadı; sonuç korundu";
+  return "";
+}

@@ -285,3 +285,13 @@ class SafeJudgeDiagnosticsTest(unittest.TestCase):
         self.assertEqual(nj.judge_headers("error",2,error=nj.JudgeError("secret","http-401"))["X-Retake-NVIDIA-Judge-Error"],"http-401")
         self.assertEqual(nj.judge_headers("error",2,error=nj.JudgeError("secret","private token"))["X-Retake-NVIDIA-Judge-Error"],"unavailable")
         self.assertGreater(nj.TIMEOUT_SECONDS,120)
+
+
+class JudgeReasonTest(unittest.TestCase):
+    def test_safe_reason_survives_transport(self):
+        verdict = nj._normalize_verdict({"decision":"abstain","winner":None,"votes":1,"agreement":0,"reason":"NOT_ENOUGH_VOTES"},2)
+        self.assertEqual(nj.judge_headers("abstain",2,verdict)["X-Retake-NVIDIA-Judge-Reason"],"NOT_ENOUGH_VOTES")
+        error = nj.JudgeError("private message","http-502","PROJECT_AI_UPSTREAM_FAILED")
+        self.assertEqual(nj.judge_headers("error",2,error=error)["X-Retake-NVIDIA-Judge-Reason"],"PROJECT_AI_UPSTREAM_FAILED")
+        error = nj.JudgeError("private message","http-502","secret\nheader")
+        self.assertNotIn("X-Retake-NVIDIA-Judge-Reason",nj.judge_headers("error",2,error=error))

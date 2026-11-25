@@ -58,3 +58,23 @@ $env:RETAKE_NIM_EDITORS = "retake-local/flux2-klein-4b=8004"
 ```
 
 `http://127.0.0.1:8004/v1/health/ready` gerçek sentetik testten sonra JSON kanıtı döndürür. Ayrı model etiketi resmî NIM ile karıştırılmaz. Yalnız hedef ve en fazla iki yerel yüz referansı kullanılır; veri URL dışında uzak fotoğraf URL'si kabul edilmez. İsteğe bağlı aday mevcut alfa maske, ArcFace ve doku kontrollerini geçmezse FaceFusion sonucu korunur. Yüz düzeltme, 25 referans ve Ultra 420 saniye alt sınırı değişmez. Gerçek cihaz ve kişisel A/B fotoğraf testi yapılmadan kurulum başarılı/kalite artışı olarak raporlanamaz.
+
+
+### Windows: FLUX as an on-demand managed worker (no extra PowerShell window)
+
+After completing the existing local model download, run in the Retake repository:
+
+    .\tools\setup_retake_flux2.ps1 -ProbeOnly -Offload sequential -MaxEdge 512 -EnableManaged
+
+This repeats the real synthetic CUDA edit and only on success writes an opt-in proof to
+~/.retake/flux2-managed.json. Uses the default existing retake-flux2-venv and
+retake-models/FLUX.2-klein-4B folders. No package install or download occurs.
+Start/restart the updated FaceFusion bridge (including its Windows logon task).
+Health reports managed_flux2=true when the local worker is configured, not when
+a real face result has been accepted. Only the best Ultra finalist tries FLUX.
+The worker loads locally, edits once, releases resources and exits before ArcFace
+checks the generated candidate. Timeout or failure falls back to the verified
+FaceFusion result. Existing mask/identity/detail gates remain unchanged.
+No FLUX HTTP listener, paid API, remote image transfer or permanently loaded
+23.7 GB model. Extra loading time is expected. To disable managed FLUX, delete
+only ~/.retake/flux2-managed.json while Retake is idle; model weights are retained.

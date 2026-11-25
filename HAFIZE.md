@@ -20,6 +20,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. Native iOS için Keychain; web uygulamasında gizli anahtar gerekiyorsa istemciye koymak yerine güvenli sunucu tarafı proxy gerekir.
 7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
 8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
+9. NVIDIA görsel jürisi (Hafize `/api/project-ai/retake/vision-judge`) yalnız danışmandır: piksel üretmez, yalnız ArcFace eşitlik bandındaki ve ayrıntı kapısını geçmiş en fazla 4 finalistin 512 px yüz kırpımını görür, yalnız kullanıcının işlem bazlı onayıyla çalışır; hata/kararsızlıkta yerel seçim korunur. Ham proje jetonu yalnız kullanıcının bilgisayarında, Hafize'de yalnız SHA-256 özeti tutulur. Hafize jetonu yoksa, kullanıcı isteğiyle (25 Kasım 2026) bilgisayardaki `NVIDIA_API_KEY` (ortam ya da git dışı `.env`) ile aynı kırpımlar yalnız NVIDIA'nın `integrate.api.nvidia.com` ucuna doğrudan gönderilebilir; aynı onay ve uzlaşı kuralları geçerlidir.
 
 ## Face-only generation contract
 

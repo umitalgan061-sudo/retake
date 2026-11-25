@@ -151,6 +151,10 @@
               <input id="realFaceToggle" type="checkbox">
               <span><strong>Fotoğraftan doku nakli (deneysel)</strong><small>Yüz, en uygun açılı fotoğrafından bükülerek alınır; bazı fotoğraflarda maske gibi durabilir</small></span>
             </label>
+            <label id="nvidiaJudgeRow" class="real-face-toggle" for="nvidiaJudgeToggle" hidden>
+              <input id="nvidiaJudgeToggle" type="checkbox" disabled>
+              <span><strong>NVIDIA görsel jürisi (Hafize üzerinden)</strong><small>Kimliği eşit en iyi 2–4 sonucun yüz kırpımları NVIDIA görsel modellerine gösterilir; jüri en doğal görüneni seçer, görseller saklanmaz</small></span>
+            </label>
             <button id="swapButton" class="primary-button" type="button" disabled>
               <span class="button-sparkle"><svg viewBox="0 0 24 24"><path d="m12 3 1.9 5.8L20 11l-6.1 2.2L12 19l-1.9-5.8L4 11l6.1-2.2L12 3Z"/><path d="m19 15 .9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z"/></svg></span>
               <span class="button-copy">Yüzümü uygula</span><span class="button-state">Hazırlanıyor</span>

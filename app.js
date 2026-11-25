@@ -43,6 +43,7 @@ import {
   measureFaceEdit,
   describeProfileHealth,
   describeFluxStatus,
+  describeNvidiaJudge,
   describeSimilarity,
   describeNaturalness,
   parseNaturalness,
@@ -104,6 +105,8 @@ const elements = {
   referenceProgress: $("#referenceProgress"),
   swapButton: $("#swapButton"),
   realFaceToggle: $("#realFaceToggle"),
+  nvidiaJudgeRow: $("#nvidiaJudgeRow"),
+  nvidiaJudgeToggle: $("#nvidiaJudgeToggle"),
   downloadButton: $("#downloadButton"),
   resultImage: $("#resultImage"),
   resultView: $("#resultView"),
@@ -305,6 +308,9 @@ async function checkFaceFusionStatus() {
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
         nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
+        // Only an engine with a Hafize project token or a local NVIDIA key may offer the jury.
+        nvidiaJudge: health.nvidia_judge === "configured",
+        nvidiaJudgeDirect: health.nvidia_judge_transport === "direct",
         finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
         message: health.final_face_edit_proof !== true
@@ -339,6 +345,16 @@ async function checkFaceFusionStatus() {
   elements.engineSummary.textContent = state.engine.remote
     ? (state.faceFusionStatus.configured ? "Eşleşti" : "Bağlanamadı")
     : "Bu bilgisayar";
+  if (elements.nvidiaJudgeRow) {
+    const judgeReady = Boolean(state.faceFusionStatus.configured && state.faceFusionStatus.nvidiaJudge);
+    elements.nvidiaJudgeRow.hidden = !judgeReady;
+    const judgeTitle = elements.nvidiaJudgeRow.querySelector("strong");
+    if (judgeTitle) {
+      judgeTitle.textContent = "NVIDIA görsel jürisi (" +
+        (state.faceFusionStatus.nvidiaJudgeDirect ? "doğrudan NVIDIA" : "Hafize üzerinden") + ")";
+    }
+    if (elements.nvidiaJudgeToggle) elements.nvidiaJudgeToggle.disabled = !judgeReady;
+  }
   if (state.faceFusionStatus.configured) {
     elements.engineTitle.textContent = "Yerel düzenleme hazır";
     elements.engineDescription.textContent = state.engine.remote
@@ -646,6 +662,7 @@ function selectResult(index) {
     describeNaturalness(item.naturalness),
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     describeFluxStatus(item.fluxStatus),
+    describeNvidiaJudge(item.nvidiaJudge, item.nvidiaJudgeVotes, item.nvidiaJudgeAgreement),
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
     item.detailGate.startsWith("failed:") ? "uyarı: bölgesel ayrıntı zayıf (" + ({eyes:"gözler",nose:"burun",mouth:"ağız",lower_face:"çene"}[item.detailGate.slice(7).split("-")[0]] || "yüz") + ")" : "",
@@ -674,6 +691,9 @@ function addResult(blob, label, scores = {}) {
     label,
     faceEdit: scores.faceEdit ?? null,
     nimEditor: scores.nimEditor || '',
+    nvidiaJudge: scores.nvidiaJudge || "",
+    nvidiaJudgeVotes: Number.isInteger(scores.nvidiaJudgeVotes) ? scores.nvidiaJudgeVotes : null,
+    nvidiaJudgeAgreement: Number.isFinite(scores.nvidiaJudgeAgreement) ? scores.nvidiaJudgeAgreement : null,
     fluxStatus: scores.fluxStatus || "",
     detailGate: scores.detailGate || "",
     photoBalance: scores.photoBalance === true,
@@ -1743,6 +1763,29 @@ function restoreRealFacePreference() {
   });
 }
 
+// NVIDIA visual jury (via Hafize): opt-in, off by default, and still confirmed
+// per job in the consent dialog because face crops leave this computer.
+const NVIDIA_JUDGE_STORAGE_KEY = "retake-nvidia-judge-v1";
+
+function isNvidiaJudgeEnabled() {
+  return Boolean(
+    state.faceFusionStatus?.nvidiaJudge && elements.nvidiaJudgeToggle &&
+    !elements.nvidiaJudgeToggle.disabled && elements.nvidiaJudgeToggle.checked
+  );
+}
+
+function restoreNvidiaJudgePreference() {
+  if (!elements.nvidiaJudgeToggle) return;
+  try {
+    elements.nvidiaJudgeToggle.checked = window.localStorage.getItem(NVIDIA_JUDGE_STORAGE_KEY) === "on";
+  } catch { /* storage unavailable: keep the default (off) */ }
+  elements.nvidiaJudgeToggle.addEventListener("change", () => {
+    try {
+      window.localStorage.setItem(NVIDIA_JUDGE_STORAGE_KEY, elements.nvidiaJudgeToggle.checked ? "on" : "off");
+    } catch { /* ignore */ }
+  });
+}
+
 // Real-photo face: the person's own reference photos closest in pose and
 // expression (up to three), with their 478-point meshes and the target's. The
 // engine warps each onto the target face and keeps the one that fits best, so
@@ -2030,11 +2073,17 @@ async function runFaceFusionEdit() {
     return;
   }
 
+  const useNvidiaJudge = isNvidiaJudgeEnabled();
+  const judgeNotice = useNvidiaJudge
+    ? " NVIDIA görsel jürisi açık: motor, kimliği eşit en fazla 4 sonuç adayının yüz kırpımını (en çok 512 px) " +
+      (state.faceFusionStatus?.nvidiaJudgeDirect ? "bilgisayarındaki NVIDIA anahtarıyla doğrudan" : "Hafize sunucun üzerinden") +
+      " NVIDIA'nın barındırılan görsel modellerine gönderir. Jüri yalnız bu adaylardan en doğal görüneni seçer; 25 referans ve tam fotoğraf gönderilmez."
+    : "";
   const consent = await showAppDialog({
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
-    message: state.engine.remote
+    message: (state.engine.remote
       ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
-      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.",
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.") + judgeNotice,
     confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
@@ -2087,6 +2136,7 @@ async function runFaceFusionEdit() {
     });
     const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
     if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
+    if (useNvidiaJudge) metadata.nvidiaJudge = true;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {
@@ -2128,6 +2178,9 @@ async function runFaceFusionEdit() {
     const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
       nimEditor: response.headers.get('X-Retake-NIM-Editor') || '',
+      nvidiaJudge: response.headers.get("X-Retake-NVIDIA-Judge") || "",
+      nvidiaJudgeVotes: Number.parseInt(response.headers.get("X-Retake-NVIDIA-Judge-Votes") || "", 10),
+      nvidiaJudgeAgreement: Number.parseFloat(response.headers.get("X-Retake-NVIDIA-Judge-Agreement") || ""),
       fluxStatus: response.headers.get("X-Retake-FLUX-Status") || "",
       detailGate: response.headers.get("X-Retake-Detail-Gate") || "",
       photoBalance: response.headers.get("X-Retake-Photo-Balance") === "on",
@@ -2294,6 +2347,7 @@ function initializeEngineSettings() {
   elements.compareRange.addEventListener("input", updateResultView);
   elements.strengthRange.addEventListener("input", updateResultView);
   restoreRealFacePreference();
+  restoreNvidiaJudgePreference();
   elements.shareButton.addEventListener("click", shareResult);
   elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
   // When the app comes back to the foreground (phone unlocked, tab restored)

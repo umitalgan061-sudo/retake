@@ -21,6 +21,10 @@ from typing import Any
 
 try:
     from .nim_photo_edit import configured_editors, candidate_from_editor
+    from .nvidia_judge import (
+        MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
+        judge_status, judge_transport, judged_winner
+    )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
@@ -34,6 +38,10 @@ try:
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
+    from nvidia_judge import (
+        MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
+        judge_status, judge_transport, judged_winner
+    )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
@@ -369,7 +377,12 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     exact_index = metadata.get('exactReferenceIndex')
     if exact_index is not None and (type(exact_index) is not int or not 0 <= exact_index < reference_count):
         raise ValueError('Birebir referans indeksi geçersiz.')
+    # Per-job opt-in: finalist face crops may go to NVIDIA only via Hafize.
+    nvidia_judge = metadata.get('nvidiaJudge', False)
+    if type(nvidia_judge) is not bool:
+        raise ValueError('NVIDIA jüri onayı true/false olmalı.')
     return {
+        'nvidiaJudge': nvidia_judge,
         'exactReferenceIndex': exact_index,
         "poseDistances": pose_distances,
         "targetLandmarks": target_landmarks,
@@ -2033,11 +2046,54 @@ def _swap_error(error: Exception) -> tuple[int, str]:
     return 500, f"Yerel Retake hibrit profil işlemi başarısız: {error}"
 
 
+# Near-ties kept in memory for the optional jury (PNG bytes, bounded).
+JUDGE_FINALIST_BUFFER = 6
+
+
+# Detail-gate outcomes that count as verified photographic detail; a soft
+# original has nothing to compare and is not a failure (see ultra_quality).
+DETAIL_GATE_OK = ("passed", "soft-original")
+
+
+def retain_judge_finalists(
+    finalists: list[tuple[bytes, dict[str, str], int]],
+    candidate: tuple[bytes, dict[str, str], int],
+    peak_identity: float,
+) -> list[tuple[bytes, dict[str, str], int]]:
+    """Keep only verified candidates inside the current ArcFace tie band."""
+    kept = [
+        item for item in [*finalists, candidate]
+        if (score := score_from_headers(item[1])) is not None
+        and score >= peak_identity - ULTRA_REALISM_TIE_LOSS
+        and item[1].get("X-Retake-Detail-Gate") in DETAIL_GATE_OK
+    ]
+    kept.sort(key=lambda item: (score_from_headers(item[1]) or -1.0, item[2] == candidate[2]), reverse=True)
+    return kept[:JUDGE_FINALIST_BUFFER]
+
+
+def judge_pool(
+    best_result: bytes, best_headers: dict[str, str], best_round: int,
+    finalists: list[tuple[bytes, dict[str, str], int]], peak_identity: float,
+) -> list[tuple[bytes, dict[str, str], int]]:
+    """Local winner first, then the strongest distinct near-ties (max 4)."""
+    pool = [(best_result, best_headers, best_round)]
+    for item in finalists:
+        score = score_from_headers(item[1])
+        if (
+            len(pool) >= JUDGE_MAX_CANDIDATES or item[2] == best_round or item[0] == best_result
+            or score is None or score < peak_identity - ULTRA_REALISM_TIE_LOSS
+            or item[1].get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK
+        ):
+            continue
+        pool.append(item)
+    return pool
+
+
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
     clock=None, sleeper=None, on_hold=None, on_finalist=None,
-    min_duration_seconds: float | None = None
+    min_duration_seconds: float | None = None, on_judge=None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
 
@@ -2064,6 +2120,12 @@ def run_ultra_search(
     has_realism = bool(caches and caches.get("realism"))
     has_nim = bool(caches and caches.get('nim_editors'))
     search_caches = {**caches, 'realism': None, 'nim_editors': None} if has_realism or has_nim else caches
+    # Optional NVIDIA jury (via Hafize): only with a configured judge AND the
+    # user's per-job consent. It may only choose among identity near-ties.
+    judge = (caches or {}).get("nvidia_judge")
+    judge_consent = bool(isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) and parsed[6].get("nvidiaJudge") is True)
+    collect_finalists = judge is not None and judge_consent
+    finalists: list[tuple[bytes, dict[str, str], int]] = []
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -2112,6 +2174,8 @@ def run_ultra_search(
                 f"ArcFace={score_from_headers(headers)}.",
                 flush=True
             )
+        if collect_finalists:
+            finalists = retain_judge_finalists(finalists, (image, headers, round_number), peak_identity)
 
     if best_result is None or best_headers is None:
         if errors:
@@ -2151,6 +2215,39 @@ def run_ultra_search(
                 flux_outcome = "finalist-error"
             print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
 
+    judge_result = judge_headers("off" if judge is None else "not-consented")
+    if collect_finalists:
+        pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
+        if len(pool) < 2:
+            judge_result = judge_headers("single-finalist", len(pool))
+        else:
+            if on_judge is not None:
+                on_judge()
+            try:
+                bounds = parsed[6]["faceBounds"]
+                verdict = judge([face_crop_jpeg(item[0], bounds) for item in pool])
+                pick = judged_winner(verdict, len(pool))
+                if pick is None:
+                    outcome = "abstain"
+                elif pick == 0:
+                    outcome = "kept"
+                else:
+                    outcome = "switched"
+                    best_result, best_headers, best_round = pool[pick]
+                    if flux_outcome == "accepted":
+                        flux_outcome = "finalist-not-selected"
+                judge_result = judge_headers(outcome, len(pool), verdict)
+                print(
+                    f"[NVIDIA jüri] {len(pool)} finalist; karar={verdict.get('decision')}, "
+                    f"oy={verdict.get('votes')}, uzlaşı={verdict.get('agreement')}; sonuç={outcome}.",
+                    flush=True
+                )
+            except Exception as error:
+                # The jury is advisory: never lose a verified local result.
+                judge_result = judge_headers("error", len(pool))
+                print(f"[NVIDIA jüri] Atlandı, yerel seçim korundu: {error}", flush=True)
+    finalists = []
+
     # Spend the available interval trying distinct variants; when the GPU
     # finishes them faster, honor the explicit seven-minute minimum without
     # pointlessly running the identical model again. Failed jobs return early.
@@ -2165,6 +2262,7 @@ def run_ultra_search(
 
     final = {
         **best_headers,
+        **judge_result,
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),
@@ -2233,6 +2331,12 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["step"] = job["total"] - 1
         job["stage_started"] = None
 
+    def judging() -> None:
+        route = "doğrudan NVIDIA" if judge_transport()[0] == "direct" else "Hafize"
+        job["stage"] = f"Ultra · NVIDIA görsel jürisi finalistleri karşılaştırıyor ({route})"
+        job["step"] = job["total"] - 1
+        job["stage_started"] = None
+
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
         if timings is not None and current not in job["skipped"] and job.get("stage_started"):
@@ -2267,9 +2371,10 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None),
-                "nim_editors": configured_editors() if getattr(server, "dynamic_editors", False) else getattr(server, "nim_editors", None)
+                "nim_editors": configured_editors() if getattr(server, "dynamic_editors", False) else getattr(server, "nim_editors", None),
+                "nvidia_judge": getattr(server, "judge_factory", build_judge)()
             },
-            on_hold=hold, on_finalist=finalist
+            on_hold=hold, on_finalist=finalist, on_judge=judging
         )
         close_stage(time.time())
         job["result"] = result
@@ -2412,7 +2517,9 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, "
-            "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate"
+            "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
+            "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
+            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2469,6 +2576,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
+            "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
+            "nvidia_judge_transport": judge_transport()[0],
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,
@@ -2721,6 +2830,17 @@ def main() -> int:
         flush=True
     )
     print("Servis yalnızca loopback adresini dinler.", flush=True)
+    transport, detail = judge_transport()
+    if transport == "direct":
+        print(f"NVIDIA görsel jürisi hazır: doğrudan NVIDIA (anahtar kaynağı: {detail}). "
+              "Yalnız arayüzde kutu işaretli işlerde, kimliği eşit finalistlerin yüz kırpımları gönderilir.", flush=True)
+    elif transport == "hafize":
+        print("NVIDIA görsel jürisi hazır: Hafize üzerinden.", flush=True)
+    elif transport == "invalid":
+        print(f"NVIDIA görsel jürisi devre dışı: {detail}", flush=True)
+    else:
+        print("NVIDIA görsel jürisi kapalı: NVIDIA_API_KEY (ortam ya da Retake klasöründeki .env) "
+              "veya Hafize jetonu yok.", flush=True)
     if server.pairing_token:  # type: ignore[attr-defined]
         print(
             "Telefon/PWA eşleştirmesi AÇIK. Bu bilgisayara bir HTTPS tünel aç "

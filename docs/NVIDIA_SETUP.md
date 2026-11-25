@@ -1,5 +1,14 @@
 # Retake yerel NVIDIA NIM görüntü düzenleyicileri
 
+## Ücretsiz barındırılan NVIDIA modelleri: neyi yapabilir, neyi yapamaz (25 Kasım 2026)
+
+- **Görsel jüri (bağlı):** Ücretsiz sohbet uçlarındaki görsel modeller özel görsel kabul eder. Retake bunları Hafize'nin `/api/project-ai/retake/vision-judge` ucu üzerinden yalnız Ultra finalistlerini karşılaştırmak için kullanır; ayrıntı README'deki "NVIDIA görsel jürisi" bölümünde.
+- **Barındırılan görüntü düzenleme (kullanılamaz):** `ai.api.nvidia.com/v1/genai/black-forest-labs/flux.2-klein-4b` API başvurusu, düzenleme modunda görselin `data:image/png;example_id,{0-3}` biçiminde olmasını ve yalnız önceden tanımlı örnek görsellerin desteklendiğini söyler; kişisel bir yüz yüklenemez. Bu yüzden yüzü NVIDIA bulutunda yeniden çizdirmek mümkün değil.
+- **Bilinçli olarak kullanılmayan:** `synthetic-video-detector` bir sentetik medya dedektörü; sonucu "dedektörü atlatma" hedefi gibi optimize etmek yanlış kullanım olur, Retake bunu yapmaz. Biyoloji, finans, konuşma ve otonom sürüş modelleri ile Blueprint'ler sabit fotoğraf düzenlemeye doğrudan katkı vermez.
+- Canlı NVIDIA çağrısıyla ölçüm bu sürümde yapılmadı; Hafize tarafı sahte NVIDIA sunucusuna karşı uçtan uca test edildi.
+- **Doğrudan yol (25 Kasım 2026, kullanıcı isteği):** Hafize jetonu yoksa ve bilgisayarda `NVIDIA_API_KEY` (ortam ya da Retake klasöründeki git dışı `.env`) varsa jüri `integrate.api.nvidia.com/v1/chat/completions`'a doğrudan gider: Nemotron 3.5 Super VL, Mistral Large 4, GLM 5.3 Flash paralel, her biri farklı sırayla bir oy; yerel ⅔ uzlaşı. Sahte HTTP ile test edildi; canlı doğrulama `python tools\nvidia_judge.py` ile kullanıcının bilgisayarında.
+
+
 Ana motor FaceFusion 3.9.2, CUDA, 25 fotoğraf, ArcFace ve yerel kompozisyondur. API anahtarını tarayıcıya koyma. Eski Cloudflare/hosted FLUX akışı devre dışıdır.
 
 Yeni isteğe bağlı finalist katmanı, NVIDIA'nın [resmî görüntü düzenleme API'sini](https://docs.nvidia.com/nim/visual-genai/latest/api/openai-image-editing.html) kullanır. Modeller ayrı yerel NIM konteynerinde kurulu ve hazır olmalıdır; otomatik GPU kurulumu veya ücretsiz hosted endpoint garantisi yoktur.
@@ -10,7 +19,8 @@ Yeni isteğe bağlı finalist katmanı, NVIDIA'nın [resmî görüntü düzenlem
 | FLUX 3 Image Klein / Base | Çoklu görselden ayrıntı | Yerel API adaptörü |
 | FLUX.2 Klein 4B | Daha hafif çoklu görsel düzenleme | Yerel API adaptörü |
 | FLUX.1 Kontext dev | Tek fotoğrafta fotogerçekçilik | Yerel API adaptörü |
-| Nemotron Super VL, Mistral Large 4, Step 5, Gemma 4 | İsteğe bağlı görsel kalite yorumu | Aday, henüz bağlı değil |
+| Nemotron 3.5 Super VL, Llama 3.2 11B Vision, Nemotron 3 Nano Omni | Finalist fotoğraf gerçekliği jürisi | **Bağlı:** Hafize backend'i üzerinden, ücretsiz barındırılan uç, isteğe bağlı ve onaylı |
+| Mistral Large 4, Step 5, GLM-5.3 Flash, Muse Glimmer | Ek jüri üyesi olabilir | Model kimliği ve görsel girdisi canlı doğrulanmadı; `HAFIZE_RETAKE_JUDGE_MODELS` ile eklenebilir |
 | Relighting, 3D Body Pose, Video Super Resolution | İleride video/ışık/poz işlemleri | Aday, henüz bağlı değil |
 
 NVIDIA'nın [kurulum rehberi](https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html) ve GPU destek matrisi üzerinden kendi donanımına uygun imajı, lisansı ve sürümü seç. Her servisi yalnız yerel 127.0.0.1 üzerinde ayrı porta bağla. Örnek, Qwen gerçekten 8001'de hazırsa PowerShell:

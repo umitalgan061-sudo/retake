@@ -98,3 +98,11 @@ test("self-test fidelity is shown only for a well-formed engine measurement", as
   assert.equal(describeSelfFidelity("ssim:0.9,deltaE:-1"), "");
   assert.equal(describeSelfFidelity("<script>"), "");
 });
+test("learned schedule badge names its evidence", async () => {
+  const {describeUltraSchedule} = await import("../src/quality.js");
+  assert.match(describeUltraSchedule("learned-fidelity", 9), /öz-testlerde.*\(9 ölçüm\)/);
+  assert.match(describeUltraSchedule("learned-proxy", 12), /\(12 tur\)/);
+  assert.equal(describeUltraSchedule("learned-proxy", null).includes("("), false);
+  assert.equal(describeUltraSchedule("default", 5), "");
+  assert.equal(describeUltraSchedule(undefined), "");
+});

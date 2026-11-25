@@ -255,7 +255,7 @@ def needs_extra_finalist(headers):
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS
 
-def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALISTS):
+def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALISTS, fallback=None):
     """Try a different verified variation, then a distinct geometry/weight.
 
     Only metadata is retained here; the next pass starts on the original.
@@ -272,7 +272,9 @@ def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALI
     choices = [variation for variation, _ in others[:count]]
     # If the time budget allowed only one original round, use one of the
     # different weight/geometry options that has not already been evaluated.
-    for variation in (3, 6, 2, 10, 7):
+    # A learned schedule supplies the next most promising untried variants.
+    untried = [v for v in (fallback or ()) if v in ULTRA_VARIATIONS] or [3, 6, 2, 10, 7]
+    for variation in untried:
         if len(choices) >= count:
             break
         if variation != winner and variation not in choices and variation not in round_scores:

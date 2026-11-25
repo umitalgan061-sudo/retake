@@ -21,6 +21,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
 8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
 9. NVIDIA görsel jürisi (Hafize `/api/project-ai/retake/vision-judge`) yalnız danışmandır: piksel üretmez, yalnız ArcFace eşitlik bandındaki ve ayrıntı kapısını geçmiş en fazla 4 finalistin 512 px yüz kırpımını görür, yalnız kullanıcının işlem bazlı onayıyla çalışır; hata/kararsızlıkta yerel seçim korunur. Ham proje jetonu yalnız kullanıcının bilgisayarında, Hafize'de yalnız SHA-256 özeti tutulur.
+10. Öğrenen Ultra yalnız varyantların deneme sırasını değiştirir; kimlik, ayrıntı, kenar ve tüm kabul kapıları aynen uygulanır. Öğrenme verisi yalnız sayıdır, bu bilgisayarda kalır, kişi/referans bankası başına ayrıdır. Öz-test (`selfTest`) hedef fotoğrafı tüm kimlik kaynaklarından çıkarır; öz-test ölçümü seçimde değil yalnız ölçüm ve sıralama öğrenmesinde kullanılır.
 
 ## Face-only generation contract
 

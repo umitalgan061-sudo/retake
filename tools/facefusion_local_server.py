@@ -21,13 +21,14 @@ from typing import Any
 
 try:
     from .nim_photo_edit import configured_editors, candidate_from_editor
+    from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
         judge_status, judged_winner
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
+    from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
@@ -42,13 +43,14 @@ try:
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
+    from ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
         judge_status, judged_winner
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
+    from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result
@@ -382,6 +384,10 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     exact_index = metadata.get('exactReferenceIndex')
     if exact_index is not None and (type(exact_index) is not int or not 0 <= exact_index < reference_count):
         raise ValueError('Birebir referans indeksi geçersiz.')
+    # Benchmark self-test: strict leave-one-out (needs the exact reference).
+    self_test = metadata.get('selfTest', False)
+    if type(self_test) is not bool or (self_test and exact_index is None):
+        raise ValueError('Öz-test yalnız referans bankasındaki bir hedefle ve true/false olarak istenebilir.')
     # Per-job opt-in: finalist face crops may go to NVIDIA only via Hafize.
     nvidia_judge = metadata.get('nvidiaJudge', False)
     if type(nvidia_judge) is not bool:
@@ -390,6 +396,7 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     if type(neck_harmonize) is not bool:
         raise ValueError('Boyun uyumu seçeneği true/false olmalı.')
     return {
+        'selfTest': self_test,
         'neckHarmonize': neck_harmonize,
         'nvidiaJudge': nvidia_judge,
         'exactReferenceIndex': exact_index,
@@ -1274,6 +1281,9 @@ def process_swap(
             # alternative so a duplicate target does not dominate the search.
             independent = tuple(i for i in source_plans[0][1] if i != exact_index)
             source_plans.insert(1, ('independent-24', independent))
+            if metadata.get('selfTest') is True:
+                # Benchmark: the answer must not be among the sources.
+                source_plans = strict_self_test_pools(source_plans, exact_index)
         weighted_identity_paths = [reference_paths[i] for i in source_plans[0][1]]
         identity_output = temp_dir / "retake-identity-alpha.png"
         appearance_output = temp_dir / "retake-appearance-uniface.png"
@@ -2126,13 +2136,40 @@ def run_ultra_search(
     finalists: list[tuple[bytes, dict[str, str], int]] = []
     round_scores: dict[int, float] = {}
 
-    for index, variation in enumerate(ULTRA_VARIATIONS):
+    # Learned Ultra: only a few GPU rounds fit in the window, so run the
+    # variants that measured most natural for this person first (UCB keeps
+    # exploring untried ones). Gates and selection rules are unchanged.
+    calibration = (caches or {}).get("calibration")
+    metadata = parsed[6] if isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) else {}
+    bank = ""
+    schedule, schedule_mode, schedule_samples = list(ULTRA_VARIATIONS), "default", 0
+    if calibration is not None:
+        try:
+            bank = bank_key(parsed[1], metadata.get("referenceWeights"))
+            schedule, schedule_mode, schedule_samples = calibration.schedule(bank, ULTRA_VARIATIONS)
+        except Exception as error:  # learning is advisory
+            schedule, schedule_mode, schedule_samples = list(ULTRA_VARIATIONS), "default", 0
+            print(f"[Ultra] Öğrenilmiş sıra kullanılamadı: {error}", flush=True)
+    if schedule_mode != "default":
+        print(f"[Ultra] Öğrenilmiş sıra ({schedule_mode}, {schedule_samples} ölçüm): {schedule[:6]}…", flush=True)
+    observations: list[tuple[int, dict[str, str]]] = []
+
+    def learn() -> None:
+        if calibration is None or not bank or not observations:
+            return
+        try:
+            calibration.record(bank, observations, self_test=type(metadata.get("exactReferenceIndex")) is int)
+        except Exception as error:
+            print(f"[Ultra] Öğrenme kaydı atlandı: {error}", flush=True)
+
+    for index, variation in enumerate(schedule):
         if not should_continue_ultra(completed, clock() - started):
             break
-        round_number = index + 1
+        # A round is identified by its variant (variant + 1), whatever the order.
+        round_number = ULTRA_VARIATIONS.index(variation) + 1
         attempted += 1
         print(
-            f"[Ultra] Tur {round_number}/{len(ULTRA_VARIATIONS)}: "
+            f"[Ultra] Tur {index + 1}/{len(schedule)}: "
             f"orijinal hedef + 25 referans; varyasyon {variation}.",
             flush=True
         )
@@ -2156,6 +2193,7 @@ def run_ultra_search(
             continue
         completed += 1
         round_scores[variation] = identity
+        observations.append((variation, headers))
         if identity > peak_identity:
             peak_identity = identity
             strongest = (image, headers, round_number)
@@ -2175,6 +2213,7 @@ def run_ultra_search(
             finalists = retain_judge_finalists(finalists, (image, headers, round_number), peak_identity)
 
     if best_result is None or best_headers is None:
+        learn()
         if errors:
             # Preserve the actionable HTTP status and diagnosis: no-op,
             # invalid parameters and identity-conflict errors are distinct.
@@ -2224,7 +2263,9 @@ def run_ultra_search(
     extra_started = clock()
     skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
     if needs_extra_finalist(best_headers):
-        for variation in choose_extra_variations(round_scores, best_round):
+        for variation in choose_extra_variations(
+            round_scores, best_round, fallback=[v for v in schedule if v not in round_scores]
+        ):
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
                 break
             finalist_attempts += 1
@@ -2245,6 +2286,7 @@ def run_ultra_search(
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
                     continue
+                observations.append((variation, candidate_headers))
                 if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
@@ -2330,7 +2372,11 @@ def run_ultra_search(
         "X-Retake-Ultra-Winner": str(best_round),
         "X-Retake-Ultra-Elapsed": str(round(clock() - started, 1)),
         "X-Retake-Ultra-Realism-Policy": "finalist-only" if has_realism else "not-installed",
+        "X-Retake-Ultra-Schedule": schedule_mode,
+        "X-Retake-Ultra-Order": ",".join(str(v) for v in schedule[:8]),
+        "X-Retake-Calibration-Samples": str(schedule_samples),
     }
+    learn()
     print(
         f"[Ultra] Sonuç: {completed} doğrulanmış tur, kazanan {best_round}. tur; "
         f"benzerlik={score_from_headers(best_headers)}; süre {final['X-Retake-Ultra-Elapsed']} sn.",
@@ -2430,7 +2476,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "shading": getattr(server, "shading_strength", None),
                 "realism": getattr(server, "realism", None),
                 "nim_editors": configured_editors() if getattr(server, "dynamic_editors", False) else getattr(server, "nim_editors", None),
-                "nvidia_judge": getattr(server, "judge_factory", build_judge)()
+                "nvidia_judge": getattr(server, "judge_factory", build_judge)(),
+                "calibration": getattr(server, "calibration", None)
             },
             on_hold=hold, on_finalist=finalist, on_judge=judging
         )
@@ -2567,6 +2614,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
             "X-Retake-Identity-Photo-Level, X-Retake-Identity-Sufficient, X-Retake-Self-Fidelity, "
+            "X-Retake-Ultra-Schedule, X-Retake-Ultra-Order, X-Retake-Calibration-Samples, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
@@ -2615,6 +2663,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/jobs/"):
             self._send_job(self.path[len("/api/jobs/"):])
             return
+        if self.path == "/api/calibration":
+            store = getattr(self.server, "calibration", None)
+            # Numbers only: per-variant counts and means, no images.
+            self._send_json(200, {"ok": True, **(store.summary() if store else {"enabled": False, "banks": {}})})
+            return
         if self.path != "/health":
             self._send_json(404, {"ok": False, "error": "Uç nokta bulunamadı."})
             return
@@ -2636,6 +2689,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
+            "ultra_learning": bool(getattr(getattr(self.server, "calibration", None), "enabled", False)),
+            "self_test_benchmark": True,
             "neck_harmonization": True,
             "regional_edit_evidence": True,
             "adaptive_finalists": True,
@@ -2866,6 +2921,10 @@ def main() -> int:
     server.identity_cache = IdentityReportCache()  # type: ignore[attr-defined]
     server.pass_cache = PassCache()  # type: ignore[attr-defined]
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
+    server.calibration = CalibrationStore(  # type: ignore[attr-defined]
+        signature=schedule_signature(HYBRID_PROFILE_VERSION, ULTRA_VARIATIONS),
+        enabled=os.environ.get("RETAKE_ULTRA_LEARNING", "").strip().lower() not in {"0", "off", "false", "no"},
+    )
     if args.shading_strength is not None and not 0.0 <= args.shading_strength <= 1.2:
         print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
         return 2

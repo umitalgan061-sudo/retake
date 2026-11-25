@@ -58,6 +58,17 @@ Aynı kural tek bir işlemin içinde de geçerli: 256 px geçiş zaten bu düzey
 
 Neden: Kendi referans fotoğrafınla yapılan bir testte sonuç ArcFace'te 0,85'ten 0,91'e çıktı ama gözler bulanık, burun delikleri lekeli, cilt mumsu göründü. Yüksek puan, gerçek bir fotoğrafından daha "sen" olduğu anlamına gelmiyordu.
 
+### Öğrenen Ultra ve öz-test kıyaslaması (v22.3)
+
+Bir GPU turu birkaç dakika sürdüğü için 7 dakikalık Ultra penceresinde 24 varyanttan genellikle yalnız ilk birkaçı çalışır; eskiden sabit sıra hangi ayarların hiç denendiğini fiilen belirliyordu. Artık motor bu bilgisayarda, her referans bankası (kişi) için ayrı olarak, hangi varyantların en doğal sonucu verdiğini öğrenir (`tools/ultra_calibration.py`, `%USERPROFILE%\.retake\ultra-calibration.json`):
+
+- **Altın ölçü — öz-testler:** Hedef 25 referansından biriyse orijinal yüz doğru cevaptır; her tur SSIM ve ΔE ile ölçülür, doğallık = SSIM − 0,02·ΔE (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,94; 25 Kasım'daki yapay sonuç ≈ 0,55).
+- **Vekil ölçü — normal işler:** Korunan bölgesel fotoğraf ayrıntısı (128 px pekiştirmeye küçük ceza). Yalnız yeterli öz-test yokken kullanılır.
+- **Sıra:** Ortalama + keşif payı (UCB). Kanıtlanmış varyantlar önce çalışır, hiç denenmemiş olanlar da işler arasında denenmeye devam eder. Ek finalistler de bu sıradan seçilir. Kimlik, ayrıntı ve diğer tüm kapılar aynen geçerli; öğrenme yalnız *hangi sırayla denendiğini* değiştirir.
+- Yalnız sayılar saklanır (görsel, gömme vektörü yok). `RETAKE_ULTRA_LEARNING=off` kapatır; dosyayı silmek sıfırlar; varyantların anlamı değişirse (profil sürümü) öğrenme kendiliğinden sıfırlanır. Motorun `/api/calibration` ucu varyant başına sayı/ortalama özetini verir. Rozet "Öğrenilmiş sıra: …" satırıyla hangi kanıtla sıralandığını söyler.
+
+**Öz-test kıyaslaması** (sitede "Öz-test kıyaslaması" paneli): Tek onayla 3/5/10/25 referans fotoğrafı, bankaya eşit aralıklarla dağılacak biçimde sırayla hedef yapılır ve her biri için Ultra çalışır. Bu modda (`selfTest`) hedef fotoğraf **tüm kimlik kaynak havuzlarından çıkarılır** (gerçek "birini dışarıda bırak"); aksi halde test kopyalamayı ölçerdi. Tablo her fotoğraf için SSIM, ΔE, doğallık, kimlik ve sıranın öğrenilmiş olup olmadığını gösterir; ortalama ve en iyi/en kötü özetlenir; rapor yalnız sayılardan oluşan JSON olarak indirilebilir. "Bu testten sonra durdur" ile yarıda bırakılabilir; toplanan ölçümler yine öğrenmeye eklenir. Görseller yalnız tarayıcı ile yerel motor arasında kalır.
+
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
 
 Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:

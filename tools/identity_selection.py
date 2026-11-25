@@ -168,3 +168,17 @@ def choose_identity_pool(scores: Sequence[float | None], variation: int, toleran
     if variation in (4,7,9,12,15,17,19,21,23) and len(eligible)>1:
         return eligible[1+(variation//3)%(len(eligible)-1)]
     return ranked[0][0]
+
+
+def strict_self_test_pools(pools, exact_index):
+    """Benchmark leave-one-out: remove the target photo from every source pool.
+
+    A self-test whose answer is among the identity sources would measure
+    copying instead of reconstruction. Empty or duplicate pools are dropped.
+    """
+    strict = []
+    for label, pool in pools:
+        kept = tuple(index for index in pool if index != exact_index)
+        if kept and all(kept != other for _, other in strict):
+            strict.append((label, kept))
+    return strict

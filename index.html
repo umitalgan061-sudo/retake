@@ -189,6 +189,34 @@
             </section>
           </details>
 
+          <details id="benchmarkDetails" class="profile-details">
+            <summary><span>Öz-test kıyaslaması</span><span id="benchmarkSummaryNote" class="profile-summary-note">Ölç ve öğret</span></summary>
+            <section class="control-card" aria-labelledby="benchmarkTitle">
+              <div class="profile-head"><div><div class="card-overline">GERÇEK CEVABA KARŞI ÖLÇÜM</div><h2 id="benchmarkTitle">Ne kadar doğal?</h2></div></div>
+              <p class="profile-copy">Kendi referans fotoğraflarından birkaçı sırayla hedef yapılır. Doğru cevap bilindiği için (orijinal yüz) sonuç ona karşı ölçülür: yapısal benzerlik (SSIM, 1 = aynı) ve renk farkı (ΔE, 0 = aynı). Her test, hedef fotoğraf kaynaklardan tamamen çıkarılarak yapılır ve motor hangi ayarların senin yüzünde en doğal göründüğünü öğrenir; sonraki işlemlerde onları önce dener.</p>
+              <div class="benchmark-controls">
+                <label for="benchmarkCount">Fotoğraf sayısı</label>
+                <select id="benchmarkCount" class="export-format">
+                  <option value="3">3 (≈ 25 dk)</option>
+                  <option value="5" selected>5 (≈ 40 dk)</option>
+                  <option value="10">10 (≈ 80 dk)</option>
+                  <option value="25">25 (≈ 3,5 saat)</option>
+                </select>
+                <button id="benchmarkStart" class="choose-file-button" type="button" disabled><span>Kıyaslamayı başlat</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                <button id="benchmarkStop" class="text-button" type="button" hidden>Bu testten sonra durdur</button>
+              </div>
+              <p id="benchmarkStatus" class="state-detail" aria-live="polite">Motor bu özelliği desteklediğinde başlatılabilir. Görseller yalnız bu cihaz ile yerel motor arasında kalır.</p>
+              <div class="benchmark-table-wrap" id="benchmarkResults" hidden>
+                <table class="benchmark-table">
+                  <thead><tr><th>Fotoğraf</th><th>SSIM</th><th>ΔE</th><th>Doğallık</th><th>Kimlik</th><th>Sıra</th></tr></thead>
+                  <tbody id="benchmarkRows"></tbody>
+                </table>
+                <p id="benchmarkSummary" class="state-detail"></p>
+                <button id="benchmarkDownload" class="text-button" type="button" hidden>Raporu indir (JSON, yalnız sayılar)</button>
+              </div>
+            </section>
+          </details>
+
           <details class="profile-details">
             <summary><span>Yüz profili ayarları</span><span class="profile-summary-note">İsteğe bağlı</span></summary>
             <section class="control-card" aria-labelledby="profileTitle">

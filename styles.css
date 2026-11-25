@@ -711,3 +711,12 @@ h1 em { display: inline-block; color: var(--ink); font-family: var(--font-serif)
 .real-face-toggle input { flex: none; width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--lime); }
 .real-face-toggle strong { display: block; font-size: 12px; }
 .real-face-toggle small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+
+/* Self-test benchmark */
+.benchmark-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 6px; }
+.benchmark-controls label { color: var(--muted); font-size: 11px; font-weight: 700; }
+.benchmark-table-wrap { margin-top: 10px; overflow-x: auto; }
+.benchmark-table { width: 100%; border-collapse: collapse; font-size: 11px; font-variant-numeric: tabular-nums; }
+.benchmark-table th, .benchmark-table td { padding: 6px 8px; border-bottom: 1px solid var(--line-strong); text-align: left; white-space: nowrap; }
+.benchmark-table th { color: var(--muted); font-weight: 750; }
+.benchmark-table td.benchmark-error { color: var(--muted); white-space: normal; }

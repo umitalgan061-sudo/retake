@@ -89,7 +89,7 @@ REINFORCE_STAGE = 2
 REALISM_STAGE = 5
 SCORING_STAGE = 6
 # A realism render may cost at most this much ArcFace similarity to be used.
-REALISM_MAX_IDENTITY_LOSS = 0.004
+REALISM_MAX_IDENTITY_LOSS = 0.003
 REALISM_TIMEOUT_SECONDS = 900
 # (tone harmonization, shading cap) per compositing variant; the first is the
 # most seamless. Measured on the user's photos (ArcFace to the references):

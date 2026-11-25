@@ -140,3 +140,17 @@ class DetailGateTest(unittest.TestCase):
             self.assertTrue(np.array_equal(balanced[:,:,3],alpha))
             self.assertTrue(np.array_equal(balanced[alpha==0],candidate[alpha==0]))
             self.assertGreater(np.std(balanced[alpha>0,:3]),np.std(candidate[alpha>0,:3]))
+
+class RegionalCandidateSelectionTest(unittest.TestCase):
+    def test_never_drifts_away_from_peak(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        self.assertEqual(select_verified_regional_candidate([.795,.801,.793],[.9,.8,.99],["head-fit","identity-only","identity-beard"],0),1)
+
+    def test_verified_beard_can_win_a_tight_tie(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        self.assertEqual(select_verified_regional_candidate([.800,.798],[.85,.84],["head-fit","identity-beard"],0),1)
+
+    def test_missing_or_degraded_regional_detail_cannot_win(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        for detail in (None,.50,float("nan")):
+            self.assertEqual(select_verified_regional_candidate([.800,.798],[.85,detail],["identity-only","identity-beard"],0),0)

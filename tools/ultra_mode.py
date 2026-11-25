@@ -74,6 +74,78 @@ def _photo_detail(headers: dict[str, str]) -> int:
     )
 
 
+# Identity sufficiency. The person's own photos reach a typical ArcFace
+# similarity to the identity centroid (leave-one-out "photo level"). A result
+# at that level is already as recognisably this person as a real photo of
+# them; chasing a higher cosine beyond it mostly rewards swappers that pull
+# the ArcFace embedding (InSwapper is driven by ArcFace) at the cost of
+# blurred eyes, waxy skin and halos. Above the level, realism decides.
+ULTRA_SUFFICIENCY_TOLERANCE = 0.02
+
+
+def photo_level_from_headers(headers: dict[str, str] | None) -> float | None:
+    if not headers:
+        return None
+    try:
+        value = float(headers.get("X-Retake-Identity-Photo-Level", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and 0.40 <= value <= 0.99 else None
+
+
+def identity_sufficiency(headers: dict[str, str] | None) -> float | None:
+    level = photo_level_from_headers(headers)
+    return None if level is None else min(0.92, level - ULTRA_SUFFICIENCY_TOLERANCE)
+
+
+def is_identity_sufficient(headers: dict[str, str] | None) -> bool:
+    threshold = identity_sufficiency(headers)
+    score = score_from_headers(headers) if headers else None
+    return threshold is not None and score is not None and score >= threshold
+
+
+def identity_acceptable(headers: dict[str, str], peak_identity: float) -> bool:
+    """Near the strongest candidate, or already at the person's photo level."""
+    score = score_from_headers(headers)
+    return score is not None and (score >= peak_identity - ULTRA_REALISM_TIE_LOSS or is_identity_sufficient(headers))
+
+
+def realism_order(headers: dict[str, str]) -> tuple:
+    """Sort key among identity-sufficient candidates (larger is better)."""
+    rim = rim_from_headers(headers)
+    detail = detail_from_headers(headers)
+    return (
+        headers.get("X-Retake-Identity-Reinforced") != "on",
+        -(rim if rim is not None else 1.0),
+        detail if detail is not None else 0.0,
+        _photo_detail(headers),
+        score_from_headers(headers) or -1.0,
+    )
+
+
+def prefer_sufficient_candidate(candidate: dict[str, str], best: dict[str, str]) -> bool:
+    # 1. A 256 px render beats the 128 px InSwapper reinforcement.
+    new_reinforced = candidate.get("X-Retake-Identity-Reinforced") == "on"
+    old_reinforced = best.get("X-Retake-Identity-Reinforced") == "on"
+    if new_reinforced != old_reinforced:
+        return not new_reinforced
+    # 2. A visibly cleaner hairline/jaw outline.
+    new_rim, old_rim = rim_from_headers(candidate), rim_from_headers(best)
+    if new_rim is not None and old_rim is not None:
+        if new_rim + ULTRA_RIM_GAIN < old_rim:
+            return True
+        if old_rim + ULTRA_RIM_GAIN < new_rim:
+            return False
+    # 3. More of the real photo's eye/nose/mouth detail.
+    new_detail, old_detail = detail_from_headers(candidate), detail_from_headers(best)
+    if new_detail is not None and old_detail is not None and abs(new_detail - old_detail) > ULTRA_DETAIL_GAIN / 2:
+        return new_detail > old_detail
+    if _photo_detail(candidate) != _photo_detail(best):
+        return _photo_detail(candidate) > _photo_detail(best)
+    # 4. Only then identity, as a tie-breaker.
+    return (score_from_headers(candidate) or -1.0) > (score_from_headers(best) or -1.0) + ULTRA_SCORE_EPS
+
+
 def prefer_ultra_candidate(
     candidate: dict[str, str], best: dict[str, str] | None
 ) -> bool:
@@ -91,6 +163,8 @@ def prefer_ultra_candidate(
     old = score_from_headers(best)
     if old is None:
         return True
+    if is_identity_sufficient(candidate) and is_identity_sufficient(best):
+        return prefer_sufficient_candidate(candidate, best)
     if new > old + ULTRA_REALISM_TIE_LOSS:
         return True
     if old > new + ULTRA_REALISM_TIE_LOSS:
@@ -162,6 +236,9 @@ def identity_gain(headers):
     return None if after is None or before is None else after - before
 
 def needs_extra_finalist(headers):
+    # At the person's own photo level there is nothing left to chase.
+    if is_identity_sufficient(headers):
+        return False
     target = identity_aspiration(headers)
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS

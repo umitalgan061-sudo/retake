@@ -49,6 +49,7 @@ import {
   describeFluxMetrics,
   describeJudgeError,
   describeNvidiaJudge,
+  describeIdentitySufficiency,
   describeSimilarity,
   parseSimilarity,
   similarityScore
@@ -661,6 +662,7 @@ function selectResult(index) {
     describeFluxStatus(item.fluxStatus),
     describeFluxMetrics(item.fluxIdentityDelta,item.fluxDetailDelta,item.fluxStrength),
     describeNvidiaJudge(item.nvidiaJudge, item.nvidiaJudgeVotes, item.nvidiaJudgeAgreement),
+    describeIdentitySufficiency(item.identitySufficient),
     item.nvidiaJudge === 'error' ? describeJudgeError(item.nvidiaJudgeError) : '',
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
@@ -696,6 +698,7 @@ function addResult(blob, label, scores = {}) {
     faceEdit: scores.faceEdit ?? null,
     nimEditor: scores.nimEditor || '',
     nvidiaJudge: scores.nvidiaJudge || "",
+    identitySufficient: scores.identitySufficient || "",
     nvidiaJudgeVotes: Number.isInteger(scores.nvidiaJudgeVotes) ? scores.nvidiaJudgeVotes : null,
     nvidiaJudgeAgreement: Number.isFinite(scores.nvidiaJudgeAgreement) ? scores.nvidiaJudgeAgreement : null,
     fluxStatus: scores.fluxStatus || "",
@@ -2248,7 +2251,9 @@ async function runFaceFusionEdit() {
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
       detailScore,
-      referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
+      referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Photo-Level"))
+        ?? parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity")),
+      identitySufficient: response.headers.get("X-Retake-Identity-Sufficient") || "",
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),

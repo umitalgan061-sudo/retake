@@ -1,4 +1,4 @@
-"""Optional on-device NVIDIA NIM editors; no remote API, key or image URL.
+"""Optional on-device image editors; no remote API, key or image URL.
 Official JSON /v1/images/edits contract:
 https://docs.nvidia.com/nim/visual-genai/latest/getting-started.html
 Configured local ports are trusted operator inputs, never browser parameters.
@@ -19,6 +19,8 @@ MODELS = {
     "black-forest-labs/flux-3-image-klein-base": 8,
     "black-forest-labs/flux.2-klein-4b": 8,
     "black-forest-labs/flux.1-kontext-dev": 1,
+    # Separate open-weight Diffusers implementation, not an official NIM.
+    "retake-local/flux2-klein-4b": 3,
 }
 MAX_RESPONSE = 32 * 1024 * 1024
 PROMPT = (
@@ -90,7 +92,7 @@ def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], b
     if not ok: raise ValueError("NIM girdi kodlaması başarısız.")
     input_path=output.with_suffix(".input.png")
     input_path.write_bytes(buf.tobytes())
-    result=request(port,"/v1/images/edits",edit_payload(model,input_path,refs))
+    result=request(port,"/v1/images/edits",edit_payload(model,input_path,refs),timeout=360 if model=="retake-local/flux2-klein-4b" else 180)
     rows=result.get("data") if isinstance(result,dict) else None
     encoded=rows[0].get("b64_json") if isinstance(rows,list) and len(rows)==1 and isinstance(rows[0],dict) else None
     if not isinstance(encoded,str) or len(encoded)>MAX_RESPONSE:

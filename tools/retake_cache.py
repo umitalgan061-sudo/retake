@@ -95,8 +95,16 @@ class PassCache:
             while len(self._entries) > self.max_entries:
                 self._entries.popitem(last=False)
 
+    def clear(self) -> int:
+        """Release job-local image bytes; keep model weights and identity reports."""
+        with self._lock:
+            count = len(self._entries)
+            self._entries.clear()
+            return count
+
     def __len__(self) -> int:
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
 
 class StageTimings:

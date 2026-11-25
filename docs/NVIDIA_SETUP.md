@@ -33,3 +33,48 @@ NVIDIA'nın [güncel NIM destek tablosu](https://docs.nvidia.com/nim/visual-gena
 Mevcut ücretsiz yerel FaceFusion + isteğe bağlı kişisel LoRA/FaceID gerçekçilik yolu varsayılan kalır. NIM model ismi listelenmiş olması çalıştığı anlamına gelmez. Bir modeli yalnız gerçek yerel servis hazır ve örnek düzenleme başarılıysa etkinleştir; gerçek kişisel fotoğrafları hosted endpoint'lere otomatik gönderme.
 
 Kabul testi: (1) bankadaki birebir dosya, (2) yeniden JPEG kodlanmış aynı fotoğraf, (3) bankada olmayan fotoğraf. Her biri için yüz içi değişim oranı, ortalama RGB farkı, orijinal ve sonuç kimlik cosine, maskenin dışındaki değişen piksel sayısı, doğal sakal/çene/cilt A/B incelemesi kaydedilir. Raporlanamayan veya anlamlı değişim üretmeyen örnek başarılı sayılmaz. Test resimleri ve biyometrik veriler commit edilmez.
+
+
+## Bağımsız düşük VRAM FLUX.2 Klein 4B (deneysel)
+
+Resmî NIM ile aynı şey değildir. Black Forest Labs'in [açık model kartı](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B) Apache-2.0 ağırlıklar, yaklaşık 13 GB VRAM ve Diffusers CPU offload örneği sunar. RTX A4000 üzerinde gerçek çalışırlık henüz ölçülmedi; RAM, sürücü, CUDA ve eşzamanlı FaceFusion belleği sonucu etkiler.
+
+Ayrı sanal ortamda paket kurulumu, resmi ağırlık indirme ve gerçek sentetik GPU düzenlemesi:
+```powershell
+.\tools\setup_retake_flux2.ps1 -Install -Download -ProbeOnly
+```
+
+Önce diskte model ve paketler için yeterli boş yer bulunduğunu kontrol edin. İnternet sadece açık ağırlıkların ve paketlerin indirilmesi için gerekir. CUDA wheel varsayılanı cu128; sürücüye göre resmi PyTorch uyum tablosundan cu126/cu130 seçilebilir. BF16 ve CUDA doğrulanamazsa betik durur. Model ve FaceFusion aynı Python ortamını paylaşmaz. Düşük bellek durumunda FaceFusion kapalıyken `-Offload sequential -MaxEdge 512` ile tekrar denenebilir; bu daha yavaştır ve garanti değildir.
+
+Sentetik test gerçek model çıktısı, anlamlı piksel farkı, CUDA tepe bellek ve süre ölçer. Yüz kimliği veya estetik kalite sertifikası değildir. Başarılı ise yerel servisi başlat:
+```powershell
+.\tools\setup_retake_flux2.ps1 -MaxEdge 768
+```
+
+Ayrı PowerShell penceresinde Retake'i başlat:
+```powershell
+$env:RETAKE_NIM_EDITORS = "retake-local/flux2-klein-4b=8004"
+.\tools\start_facefusion_retake.ps1
+```
+
+`http://127.0.0.1:8004/v1/health/ready` gerçek sentetik testten sonra JSON kanıtı döndürür. Ayrı model etiketi resmî NIM ile karıştırılmaz. Yalnız hedef ve en fazla iki yerel yüz referansı kullanılır; veri URL dışında uzak fotoğraf URL'si kabul edilmez. İsteğe bağlı aday mevcut alfa maske, ArcFace ve doku kontrollerini geçmezse FaceFusion sonucu korunur. Yüz düzeltme, 25 referans ve Ultra 420 saniye alt sınırı değişmez. Gerçek cihaz ve kişisel A/B fotoğraf testi yapılmadan kurulum başarılı/kalite artışı olarak raporlanamaz.
+
+
+### Windows: FLUX as an on-demand managed worker (no extra PowerShell window)
+
+After completing the existing local model download, run in the Retake repository:
+
+    .\tools\setup_retake_flux2.ps1 -ProbeOnly -Offload sequential -MaxEdge 512 -EnableManaged
+
+This repeats the real synthetic CUDA edit and only on success writes an opt-in proof to
+~/.retake/flux2-managed.json. Uses the default existing retake-flux2-venv and
+retake-models/FLUX.2-klein-4B folders. No package install or download occurs.
+Start/restart the updated FaceFusion bridge (including its Windows logon task).
+Health reports managed_flux2=true when the local worker is configured, not when
+a real face result has been accepted. Only the best Ultra finalist tries FLUX.
+The worker loads locally, edits once, releases resources and exits before ArcFace
+checks the generated candidate. Timeout or failure falls back to the verified
+FaceFusion result. Existing mask/identity/detail gates remain unchanged.
+No FLUX HTTP listener, paid API, remote image transfer or permanently loaded
+23.7 GB model. Extra loading time is expected. To disable managed FLUX, delete
+only ~/.retake/flux2-managed.json while Retake is idle; model weights are retained.

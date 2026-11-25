@@ -1587,6 +1587,9 @@ def process_swap(
         scores = score_identity(facefusion_dir, centroid, probes)
         # Filter unchanged interiors before selection, not only before blending.
         # This prevents a high ArcFace score on an almost original face winning.
+        had_verified_identity = any(value is not None for value in scores[:len(rescue_candidates)])
+        if not had_verified_identity:
+            raise IdentityVerificationError('Üretilen yüz ArcFace ile doğrulanamadı.')
         for idx, (_, candidate_path) in enumerate(rescue_candidates):
             try:
                 if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
@@ -1721,7 +1724,10 @@ def process_swap(
             indices = sorted(range(len(weights)), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
             nim_candidates = []
-            base_detail, _ = check_photo_detail(target_path, final_output, metadata["faceBounds"])
+            try:
+                base_detail, _ = check_photo_detail(target_path, final_output, metadata['faceBounds'])
+            except Exception:
+                base_detail = None
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png")

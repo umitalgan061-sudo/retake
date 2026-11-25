@@ -66,9 +66,10 @@ def local_json(port: int, path: str, payload=None, timeout=180):
 
 def image_url(path: Path):
     raw=path.read_bytes()
-    if not raw.startswith(b"\x89PNG\r\n\x1a\n") or len(raw)>12*1024*1024:
-        raise ValueError("NIM için yerel PNG geçersiz.")
-    return "data:image/png;base64,"+base64.b64encode(raw).decode("ascii")
+    mime='image/png' if raw.startswith(b'\x89PNG\r\n\x1a\n') else 'image/jpeg' if raw.startswith(b'\xff\xd8') else None
+    if not mime or len(raw)>12*1024*1024:
+        raise ValueError('NIM için yerel görsel geçersiz.')
+    return 'data:'+mime+';base64,'+base64.b64encode(raw).decode('ascii')
 
 def edit_payload(model: str, image: Path, refs: list[Path]):
     count=MODELS[model]

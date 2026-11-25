@@ -73,9 +73,16 @@ def harmonize_neck(original, composite, bounds, landmarks):
     corridor=(rel>=0)&(rel<.34)&(np.abs(xx-cx)<fw*(.28-.12*rel/.34))
     # No editing through collars, hair or disconnected patches. Erode before
     # component selection to avoid bridges across thin boundaries.
-    possible=(skin_like & corridor & (dst[:,:,3]==0)).astype(np.uint8)
+    # Reject sharp local boundaries (collars, jewelry, hair) before growing
+    # the skin-connected region. This is a conservative heuristic, not a
+    # semantic clothing segmentation model.
+    grey=cv2.cvtColor(src,cv2.COLOR_BGR2GRAY)
+    gx=cv2.Sobel(grey,cv2.CV_32F,1,0,ksize=3)
+    gy=cv2.Sobel(grey,cv2.CV_32F,0,1,ksize=3)
+    edge=cv2.dilate((np.hypot(gx,gy)>85).astype(np.uint8),np.ones((3,3),np.uint8))
+    possible=(skin_like & corridor & (dst[:,:,3]==0) & (edge==0)).astype(np.uint8)
     possible=cv2.erode(possible,np.ones((3,3),np.uint8))
-    n,labels,stats,_=cv2.connectedComponentsWithStats(possible,8)
+    n,labels,stats,_=cv2.connectedComponentsWithStats(possible, connectivity=8)
     seed=(rel>=.015)&(rel<=.13)&(np.abs(xx-cx)<.13*fw)
     viable=[k for k in range(1,n) if np.count_nonzero((labels==k)&seed)>=5]
     if not viable: return None,"skin-uncertain",0

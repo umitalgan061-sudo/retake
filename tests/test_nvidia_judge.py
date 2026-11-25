@@ -310,3 +310,13 @@ class JuryDiversityTest(unittest.TestCase):
         headers = {"X-Retake-Similarity": ".8", "X-Retake-Detail-Gate": "passed"}
         pool = srv.judge_pool(b"original",headers,1,[(b"upgrade",headers,1)],.8)
         self.assertEqual(len(pool),2)
+
+
+class NeckMetadataTest(unittest.TestCase):
+    def test_neck_scope_is_explicit_and_boolean(self):
+        base={"referenceWeights":[1]*25,"faceBounds":{"x":10,"y":10,"width":100,"height":100},"targetSize":{"width":784,"height":1024}}
+        self.assertFalse(srv._validate_metadata(base,25)["neckHarmonize"])
+        self.assertTrue(srv._validate_metadata({**base,"neckHarmonize":True},25)["neckHarmonize"])
+        for invalid in ("true",1,None):
+            with self.assertRaises(ValueError):
+                srv._validate_metadata({**base,"neckHarmonize":invalid},25)

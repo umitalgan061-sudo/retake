@@ -65,6 +65,7 @@ def main() -> int:
     parser.add_argument("--identity-file", required=True, type=Path)
     parser.add_argument("--out-dir", required=True, type=Path)
     parser.add_argument("--landmarks", type=Path, default=None, help="478-point mesh of the face (JSON, image px)")
+    parser.add_argument("--seed-base", type=int, default=7, help="first diffusion seed (another finalist uses another base)")
     parser.add_argument("--check", action="store_true", help="only load the models")
     args = parser.parse_args()
     use_system_certificates()
@@ -110,7 +111,7 @@ def main() -> int:
         try:
             rendered = refine_face(
                 renderer, swapped, target, bounds, strength,
-                seed=7 + index, identity=identity, identity_scale=identity_scale
+                seed=max(0, args.seed_base) + index, identity=identity, identity_scale=identity_scale
             )
             if rendered.shape != swapped.shape or rendered.dtype != np.uint8:
                 raise ValueError("Gerçekçilik adayı boyutu/türü geçersiz.")

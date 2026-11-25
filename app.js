@@ -42,6 +42,10 @@ import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
 import { buildBenchmarkReport, pickBenchmarkReferences, runBenchmark, summarizeBenchmark, fidelityScore } from "./src/benchmark.js";
 import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
+  DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
+  depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
+} from "./src/depth.js";
+import {
   bestResultIndex,
   measureFaceEdit,
   describeProfileHealth,
@@ -53,6 +57,7 @@ import {
   describeIdentitySufficiency,
   describeSelfFidelity,
   describeUltraSchedule,
+  describeUltraDepth,
   describeSimilarity,
   parseSimilarity,
   similarityScore
@@ -113,6 +118,8 @@ const elements = {
   swapButton: $("#swapButton"),
   realFaceToggle: $("#realFaceToggle"),
   nvidiaJudgeRow: $("#nvidiaJudgeRow"),
+  qualityDepthRow: $("#qualityDepthRow"),
+  qualityDepthNote: $("#qualityDepthNote"),
   benchmarkCount: $("#benchmarkCount"),
   benchmarkStart: $("#benchmarkStart"),
   benchmarkStop: $("#benchmarkStop"),
@@ -290,6 +297,7 @@ function updateSwapAvailability() {
             ? "Başlamak için bir fotoğraf yükle ve değiştirilecek yüzü seç."
             : "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
   }
+  qualityDepthInputs().forEach((input) => { input.disabled = state.isSwapping || Boolean(state.benchmark?.running); });
   elements.chooseReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.reloadReferences.disabled = state.referencesLoading || state.isSwapping;
   elements.clearReferences.disabled = state.referencesLoading || state.isSwapping;
@@ -330,6 +338,9 @@ async function checkFaceFusionStatus() {
         // Strict leave-one-out self-tests and learned variant order (v22.3+).
         selfTestBenchmark: health.self_test_benchmark === true,
         ultraLearning: health.ultra_learning === true,
+        // Selectable quality depth and job-sized pass cache (v23+).
+        qualityDepths: health.quality_depths === true,
+        ultraDepths: health.ultra_depths && typeof health.ultra_depths === "object" ? health.ultra_depths : null,
         finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
         message: health.final_face_edit_proof !== true
@@ -369,6 +380,7 @@ async function checkFaceFusionStatus() {
     elements.nvidiaJudgeRow.hidden = !judgeReady;
     if (elements.nvidiaJudgeToggle) elements.nvidiaJudgeToggle.disabled = !judgeReady;
   }
+  updateQualityDepthAvailability();
   if (state.faceFusionStatus.configured) {
     elements.engineTitle.textContent = "Yerel düzenleme hazır";
     elements.engineDescription.textContent = state.engine.remote
@@ -681,6 +693,7 @@ function selectResult(index) {
     describeIdentitySufficiency(item.identitySufficient),
     describeSelfFidelity(item.selfFidelity),
     describeUltraSchedule(item.ultraSchedule, item.calibrationSamples),
+    describeUltraDepth(item.ultraDepth, item.ultraRefinements, item.realismFinalists),
     item.nvidiaJudge === 'error' ? describeJudgeError(item.nvidiaJudgeError) : '',
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
@@ -720,6 +733,9 @@ function addResult(blob, label, scores = {}) {
     selfFidelity: scores.selfFidelity || "",
     ultraSchedule: scores.ultraSchedule || "",
     calibrationSamples: Number.isInteger(scores.calibrationSamples) ? scores.calibrationSamples : null,
+    ultraDepth: scores.ultraDepth || "",
+    ultraRefinements: scores.ultraRefinements || "",
+    realismFinalists: Number.isInteger(scores.realismFinalists) ? scores.realismFinalists : null,
     nvidiaJudgeVotes: Number.isInteger(scores.nvidiaJudgeVotes) ? scores.nvidiaJudgeVotes : null,
     nvidiaJudgeAgreement: Number.isFinite(scores.nvidiaJudgeAgreement) ? scores.nvidiaJudgeAgreement : null,
     fluxStatus: scores.fluxStatus || "",
@@ -1852,6 +1868,92 @@ function restoreNvidiaJudgePreference() {
   });
 }
 
+// Quality depth (engine v23+): the person may trade waiting time for more
+// measured candidates. Remembered on this device; "deep" by default.
+function qualityDepthInputs() {
+  return elements.qualityDepthRow ? [...elements.qualityDepthRow.querySelectorAll('input[name="qualityDepth"]')] : [];
+}
+
+function supportsQualityDepth() {
+  return Boolean(state.faceFusionStatus?.configured && state.faceFusionStatus.qualityDepths);
+}
+
+function selectedQualityDepth() {
+  const checked = qualityDepthInputs().find((input) => input.checked);
+  return requestedDepth(checked?.value, { supported: supportsQualityDepth() });
+}
+
+function updateQualityDepthNote() {
+  if (!elements.qualityDepthNote) return;
+  const depth = normalizeDepth(qualityDepthInputs().find((input) => input.checked)?.value);
+  elements.qualityDepthNote.textContent = `${depthLabel(depth)}: ${QUALITY_DEPTHS[depth].detail}. ` +
+    (depth === "standard" ? "" : "Bu süre boyunca sayfayı açık tut; ekran kilitlenmesin diye uyku engellenir.");
+}
+
+function updateQualityDepthAvailability() {
+  if (!elements.qualityDepthRow) return;
+  const supported = supportsQualityDepth();
+  elements.qualityDepthRow.hidden = !supported;
+  for (const depth of Object.keys(QUALITY_DEPTHS)) {
+    const label = document.getElementById(`qualityDepth${depth[0].toUpperCase()}${depth.slice(1)}Time`);
+    if (!label) continue;
+    const [low, high] = depthMinutes(depth, state.faceFusionStatus?.ultraDepths);
+    label.textContent = `≈${low}–${high} dk` + (depth === DEFAULT_QUALITY_DEPTH ? " · önerilen" : "");
+  }
+  updateQualityDepthNote();
+}
+
+function restoreQualityDepthPreference() {
+  let saved = DEFAULT_QUALITY_DEPTH;
+  try {
+    saved = normalizeDepth(window.localStorage.getItem(QUALITY_DEPTH_STORAGE_KEY));
+  } catch { /* storage unavailable: keep the default */ }
+  for (const input of qualityDepthInputs()) {
+    input.checked = input.value === saved;
+    input.addEventListener("change", () => {
+      if (!input.checked) return;
+      try {
+        window.localStorage.setItem(QUALITY_DEPTH_STORAGE_KEY, normalizeDepth(input.value));
+      } catch { /* ignore */ }
+      updateQualityDepthNote();
+    });
+  }
+  updateQualityDepthNote();
+}
+
+// Long jobs: keep the screen awake (the page must stay open to collect the
+// result) and warn before closing the tab. Both are best-effort.
+const longJob = { wakeLock: null, active: false };
+
+async function acquireWakeLock() {
+  if (!longJob.active || longJob.wakeLock || document.visibilityState !== "visible") return;
+  try {
+    longJob.wakeLock = await navigator.wakeLock?.request("screen") ?? null;
+    longJob.wakeLock?.addEventListener?.("release", () => { longJob.wakeLock = null; });
+  } catch { longJob.wakeLock = null; }
+}
+
+function warnBeforeLeaving(event) {
+  event.preventDefault();
+  event.returnValue = "";
+}
+
+function startLongJob() {
+  longJob.active = true;
+  window.addEventListener("beforeunload", warnBeforeLeaving);
+  acquireWakeLock();
+}
+
+function endLongJob() {
+  longJob.active = false;
+  window.removeEventListener("beforeunload", warnBeforeLeaving);
+  const lock = longJob.wakeLock;
+  longJob.wakeLock = null;
+  lock?.release?.().catch?.(() => {});
+}
+
+document.addEventListener("visibilitychange", () => { if (longJob.active) acquireWakeLock(); });
+
 // Real-photo face: the person's own reference photos closest in pose and
 // expression (up to three), with their 478-point meshes and the target's. The
 // engine warps each onto the target face and keeps the one that fits best, so
@@ -2087,12 +2189,11 @@ function hideWaitStage() {
 }
 
 const JOB_POLL_INTERVAL_MS = 1500;
-const JOB_TIMEOUT_MS = 45 * 60 * 1000;
 
 // The engine works on the swap as a background job and reports its real stage,
 // so a long run never depends on a single open connection.
-async function waitForEngineJob(jobId, total) {
-  const deadline = Date.now() + JOB_TIMEOUT_MS;
+async function waitForEngineJob(jobId, total, timeoutMs = depthTimeoutMs("standard")) {
+  const deadline = Date.now() + timeoutMs;
   let failures = 0;
   while (Date.now() < deadline) {
     await new Promise((resolve) => window.setTimeout(resolve, JOB_POLL_INTERVAL_MS));
@@ -2121,7 +2222,7 @@ async function waitForEngineJob(jobId, total) {
     );
     if (job.status === "done") return;
   }
-  throw new Error("İşlem 45 dakika içinde tamamlanmadı.");
+  throw new Error(`İşlem ${Math.round(timeoutMs / 60000)} dakika içinde tamamlanmadı.`);
 }
 
 async function runFaceFusionEdit(options = {}) {
@@ -2142,6 +2243,10 @@ async function runFaceFusionEdit(options = {}) {
   }
 
   const useNvidiaJudge = isNvidiaJudgeEnabled();
+  // A benchmark stays at the seven-minute depth so its results compare.
+  const qualityDepth = requestedDepth(selectedQualityDepth(), { supported: supportsQualityDepth(), benchmark });
+  const ultraDepths = state.faceFusionStatus.ultraDepths;
+  const depthText = describeDepthDuration(qualityDepth, ultraDepths);
   const judgeNotice = useNvidiaJudge
     ? " NVIDIA görsel jürisi açık: motor, kimliği eşit en fazla 4 sonuç adayının yüz kırpımını (en çok 512 px) Hafize sunucun üzerinden NVIDIA'nın barındırılan görsel modellerine gönderir. Jüri yalnız bu adaylardan en doğal görüneni seçer; görseller saklanmaz."
     : "";
@@ -2150,7 +2255,8 @@ async function runFaceFusionEdit(options = {}) {
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
     message: (state.engine.remote
       ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
-      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.") + " Tek yüzlü fotoğraflarda, görünür üst boyun ve çene altındaki ten tonu güvenilir biçimde ayrılabiliyorsa yerel olarak dengelenebilir; boyun şekli değiştirilmez." + judgeNotice,
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.") + " Tek yüzlü fotoğraflarda, görünür üst boyun ve çene altındaki ten tonu güvenilir biçimde ayrılabiliyorsa yerel olarak dengelenebilir; boyun şekli değiştirilmez." + judgeNotice +
+      (qualityDepth === "standard" ? "" : ` Kalite derinliği: ${depthText}. Motor daha çok ayarı ölçer, kazananın çevresinde ince ayar yapar ve birden fazla finaliste fotogerçekçilik geçişi uygular; kimlik ve doku kontrolleri aynı kalır. Sonucu alabilmek için bu sayfa açık kalmalı (ekranın uyuması engellenir).`),
     confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
@@ -2160,7 +2266,9 @@ async function runFaceFusionEdit(options = {}) {
   // Ultra always runs the complete bounded search on the server. No more
   // rotating a single head-fit variation when the user taps "generate".
   const variation = 0;
-  elements.outputTitle.textContent = "Ultra-420 · en az 7 dakika kalite araması";
+  elements.outputTitle.textContent = qualityDepth === "standard"
+    ? "Ultra-420 · en az 7 dakika kalite araması"
+    : `Ultra · ${depthText}`;
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   if (!state.result) {
     elements.outputPlaceholder.hidden = false;
@@ -2168,7 +2276,10 @@ async function runFaceFusionEdit(options = {}) {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage("Ultra-420 v22 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
+  showWaitStage(qualityDepth === "standard"
+    ? "Ultra-420 v22 · tam yüz, çene ve sakal referansları karşılaştırılıyor"
+    : `Ultra ${depthLabel(qualityDepth)} · 24 ayar, ince ayar ve gerçekçilik finalistleri karşılaştırılıyor`);
+  if (qualityDepth !== "standard" || benchmark) startLongJob();
 
   let generatedUrl = null;
   try {
@@ -2208,6 +2319,8 @@ async function runFaceFusionEdit(options = {}) {
       metadata.selfTest = true;
     }
     if (useNvidiaJudge) metadata.nvidiaJudge = true;
+    // Only an engine that understands depths gets one (older ones reject nothing, but say nothing either).
+    if (supportsQualityDepth()) metadata.qualityDepth = qualityDepth;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {
@@ -2233,7 +2346,7 @@ async function runFaceFusionEdit(options = {}) {
     }
     if (response.status === 202) {
       const accepted = await response.json();
-      await waitForEngineJob(accepted.job_id, accepted.total || 4);
+      await waitForEngineJob(accepted.job_id, accepted.total || 4, depthTimeoutMs(qualityDepth, ultraDepths));
       response = await engineFetch("/api/jobs/" + encodeURIComponent(accepted.job_id) + "/result");
       if (!response.ok) {
         const payload = await response.json().catch(() => ({}));
@@ -2285,6 +2398,9 @@ async function runFaceFusionEdit(options = {}) {
       selfFidelity: response.headers.get("X-Retake-Self-Fidelity") || "",
       ultraSchedule: response.headers.get("X-Retake-Ultra-Schedule") || "",
       calibrationSamples: Number.parseInt(response.headers.get("X-Retake-Calibration-Samples") || "", 10),
+      ultraDepth: response.headers.get("X-Retake-Ultra-Depth") || "",
+      ultraRefinements: response.headers.get("X-Retake-Ultra-Refinements") || "",
+      realismFinalists: Number.parseInt(response.headers.get("X-Retake-Ultra-Realism-Finalists") || "", 10),
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -2306,7 +2422,7 @@ async function runFaceFusionEdit(options = {}) {
       response.headers.get("X-Retake-Alpha-Transport") === "binary", targetSize
     );
     state.nextVariation = 0;
-    const ultraLabel = "Ultra-420 · en iyi sonuç" + (
+    const ultraLabel = (scores.ultraDepth && scores.ultraDepth !== "standard" ? `Ultra ${depthLabel(scores.ultraDepth)}` : "Ultra-420") + " · en iyi sonuç" + (
       Number.isInteger(completedRounds) && completedRounds >= 1
         ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
     );
@@ -2349,6 +2465,7 @@ async function runFaceFusionEdit(options = {}) {
     setRuntimeStatus("FaceFusion · hata");
   } finally {
     if (generatedUrl) URL.revokeObjectURL(generatedUrl);
+    endLongJob();
     hideWaitStage();
     state.isSwapping = false;
     updateSwapAvailability();
@@ -2564,6 +2681,7 @@ function initializeEngineSettings() {
   elements.strengthRange.addEventListener("input", updateResultView);
   restoreRealFacePreference();
   restoreNvidiaJudgePreference();
+  restoreQualityDepthPreference();
   elements.shareButton.addEventListener("click", shareResult);
   elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
   // When the app comes back to the foreground (phone unlocked, tab restored)

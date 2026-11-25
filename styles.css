@@ -712,6 +712,22 @@ h1 em { display: inline-block; color: var(--ink); font-family: var(--font-serif)
 .real-face-toggle strong { display: block; font-size: 12px; }
 .real-face-toggle small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
 
+/* Quality depth (engine v23+) */
+.quality-depth { margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--glass); min-width: 0; }
+.quality-depth legend { padding: 0 4px; }
+.quality-depth legend strong { display: block; font-size: 12px; }
+.quality-depth legend small { display: block; margin-top: 2px; color: var(--muted); font-size: 10.5px; line-height: 1.35; }
+.quality-depth-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 8px; }
+.quality-depth-option { position: relative; display: block; cursor: pointer; }
+.quality-depth-option input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.quality-depth-option span { display: block; height: 100%; padding: 8px 8px 7px; border: 1px solid var(--line); border-radius: 9px; text-align: center; transition: border-color .15s, background .15s; }
+.quality-depth-option strong { display: block; font-size: 11.5px; }
+.quality-depth-option small { display: block; margin-top: 2px; color: var(--muted); font-size: 10px; line-height: 1.3; }
+.quality-depth-option input:checked + span { border-color: var(--lime); background: color-mix(in srgb, var(--lime) 12%, transparent); }
+.quality-depth-option input:focus-visible + span { outline: 2px solid var(--lime); outline-offset: 2px; }
+.quality-depth-option input:disabled + span { opacity: .5; cursor: not-allowed; }
+.quality-depth-note { margin: 8px 0 0; color: var(--muted); font-size: 10.5px; line-height: 1.4; }
+
 /* Self-test benchmark */
 .benchmark-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0 6px; }
 .benchmark-controls label { color: var(--muted); font-size: 11px; font-weight: 700; }

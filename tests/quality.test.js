@@ -6,7 +6,8 @@ import {
   describeSimilarity,
   parseSimilarity,
   similarityScore,
-  similarityVerdict
+  similarityVerdict,
+  describeUltraDepth
 } from "../src/quality.js";
 
 test("engine scores are parsed defensively", () => {
@@ -105,4 +106,15 @@ test("learned schedule badge names its evidence", async () => {
   assert.equal(describeUltraSchedule("learned-proxy", null).includes("("), false);
   assert.equal(describeUltraSchedule("default", 5), "");
   assert.equal(describeUltraSchedule(undefined), "");
+});
+
+test("describes what a deeper Ultra search did", () => {
+  assert.equal(describeUltraDepth("standard", "0/0", 1), "");
+  assert.equal(describeUltraDepth("", "", null), "");
+  assert.equal(
+    describeUltraDepth("deep", "1/3", 2),
+    "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı"
+  );
+  assert.equal(describeUltraDepth("max", "0/6", 1), "En yüksek kalite araması · 6 ince ayar denendi, en iyi ızgara ayarı korundu");
+  assert.equal(describeUltraDepth("deep", "garbage", "2"), "Derin arama");
 });

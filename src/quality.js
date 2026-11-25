@@ -196,3 +196,20 @@ export function describeUltraSchedule(mode, samples) {
   }
   return "";
 }
+
+// Quality depth (engine v23+): what the longer search actually did.
+export function describeUltraDepth(depth, refinements = "", realismFinalists = null) {
+  const names = { deep: "Derin arama", max: "En yüksek kalite araması" };
+  if (!Object.hasOwn(names, depth)) return "";
+  const parts = [names[depth]];
+  const match = /^(\d+)\/(\d+)$/.exec(typeof refinements === "string" ? refinements : "");
+  if (match && Number(match[2]) > 0) {
+    parts.push(Number(match[1]) > 0
+      ? `ince ayar sonucu ${match[1]} adımda iyileştirdi (${match[2]} denendi)`
+      : `${match[2]} ince ayar denendi, en iyi ızgara ayarı korundu`);
+  }
+  if (Number.isInteger(realismFinalists) && realismFinalists > 1) {
+    parts.push(`${realismFinalists} gerçekçilik finalisti karşılaştırıldı`);
+  }
+  return parts.join(" · ");
+}

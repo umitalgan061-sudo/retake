@@ -39,7 +39,9 @@ try:
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
-        ULTRA_EXTRA_START_BUDGET_SECONDS
+        ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
+        RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
+        REALISM_SEED_STRIDE
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -61,7 +63,9 @@ except ImportError:
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
-        ULTRA_EXTRA_START_BUDGET_SECONDS
+        ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
+        RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
+        REALISM_SEED_STRIDE
     )
 
 MAX_REFERENCES = 25
@@ -395,7 +399,12 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     neck_harmonize = metadata.get('neckHarmonize', False)
     if type(neck_harmonize) is not bool:
         raise ValueError('Boyun uyumu seçeneği true/false olmalı.')
+    # How long Ultra may search. Old browsers send none: seven minutes.
+    quality_depth = metadata.get('qualityDepth', ULTRA_DEFAULT_DEPTH)
+    if not isinstance(quality_depth, str) or quality_depth not in ULTRA_DEPTHS:
+        raise ValueError('Kalite derinliği standard, deep veya max olmalı.')
     return {
+        'qualityDepth': quality_depth,
         'selfTest': self_test,
         'neckHarmonize': neck_harmonize,
         'nvidiaJudge': nvidia_judge,
@@ -905,7 +914,8 @@ def run_realism(
     face_bounds: dict[str, float],
     centroid: list[float],
     temp_dir: Path,
-    landmarks: list[list[float]] | None = None
+    landmarks: list[list[float]] | None = None,
+    seed_base: int | None = None
 ) -> list[Path]:
     """Render photographic versions of the face in the realism environment.
 
@@ -927,6 +937,9 @@ def run_realism(
         landmarks_file = temp_dir / "retake-realism-landmarks.json"
         landmarks_file.write_text(json.dumps(landmarks), encoding="utf-8")
         command += ["--landmarks", str(landmarks_file)]
+    if isinstance(seed_base, int) and not isinstance(seed_base, bool) and seed_base != REALISM_SEED_BASE:
+        # Another finalist: different diffusion seeds, same plans and gates.
+        command += ["--seed-base", str(seed_base)]
     try:
         completed = subprocess.run(
             command, cwd=str(worker.parent), capture_output=True, text=True,
@@ -1292,9 +1305,13 @@ def process_swap(
         final_output = temp_dir / "retake-final.png"
         preferred_boost = pixel_boost
         variation = metadata["variation"]
+        # Ultra refinement may step the winner's continuous settings; only
+        # the engine sets this key (client metadata is whitelisted).
+        refined_params = normalize_refinement(metadata.get("variationParams"))
         face_swapper_weight, detail_transfer_strength, head_fit_strength = (
-            FACE_SWAP_VARIATIONS[variation]
+            refined_params or FACE_SWAP_VARIATIONS[variation]
         )
+        applied_params = (face_swapper_weight, detail_transfer_strength, head_fit_strength)
         face_swapper_weight = supported_facefusion_weight(face_swapper_weight)
         head_fit = metadata["headFit"]
         jaw_warp = metadata.get("jawWarp")
@@ -1651,7 +1668,9 @@ def process_swap(
             renders = run_realism(
                 realism, final_output, target_path, metadata["faceBounds"], centroid, temp_dir,
                 head_fitted_landmarks(metadata.get("targetLandmarks"), metadata["faceBounds"],
-                                      face_width_scale, face_height_scale)
+                                      face_width_scale, face_height_scale),
+                # Only another finalist passes a seed; the first keeps the defaults.
+                **({"seed_base": metadata["realismSeedBase"]} if metadata.get("realismSeedBase") is not None else {})
             )
         # Measure the REAL post-processed result, a pre-geometry candidate,
         # an identity-only candidate, and optional diffusion renders against
@@ -2013,6 +2032,8 @@ def process_swap(
             "X-Retake-Face-Enhancer": FACE_ENHANCER_MODEL if used_enhancer else "off",
             "X-Retake-Identity-Weighted-Votes": str(len(weighted_identity_paths)),
             "X-Retake-Variation": str(variation),
+            "X-Retake-Variation-Params": ",".join(f"{value:.3f}" for value in applied_params),
+            "X-Retake-Variation-Refined": "on" if refined_params else "off",
             "X-Retake-Real-Face": "on" if used_full_face else "off",
             "X-Retake-Lower-Face-Transfer": "on" if used_lower_face else "off",
             "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
@@ -2101,12 +2122,15 @@ def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
     clock=None, sleeper=None, on_hold=None, on_finalist=None,
-    min_duration_seconds: float | None = None, on_judge=None
+    min_duration_seconds: float | None = None, on_judge=None, on_phase=None
 ) -> tuple[bytes, dict[str, str]]:
     """Quality-first iterations, each on the *original* photo and 25 references.
 
     Intermediate results never reach the browser. Failed later candidates do
     not destroy an already verified image. No blind recursive re-swapping.
+    The requested quality depth only buys more measured candidates: a longer
+    variant search, a compass-search refinement around the winner and more
+    realism finalists. Gates and selection rules are identical at every depth.
     """
     clock = clock or time.monotonic
     sleeper = sleeper or time.sleep
@@ -2115,16 +2139,19 @@ def run_ultra_search(
     best_result: bytes | None = None
     best_headers: dict[str, str] | None = None
     best_round = 0
-    strongest: tuple[bytes, dict[str, str], int] | None = None
+    # A candidate is identified by its spec: (grid variant, refined settings or None).
+    best_spec: tuple[int, Any] = (ULTRA_VARIATIONS[0], None)
+    strongest: tuple[bytes, dict[str, str], int, tuple[int, Any]] | None = None
     peak_identity = -math.inf
     attempted = 0
     completed = 0
     errors: list[Exception] = []
+    records: list[tuple[tuple[int, Any], dict[str, str]]] = []
     # Diffusion is expensive and stochastic. Running 2–3 diffusion renders
     # in every one of 24 variants exhausted the seven-minute search window
     # before Retake could actually compare different identities. Compare
     # all feasible identity candidates first, then invest the heavy GPU
-    # realism pass in the single best validated finalist.
+    # realism pass in the best validated finalists.
     has_realism = bool(caches and caches.get("realism"))
     has_nim = bool(caches and caches.get('nim_editors'))
     search_caches = {**caches, 'realism': None, 'nim_editors': None} if has_realism or has_nim else caches
@@ -2141,6 +2168,7 @@ def run_ultra_search(
     # exploring untried ones). Gates and selection rules are unchanged.
     calibration = (caches or {}).get("calibration")
     metadata = parsed[6] if isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) else {}
+    depth = ultra_depth(metadata.get("qualityDepth"))
     bank = ""
     schedule, schedule_mode, schedule_samples = list(ULTRA_VARIATIONS), "default", 0
     if calibration is not None:
@@ -2152,6 +2180,12 @@ def run_ultra_search(
             print(f"[Ultra] Öğrenilmiş sıra kullanılamadı: {error}", flush=True)
     if schedule_mode != "default":
         print(f"[Ultra] Öğrenilmiş sıra ({schedule_mode}, {schedule_samples} ölçüm): {schedule[:6]}…", flush=True)
+    if depth.name != ULTRA_DEFAULT_DEPTH:
+        print(
+            f"[Ultra] Kalite derinliği: {depth.name} — arama {int(depth.search_seconds)} sn, "
+            f"{depth.refinements} ince ayar, {depth.realism_finalists} gerçekçilik finalisti.",
+            flush=True
+        )
     observations: list[tuple[int, dict[str, str]]] = []
 
     def learn() -> None:
@@ -2162,8 +2196,25 @@ def run_ultra_search(
         except Exception as error:
             print(f"[Ultra] Öğrenme kaydı atlandı: {error}", flush=True)
 
+    def phase(kind: str, index: int, total: int) -> None:
+        if on_phase is not None:
+            try:
+                on_phase(kind, index, total)
+            except Exception:  # progress text must never fail a job
+                pass
+
+    def round_of(spec: tuple[int, Any]) -> int:
+        return ULTRA_VARIATIONS.index(spec[0]) + 1
+
+    def keep_identity_anchor() -> None:
+        # Pairwise near-ties must not drift downward across many candidates.
+        nonlocal best_result, best_headers, best_round, best_spec
+        if (strongest is not None and best_headers is not None and not is_identity_sufficient(best_headers)
+                and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS):
+            best_result, best_headers, best_round, best_spec = strongest
+
     for index, variation in enumerate(schedule):
-        if not should_continue_ultra(completed, clock() - started):
+        if not should_continue_ultra(completed, clock() - started, budget_seconds=depth.search_seconds):
             break
         # A round is identified by its variant (variant + 1), whatever the order.
         round_number = ULTRA_VARIATIONS.index(variation) + 1
@@ -2194,16 +2245,14 @@ def run_ultra_search(
         completed += 1
         round_scores[variation] = identity
         observations.append((variation, headers))
+        records.append(((variation, None), headers))
         if identity > peak_identity:
             peak_identity = identity
-            strongest = (image, headers, round_number)
-        # Keep a global identity anchor: pairwise near-ties must not drift
-        # downward over 24 rounds. Retain only two full images in memory.
-        if (best_headers is not None and not is_identity_sufficient(best_headers)
-                and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS):
-            best_result, best_headers, best_round = strongest
+            strongest = (image, headers, round_number, (variation, None))
+        # Keep a global identity anchor. Retain only two full images in memory.
+        keep_identity_anchor()
         if identity_acceptable(headers, peak_identity) and prefer_ultra_candidate(headers, best_headers):
-            best_result, best_headers, best_round = image, headers, round_number
+            best_result, best_headers, best_round, best_spec = image, headers, round_number, (variation, None)
             print(
                 f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
                 f"ArcFace={score_from_headers(headers)}.",
@@ -2220,55 +2269,129 @@ def run_ultra_search(
             raise errors[0]
         raise IdentityVerificationError("Ultra Mod hiçbir adayın kimliğini doğrulayamadı.")
 
-    # One GPU realism investment on the best identity, not 24. This
-    # evaluation always uses the untouched original target and reference
+    # Refinement (deep/max): the 24 variants are a coarse grid. Step the
+    # winner's continuous settings with the same swapper weight, so cached
+    # FaceFusion passes are reused; keep a step only when the normal rules
+    # prefer it. Always from the original photo, never a generated face.
+    refine_attempts = 0
+    refine_wins = 0
+    if depth.refinements > 0:
+        base_variation = best_spec[0]
+        planner = RefinePlanner(
+            best_spec[1] or FACE_SWAP_VARIATIONS[base_variation],
+            tried=[FACE_SWAP_VARIATIONS[variation] for variation in round_scores],
+            budget=depth.refinements
+        )
+        refine_started = clock()
+        while clock() - refine_started < depth.refine_seconds:
+            params = planner.next()
+            if params is None:
+                break
+            refine_attempts += 1
+            phase("refine", refine_attempts, depth.refinements)
+            spec = (base_variation, params)
+            try:
+                image, headers = process_swap(
+                    facefusion_dir, pixel_boost, enhancer_enabled,
+                    with_refinement(parsed, base_variation, params),
+                    lambda *_args, **_kwargs: None, search_caches
+                )
+            except Exception as error:
+                planner.feedback(params, False)
+                print(f"[Ultra] İnce ayar atlandı: {error}", flush=True)
+                continue
+            identity = score_from_headers(headers)
+            if identity is None:
+                planner.feedback(params, False)
+                continue
+            records.append((spec, headers))
+            if identity > peak_identity:
+                peak_identity = identity
+                strongest = (image, headers, round_of(spec), spec)
+            keep_identity_anchor()
+            if identity_acceptable(headers, peak_identity) and prefer_ultra_candidate(headers, best_headers):
+                best_result, best_headers, best_round, best_spec = image, headers, round_of(spec), spec
+            # A step wins when it is now the selected result (also via the
+            # identity anchor when it clearly raised the peak).
+            improved = best_spec == spec
+            if improved:
+                refine_wins += 1
+                print(
+                    f"[Ultra] İnce ayar kazandı: {params} (varyasyon {base_variation}), "
+                    f"ArcFace={score_from_headers(headers)}.",
+                    flush=True
+                )
+            planner.feedback(params, improved)
+            if collect_finalists:
+                finalists = retain_judge_finalists(finalists, (image, headers, round_of(spec)), peak_identity)
+
+    # The GPU realism investment goes to the best identities only, not to
+    # every round. It always uses the untouched original target and reference
     # sources; it never feeds a generated face back as identity input.
     flux_outcome = "not-attempted" if ((caches or {}).get("nim_editors") or {}).get("retake-local/flux2-klein-4b") is not None else "not-configured"
     flux_diagnostics = {}
     finalist_attempts = 0
+    realism_finalists = 0
     if has_realism or has_nim:
-        finalist_attempts += 1
-        try:
-            if on_finalist is not None:
-                on_finalist()
-            upgraded_image, upgraded_headers = process_swap(
-                facefusion_dir, pixel_boost, enhancer_enabled,
-                with_variation(parsed, ULTRA_VARIATIONS[best_round - 1]),
-                lambda *_args, **_kwargs: None, caches
-            )
-            flux_outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
-            flux_diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
-            upgraded_identity = score_from_headers(upgraded_headers)
-            if collect_finalists and upgraded_identity is not None:
-                finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, best_round), max(peak_identity, upgraded_identity))
-            if (upgraded_identity is not None
-                    and identity_acceptable(upgraded_headers, peak_identity)
-                    and prefer_ultra_candidate(upgraded_headers, best_headers)):
-                best_result, best_headers = upgraded_image, upgraded_headers
-                peak_identity = max(peak_identity, upgraded_identity)
-                print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
-            else:
-                if flux_outcome == "accepted":
-                    flux_outcome = "finalist-not-selected"
-                print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
-        except Exception as error:
-            # Realism is optional: preserve a previously verified result.
-            if flux_outcome == "not-attempted":
-                flux_outcome = "finalist-error"
-            print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
+        specs = finalist_specs(records, best_spec, peak_identity, max(1, depth.realism_finalists))
+        for position, spec in enumerate(specs):
+            finalist_attempts += 1
+            realism_finalists += 1
+            # Another finalist also gets other diffusion seeds.
+            seed = None if position == 0 else REALISM_SEED_BASE + REALISM_SEED_STRIDE * position
+            try:
+                if on_finalist is not None:
+                    on_finalist()
+                phase("realism", position + 1, len(specs))
+                upgraded_image, upgraded_headers = process_swap(
+                    facefusion_dir, pixel_boost, enhancer_enabled,
+                    with_refinement(parsed, spec[0], spec[1], realism_seed=seed),
+                    lambda *_args, **_kwargs: None, caches
+                )
+                outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
+                diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                upgraded_identity = score_from_headers(upgraded_headers)
+                if collect_finalists and upgraded_identity is not None:
+                    finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, round_of(spec)), max(peak_identity, upgraded_identity))
+                if (upgraded_identity is not None
+                        and identity_acceptable(upgraded_headers, peak_identity)
+                        and prefer_ultra_candidate(upgraded_headers, best_headers)):
+                    best_result, best_headers, best_round, best_spec = upgraded_image, upgraded_headers, round_of(spec), spec
+                    peak_identity = max(peak_identity, upgraded_identity)
+                    flux_outcome, flux_diagnostics = outcome, diagnostics
+                    print(f"[Ultra] Finalist {position + 1} gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
+                else:
+                    if position == 0:
+                        flux_outcome = "finalist-not-selected" if outcome == "accepted" else outcome
+                        flux_diagnostics = diagnostics
+                    print(f"[Ultra] Finalist {position + 1} difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+            except Exception as error:
+                # Realism is optional: preserve a previously verified result.
+                if flux_outcome == "not-attempted":
+                    flux_outcome = "finalist-error"
+                print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
 
     # An under-target result deserves a bounded second search, not lower
     # quality gates. Only local editors are used on extra finalists; avoid
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
     skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
+    extra_attempts = 0
     if needs_extra_finalist(best_headers):
-        for variation in choose_extra_variations(
-            round_scores, best_round, fallback=[v for v in schedule if v not in round_scores]
-        ):
-            if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
+        untried = [v for v in schedule if v not in round_scores]
+        if has_nim:
+            extra_variations = choose_extra_variations(
+                round_scores, best_round, count=depth.extra_finalists, fallback=untried
+            )
+        else:
+            # Without a local editor an extra pass of a measured variant is
+            # the same deterministic image again: spend it on new variants.
+            extra_variations = untried[:depth.extra_finalists]
+        for variation in extra_variations:
+            if not needs_extra_finalist(best_headers) or clock() - extra_started >= depth.extra_start_seconds:
                 break
             finalist_attempts += 1
+            extra_attempts += 1
             local_only = skip_flux_once
             skip_flux_once = False
             extra_caches = {**(caches or {}), "realism": None}
@@ -2278,6 +2401,7 @@ def run_ultra_search(
             try:
                 if on_finalist is not None:
                     on_finalist()
+                phase("extra", extra_attempts, depth.extra_finalists)
                 candidate_image, candidate_headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
                     with_variation(parsed, variation), lambda *_a, **_k: None,
@@ -2290,6 +2414,7 @@ def run_ultra_search(
                 if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
+                    best_spec = (variation, None)
                     peak_identity = max(peak_identity, candidate_score)
                     if not local_only:
                         flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
@@ -2375,6 +2500,10 @@ def run_ultra_search(
         "X-Retake-Ultra-Schedule": schedule_mode,
         "X-Retake-Ultra-Order": ",".join(str(v) for v in schedule[:8]),
         "X-Retake-Calibration-Samples": str(schedule_samples),
+        "X-Retake-Ultra-Depth": depth.name,
+        "X-Retake-Ultra-Search-Budget": str(int(depth.search_seconds)),
+        "X-Retake-Ultra-Refinements": f"{refine_wins}/{refine_attempts}",
+        "X-Retake-Ultra-Realism-Finalists": str(realism_finalists),
     }
     learn()
     print(
@@ -2441,6 +2570,18 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["step"] = job["total"] - 1
         job["stage_started"] = None
 
+    def phase(kind: str, index: int, total: int) -> None:
+        # Long depths: say which finishing step runs, without a false ETA.
+        labels = {
+            "refine": "ince ayar — kazanan ayarın çevresi ölçülüyor",
+            "realism": "fotogerçekçilik finalisti",
+            "extra": "ek kimlik finalisti",
+        }
+        job["stage"] = f"Ultra · {labels.get(kind, kind)} {index}/{max(index, total)}"
+        job["phase"] = kind
+        job["step"] = job["total"] - 1
+        job["stage_started"] = None
+
     def close_stage(now: float) -> None:
         current = job.get("step", 0)
         if timings is not None and current not in job["skipped"] and job.get("stage_started"):
@@ -2479,7 +2620,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "nvidia_judge": getattr(server, "judge_factory", build_judge)(),
                 "calibration": getattr(server, "calibration", None)
             },
-            on_hold=hold, on_finalist=finalist, on_judge=judging
+            on_hold=hold, on_finalist=finalist, on_judge=judging, on_phase=phase
         )
         close_stage(time.time())
         job["result"] = result
@@ -2533,16 +2674,18 @@ def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> flo
         # even though new rounds are forbidden after 420 seconds. Count only
         # the remaining search window plus the currently running CUDA stage.
         elapsed = max(0.0, time.time() - job["created"])
-        remaining_window = max(0.0, ULTRA_SEARCH_BUDGET_SECONDS - elapsed)
+        remaining_window = max(0.0, float(job.get("search_budget_seconds", ULTRA_SEARCH_BUDGET_SECONDS)) - elapsed)
         current_stage = JOB_STAGES[step % len(JOB_STAGES)]
         current_eta = timings.remaining([current_stage], 0, in_current)
         estimate = min(estimate, remaining_window + max(0.0, current_eta or 0.0))
     return max(minimum_remaining, estimate)
 
 
-def create_job(realism: bool = False) -> dict[str, Any]:
+def create_job(realism: bool = False, depth: str = ULTRA_DEFAULT_DEPTH) -> dict[str, Any]:
+    settings = ultra_depth(depth)
     job: dict[str, Any] = {
         "id": secrets.token_urlsafe(16), "status": "queued", "step": 0,
+        "depth": settings.name, "search_budget_seconds": settings.search_seconds,
         "stage": f"Ultra 1/{len(ULTRA_VARIATIONS)} · " + JOB_STAGES[0], "created": time.time(),
         "minimum_remaining_seconds": ULTRA_MIN_SECONDS,
         "total": len(JOB_STAGES) * len(ULTRA_VARIATIONS),
@@ -2627,7 +2770,9 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
-            "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard"
+            "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "
+            "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
+            "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2714,6 +2859,15 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "ultra_rounds": len(ULTRA_VARIATIONS),
             "ultra_min_seconds": ULTRA_MIN_SECONDS,
             "ultra_search_budget_seconds": ULTRA_SEARCH_BUDGET_SECONDS,
+            # v23: selectable quality depth (longer search, refinement,
+            # several realism finalists) and a job-sized pass cache.
+            "quality_depths": True,
+            "ultra_depths": depth_summary(),
+            "ultra_default_depth": ULTRA_DEFAULT_DEPTH,
+            "pass_cache": (
+                self.server.pass_cache.describe()  # type: ignore[attr-defined]
+                if hasattr(getattr(self.server, "pass_cache", None), "describe") else None
+            ),
             "async_jobs": True,
             "caches": True,
             "background_mode": os.environ.get('RETAKE_BACKGROUND') == '1',
@@ -2749,6 +2903,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 "total": job.get("total", len(JOB_STAGES)),
                 "round": job.get("round", 1),
                 "ultra": True,
+                "depth": job.get("depth", ULTRA_DEFAULT_DEPTH),
+                "phase": job.get("phase", "search"),
                 "minimum_remaining_seconds": (
                     max(0.0, round(ULTRA_MIN_SECONDS - (time.time() - job["created"]), 1))
                     if job["status"] in {"running", "queued"}
@@ -2814,7 +2970,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
                 self._send_json(503, {"ok": False, "error": "FaceFusion kurulumu bulunamadı. Kurulum betiğini çalıştır."})
                 return
 
-            job = create_job(bool(getattr(self.server, "realism", None)))
+            depth = parsed[6].get("qualityDepth") if isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) else None
+            job = create_job(bool(getattr(self.server, "realism", None)), depth or ULTRA_DEFAULT_DEPTH)
             threading.Thread(
                 target=run_job, args=(job, self.server, parsed), daemon=True,
                 name=f"retake-job-{job['id'][:6]}"
@@ -2919,7 +3076,7 @@ def main() -> int:
     server.face_enhancer_enabled = args.enable_face_enhancer  # type: ignore[attr-defined]
     server.pairing_token = load_pairing_token(args.pairing_token_file) if args.enable_pairing else ""  # type: ignore[attr-defined]
     server.identity_cache = IdentityReportCache()  # type: ignore[attr-defined]
-    server.pass_cache = PassCache()  # type: ignore[attr-defined]
+    server.pass_cache = PassCache.from_environment()  # type: ignore[attr-defined]
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
     server.calibration = CalibrationStore(  # type: ignore[attr-defined]
         signature=schedule_signature(HYBRID_PROFILE_VERSION, ULTRA_VARIATIONS),

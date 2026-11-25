@@ -22,6 +22,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
 9. NVIDIA görsel jürisi (Hafize `/api/project-ai/retake/vision-judge`) yalnız danışmandır: piksel üretmez, yalnız ArcFace eşitlik bandındaki ve ayrıntı kapısını geçmiş en fazla 4 finalistin 512 px yüz kırpımını görür, yalnız kullanıcının işlem bazlı onayıyla çalışır; hata/kararsızlıkta yerel seçim korunur. Ham proje jetonu yalnız kullanıcının bilgisayarında, Hafize'de yalnız SHA-256 özeti tutulur.
 10. Öğrenen Ultra yalnız varyantların deneme sırasını değiştirir; kimlik, ayrıntı, kenar ve tüm kabul kapıları aynen uygulanır. Öğrenme verisi yalnız sayıdır, bu bilgisayarda kalır, kişi/referans bankası başına ayrıdır. Öz-test (`selfTest`) hedef fotoğrafı tüm kimlik kaynaklarından çıkarır; öz-test ölçümü seçimde değil yalnız ölçüm ve sıralama öğrenmesinde kullanılır.
+11. Kalite derinliği (standard/deep/max) yalnız daha çok ölçülmüş aday satın alır: daha uzun varyant araması, kazananın çevresinde aynı yüz değiştirici ağırlığıyla ince ayar ve daha çok gerçekçilik finalisti. Kabul kapıları ve seçim kuralları her derinlikte aynıdır; her aday orijinal hedef ve 25 referanstan başlar, üretilen bir yüz asla yeniden kaynak yapılmaz. `variationParams` ve `realismSeedBase` yalnız motor tarafından konur; tarayıcı metadata'sı beyaz listeden geçtiği için bunları gönderemez. Öz-test kıyaslaması karşılaştırılabilirlik için hep standard çalışır.
 
 ## Face-only generation contract
 

@@ -69,6 +69,23 @@ Bir GPU turu birkaç dakika sürdüğü için 7 dakikalık Ultra penceresinde 24
 
 **Öz-test kıyaslaması** (sitede "Öz-test kıyaslaması" paneli): Tek onayla 3/5/10/25 referans fotoğrafı, bankaya eşit aralıklarla dağılacak biçimde sırayla hedef yapılır ve her biri için Ultra çalışır. Bu modda (`selfTest`) hedef fotoğraf **tüm kimlik kaynak havuzlarından çıkarılır** (gerçek "birini dışarıda bırak"); aksi halde test kopyalamayı ölçerdi. Tablo her fotoğraf için SSIM, ΔE, doğallık, kimlik ve sıranın öğrenilmiş olup olmadığını gösterir; ortalama ve en iyi/en kötü özetlenir; rapor yalnız sayılardan oluşan JSON olarak indirilebilir. "Bu testten sonra durdur" ile yarıda bırakılabilir; toplanan ölçümler yine öğrenmeye eklenir. Görseller yalnız tarayıcı ile yerel motor arasında kalır.
 
+### Kalite derinliği ve iş boyu geçiş önbelleği (v23)
+
+Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (motor v23 gerekir; tercih bu cihazda saklanır):
+
+| Derinlik | Süre (yaklaşık) | Ne yapar |
+| --- | --- | --- |
+| Standart | 8–15 dk | 7 dakikalık varyant araması, 1 gerçekçilik finalisti (eski davranış; öz-test kıyaslaması hep bunu kullanır) |
+| **Derin** (varsayılan) | 25–40 dk | 25 dakikalık arama, kazanan ayarın çevresinde 3 adımlık ince ayar, 2 gerçekçilik finalisti, 3 ek finalist |
+| En yüksek | 60–95 dk | 1 saatlik arama (24 ayarın hepsi), 6 adımlık ince ayar, 3 gerçekçilik finalisti, 4 ek finalist |
+
+- **İnce ayar:** 24 varyant kaba bir ızgaradır. Kazananın sürekli ayarları (alt yüz ayrıntı gücü, kafa oranı gücü) pusula aramasıyla adım adım denenir: kazanan yön sürdürülür, tüm komşular ölçülünce adım yarıya iner. Yüz değiştirici ağırlığı değişmez; bu yüzden FaceFusion geçişleri önbellekten gelir ve bir ince ayar yeni kimlik geçişi değil, yalnız birleştirme + ölçüm maliyetidir. Bir adım yalnız normal seçim kuralları (kimlik, yeterlilik, ayrıntı kapısı) onu tercih ederse kalır.
+- **Birden fazla gerçekçilik finalisti:** Difüzyon rastgeledir. Kazanan varsayılan tohumlarla, sonraki farklı finalistler (kimlik eşitlik bandındaki veya fotoğraf düzeyindeki adaylar) başka tohumlarla gerçekçilik geçişinden geçer; en iyi doğrulanmış sonuç seçilir.
+- **Geçiş önbelleği:** Bir turda ağırlık başına ~6–9 FaceFusion geçişi (kimlik havuzları, pekiştirme, görünüm, doku) yapılır. Eski 8 girdilik önbellek, ağırlık her değiştiğinde (1,00/0,95/0,90) tüm geçişleri yeniden çalıştırıyordu — turların ~3 dk sürmesinin ana nedeni buydu. Önbellek artık bir işin tüm geçişlerini tutar (96 girdi, en çok 1,5 GB RAM; `RETAKE_PASS_CACHE_MB` ile 64–8192 MB) ve her işten sonra boşaltılır. Aynı ağırlığın sonraki turları kimlik geçişlerini yeniden çalıştırmaz; bu, Standart derinlikte bile 7 dakikaya daha çok varyant sığdırır. `/health` içindeki `pass_cache.last_job` son işin isabet/ıska sayısını gösterir.
+- Uzun işlerde sonuç bu sayfaya gelir: sayfa açık kalmalı. Tarayıcı ekranın uyumasını engeller (Wake Lock) ve sekme kapatılırken uyarır. Bekleme süresi derinliğe göre 45/90/150 dakikadır; motor 7 dakikalık asgari süreyi her derinlikte korur.
+- Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
+- Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
+
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
 
 Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:

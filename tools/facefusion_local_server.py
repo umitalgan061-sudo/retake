@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
@@ -30,7 +30,7 @@ try:
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
-    from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop
+    from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
@@ -1583,6 +1583,14 @@ def process_swap(
         rescue_candidates.extend(identity_regional_candidates)
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
+        # Filter unchanged interiors before selection, not only before blending.
+        # This prevents a high ArcFace score on an almost original face winning.
+        for idx, (_, candidate_path) in enumerate(rescue_candidates):
+            try:
+                if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
+                    scores[idx] = None
+            except (ValueError, OSError, cv2.error):
+                scores[idx] = None
         before_similarity = scores[-1]
         candidate_scores = scores[:len(rescue_candidates)]
         final_score = candidate_scores[0]
@@ -1651,6 +1659,8 @@ def process_swap(
             used_lower_face = False
             used_full_face = True
             used_real_face = True
+        if all(value is None for value in candidate_scores):
+            raise NoOpSwapError('Hiçbir aday doğrulanabilir ve anlamlı yüz içi değişim sağlamadı.')
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1784,8 +1794,13 @@ def process_swap(
         # The RGB has already been feathered and blended. Soft alpha is an
         # internal matte, not display opacity: browser canvas premultiplication
         # loses RGB precision at tiny alpha, causing colored contour lines.
+        edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
+        if not edit['meaningful']:
+            raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
+            'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
@@ -2155,7 +2170,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
-            "X-Retake-Ultra-Realism-Policy"
+            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

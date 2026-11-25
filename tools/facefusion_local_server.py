@@ -1961,7 +1961,7 @@ def process_swap(
             'X-Retake-FLUX-Status': flux_status,
             'X-Retake-FLUX-Identity-Delta': '' if flux_delta is None else f"{flux_delta:.5f}",
             'X-Retake-FLUX-Detail-Delta': '' if flux_detail_delta is None else f"{flux_detail_delta:.5f}",
-            'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.2f}",
+            'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.3f}",
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
             'X-Retake-Detail-Gate': 'passed',
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",

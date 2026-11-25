@@ -18,6 +18,8 @@ $ErrorActionPreference = "Stop"
 $RetakeDir = Join-Path $env:USERPROFILE ".retake"
 $TokenPath = Join-Path $RetakeDir "hafize-project-token"
 
+if ($Probe -and ($Disable -or $Rotate)) { throw "Probe ile Rotate/Disable birlikte kullanılamaz." }
+
 if ($Disable) {
     if (Test-Path $TokenPath) {
         Remove-Item -LiteralPath $TokenPath -Force
@@ -29,7 +31,6 @@ if ($Disable) {
 }
 
 if ($Probe) {
-    if ($Disable -or $Rotate) { throw "Probe ile Rotate/Disable birlikte kullanılamaz." }
     # Never forward the raw token to an arbitrary host or redirect.
     if ($HafizeUrl.TrimEnd("/") -ne "https://hafize-free.onrender.com") {
         throw "Probe yalnız varsayılan Hafize Render adresini kullanır."

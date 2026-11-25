@@ -1701,9 +1701,15 @@ def process_swap(
             candidate_detail_scores.append(detail)
         # Preserve the actual highest verified score, not a chain of near-ties.
         previous = chosen_index
+        # Existing full/lower reference composites already carry real texture.
+        # Do not replace one with a weaker regional rescue merely for its label.
+        effective_labels = [
+            ("identity-full" if used_full_face else "identity-beard" if used_lower_face else label)
+            if label in ("head-fit", "no-head-warp") else label
+            for label, _ in rescue_candidates
+        ]
         chosen_index = select_verified_regional_candidate(
-            candidate_scores, candidate_detail_scores,
-            [label for label, _ in rescue_candidates], chosen_index
+            candidate_scores, candidate_detail_scores, effective_labels, chosen_index
         )
         if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
@@ -2008,7 +2014,13 @@ def retain_judge_finalists(
         and item[1].get("X-Retake-Detail-Gate") == "passed"
     ]
     kept.sort(key=lambda item: (score_from_headers(item[1]) or -1.0, item[2] == candidate[2]), reverse=True)
-    return kept[:JUDGE_FINALIST_BUFFER]
+    distinct = []
+    for item in kept:
+        if not any(item[0] == prior[0] for prior in distinct):
+            distinct.append(item)
+        if len(distinct) >= JUDGE_FINALIST_BUFFER:
+            break
+    return distinct
 
 
 def judge_pool(
@@ -2020,7 +2032,7 @@ def judge_pool(
     for item in finalists:
         score = score_from_headers(item[1])
         if (
-            len(pool) >= JUDGE_MAX_CANDIDATES or item[2] == best_round or item[0] == best_result
+            len(pool) >= JUDGE_MAX_CANDIDATES or any(item[0] == prior[0] for prior in pool)
             or score is None or score < peak_identity - ULTRA_REALISM_TIE_LOSS
             or item[1].get("X-Retake-Detail-Gate") != "passed"
         ):
@@ -2141,6 +2153,8 @@ def run_ultra_search(
             flux_outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
             flux_diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
             upgraded_identity = score_from_headers(upgraded_headers)
+            if collect_finalists and upgraded_identity is not None:
+                finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, best_round), max(peak_identity, upgraded_identity))
             if (upgraded_identity is not None
                     and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):

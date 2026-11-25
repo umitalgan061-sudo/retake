@@ -109,3 +109,34 @@ class UltraPhotoDetailTest(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
+
+
+class DetailGateTest(unittest.TestCase):
+    def test_sharp_regions_required_even_with_high_average(self):
+        from tools.ultra_quality import detail_gate
+        self.assertEqual(detail_gate(.95, {"eyes":.59,"mouth":1.0}), (False,"eyes-blur"))
+        self.assertEqual(detail_gate(.95, {"eyes":1.0,"mouth":.64}), (False,"mouth-blur"))
+        self.assertEqual(detail_gate(.95, {"eyes":2.8}), (False,"eyes-oversharpen"))
+        self.assertTrue(detail_gate(.9, {"eyes":.9,"mouth":.8,"lower_face":2.1})[0])
+        self.assertFalse(detail_gate(None, {})[0])
+
+    def test_recovery_preserves_alpha_and_outside_pixels(self):
+        import tempfile
+        from pathlib import Path
+        from tools.ultra_quality import balance_with_original, check_detail_gate
+        with tempfile.TemporaryDirectory() as d:
+            root=Path(d)
+            rng=np.random.default_rng(42)
+            original=np.clip(128+rng.normal(0,20,(360,330,3)),0,255).astype(np.uint8)
+            softened=cv2.GaussianBlur(original,(0,0),4)
+            alpha=np.zeros(original.shape[:2],np.uint8)
+            alpha[54:299,54:264]=255
+            candidate=np.dstack((softened,alpha))
+            cv2.imwrite(str(root/"original.png"),original)
+            cv2.imwrite(str(root/"candidate.png"),candidate)
+            self.assertFalse(check_detail_gate(root/"original.png",root/"candidate.png",BOUNDS)[0])
+            balance_with_original(root/"original.png",root/"candidate.png",root/"balanced.png",.60)
+            balanced=cv2.imread(str(root/"balanced.png"),cv2.IMREAD_UNCHANGED)
+            self.assertTrue(np.array_equal(balanced[:,:,3],alpha))
+            self.assertTrue(np.array_equal(balanced[alpha==0],candidate[alpha==0]))
+            self.assertGreater(np.std(balanced[alpha>0,:3]),np.std(candidate[alpha>0,:3]))

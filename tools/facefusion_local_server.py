@@ -25,7 +25,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
@@ -38,7 +38,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
@@ -425,7 +425,7 @@ def score_identity(
     if not isinstance(values, list) or len(values) != len(probe_paths):
         print("[ArcFace] Benzerlik ölçülemedi: " + tail(completed.stderr + "\n" + completed.stdout, 600), flush=True)
         return empty
-    return [float(value) if isinstance(value, (int, float)) else None for value in values]
+    return [float(value) if type(value) in (int, float) and math.isfinite(value) and -1 <= value <= 1 else None for value in values]
 
 
 def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
@@ -1616,6 +1616,23 @@ def process_swap(
         if identity_fallback is not None:
             rescue_candidates.append(("identity-only", identity_fallback))
         rescue_candidates.extend(identity_regional_candidates)
+        # Add bounded recovery alternatives only when the base composite
+        # destroys native detail. Score each actual new image independently.
+        recovery_candidates = []
+        for label, candidate_path in rescue_candidates:
+            if label not in ("head-fit", "identity-only"):
+                continue
+            try:
+                if check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
+                    continue
+                for strength in (.35, .60):
+                    repaired = temp_dir / f"photo-balance-{label}-{int(strength * 100)}.png"
+                    balance_with_original(target_path, candidate_path, repaired, strength)
+                    if check_detail_gate(target_path, repaired, metadata["faceBounds"])[0]:
+                        recovery_candidates.append(("photo-balance", repaired))
+            except (ValueError, OSError, cv2.error):
+                continue
+        rescue_candidates.extend(recovery_candidates)
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
         scores = score_identity(facefusion_dir, centroid, probes)
         # Filter unchanged interiors before selection, not only before blending.
@@ -1626,6 +1643,8 @@ def process_swap(
         for idx, (_, candidate_path) in enumerate(rescue_candidates):
             try:
                 if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
+                    scores[idx] = None
+                elif not check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
                     scores[idx] = None
             except (ValueError, OSError, cv2.error):
                 scores[idx] = None
@@ -1687,7 +1706,7 @@ def process_swap(
                 )
         if selected_identity not in ('head-fit','no-head-warp'):
             chosen_texture = 'average'
-        if selected_identity in ("identity-only", "identity-jaw"):
+        if selected_identity in ("identity-only", "identity-jaw", "photo-balance"):
             used_lower_face = False
             used_full_face = False
             used_real_face = False
@@ -1700,7 +1719,7 @@ def process_swap(
             used_full_face = True
             used_real_face = True
         if all(value is None for value in candidate_scores):
-            raise NoOpSwapError('Hiçbir aday doğrulanabilir ve anlamlı yüz içi değişim sağlamadı.')
+            raise NoOpSwapError('Hiçbir aday kimlik, anlamlı değişim ve bölgesel fotoğraf ayrıntısı kontrollerinin tamamını geçemedi.')
         if final_score is None and best_score < -0.99:
             raise IdentityVerificationError(
                 "Üretilen yüz ArcFace ile doğrulanamadı. Kimlik kontrolü olmadan güvenilir sonuç gösterilmiyor."
@@ -1728,6 +1747,8 @@ def process_swap(
             except Exception as error:
                 accepted, reason = False, f"kontrol hatası: {error}"
             if accepted:
+                accepted, reason, _, _ = check_detail_gate(target_path, render_path, metadata["faceBounds"])
+            if accepted:
                 acceptable_renders.append(render_path)
                 acceptable_scores.append(render_score)
             else:
@@ -1753,6 +1774,8 @@ def process_swap(
         # a model's own claims, must pass identity, texture and edit checks.
         nim_used = ""
         nim_editors = caches.get("nim_editors") or {}
+        flux_model = "retake-local/flux2-klein-4b"
+        flux_status = "not-attempted" if flux_model in nim_editors else "not-configured"
         if nim_editors and centroid:
             indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
@@ -1765,20 +1788,30 @@ def process_swap(
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png")
                     acceptable, reason = check_render_file(final_output, path, metadata["faceBounds"])
-                    if not acceptable or not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                    if model == flux_model:
+                        flux_status = "quality-rejected"
+                    if not acceptable or not check_detail_gate(target_path, path, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
                         print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
                         continue
+                    if model == flux_model:
+                        flux_status = "identity-or-detail-rejected"
                     value = score_identity(facefusion_dir, centroid, [path])[0]
                     detail, _ = check_photo_detail(target_path, path, metadata["faceBounds"])
                     if value is not None and value >= result_similarity - ULTRA_REALISM_TIE_LOSS and (
                         value > result_similarity + .001 or (base_detail is not None and detail is not None and detail > base_detail + .06)
                     ):
                         nim_candidates.append((value, detail or 0., model, path))
+                        if model == flux_model:
+                            flux_status = "candidate-not-selected"
                 except Exception as error:
+                    if model == flux_model:
+                        flux_status = "worker-error"
                     print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
             if nim_candidates:
                 result_similarity, _, nim_used, path = max(nim_candidates, key=lambda row: (row[0], row[1]))
                 shutil.copyfile(path, final_output)
+                if nim_used == flux_model:
+                    flux_status = "accepted"
                 print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
         # An ink-like one-pixel face outline can survive the global ArcFace
         # gate. Attempt a narrow, local cleanup on the existing face matte,
@@ -1803,7 +1836,7 @@ def process_swap(
             )
             if rim_stats.get("corrected_pixels", 0) > 0 and centroid:
                 corrected_score = score_identity(facefusion_dir, centroid, [rim_candidate])[0]
-                if corrected_score is not None and corrected_score >= result_similarity - 0.004:
+                if corrected_score is not None and corrected_score >= result_similarity - 0.004 and check_detail_gate(target_path, rim_candidate, metadata["faceBounds"])[0]:
                     shutil.copyfile(rim_candidate, final_output)
                     result_similarity = corrected_score
                     rim_cleaned = True
@@ -1868,9 +1901,15 @@ def process_swap(
         edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
+        accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
+        if not accepted:
+            raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
         result = encode_preblended_result(target_path, final_output)
         headers = {
             'X-Retake-NIM-Editor': nim_used,
+            'X-Retake-FLUX-Status': flux_status,
+            'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
+            'X-Retake-Detail-Gate': 'passed',
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
@@ -2007,6 +2046,7 @@ def run_ultra_search(
     # One GPU realism investment on the best identity, not 24. This
     # evaluation always uses the untouched original target and reference
     # sources; it never feeds a generated face back as identity input.
+    flux_outcome = "not-attempted" if ((caches or {}).get("nim_editors") or {}).get("retake-local/flux2-klein-4b") is not None else "not-configured"
     if has_realism or has_nim:
         try:
             if on_finalist is not None:
@@ -2016,6 +2056,7 @@ def run_ultra_search(
                 with_variation(parsed, ULTRA_VARIATIONS[best_round - 1]),
                 lambda *_args, **_kwargs: None, caches
             )
+            flux_outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
             upgraded_identity = score_from_headers(upgraded_headers)
             if (upgraded_identity is not None
                     and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
@@ -2023,9 +2064,13 @@ def run_ultra_search(
                 best_result, best_headers = upgraded_image, upgraded_headers
                 print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
             else:
+                if flux_outcome == "accepted":
+                    flux_outcome = "finalist-not-selected"
                 print("[Ultra] Finalist difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
         except Exception as error:
             # Realism is optional: preserve a previously verified result.
+            if flux_outcome == "not-attempted":
+                flux_outcome = "finalist-error"
             print(f"[Ultra] Finalist gerçekçilik atlandı: {error}", flush=True)
 
     # Spend the available interval trying distinct variants; when the GPU
@@ -2042,6 +2087,7 @@ def run_ultra_search(
 
     final = {
         **best_headers,
+        "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),
         "X-Retake-Ultra-Attempted": str(attempted),
@@ -2286,7 +2332,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
-            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor"
+            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
+            "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2342,6 +2389,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "model": HYBRID_PROFILE_VERSION,
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
+            "regional_detail_gate": True,
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,

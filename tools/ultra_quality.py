@@ -254,3 +254,33 @@ def select_verified_regional_candidate(identity_scores, detail_scores, labels, i
             if regional:
                 current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
     return current
+
+def regional_edit_statistics(original_path, edited_path, bounds):
+    """Native-pixel edit evidence, independent of source texture energy.
+
+    A change is not a quality or identity gain. In particular, smooth lips
+    and small beards may have insufficient high-frequency baseline energy
+    but still allow a valid measurement of the delivered pixel difference.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    edited = cv2.imread(str(edited_path), cv2.IMREAD_COLOR)
+    if original is None or edited is None or original.shape != edited.shape:
+        return {}
+    height, width = original.shape[:2]
+    try:
+        x, y, fw, fh = (float(bounds[key]) for key in ("x", "y", "width", "height"))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if not all(math.isfinite(v) for v in (x,y,fw,fh)) or min(fw,fh) < 20:
+        return {}
+    delta = np.max(np.abs(edited.astype(np.int16)-original.astype(np.int16)), axis=2)
+    regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92)}
+    result = {}
+    for name, (left,top,right,bottom) in regions.items():
+        x0,x1 = max(0,int(x+fw*left)), min(width,int(x+fw*right))
+        y0,y1 = max(0,int(y+fh*top)), min(height,int(y+fh*bottom))
+        if min(x1-x0,y1-y0) < 4:
+            continue
+        values = delta[y0:y1,x0:x1]
+        result[name] = round(float(np.mean(values)),3)
+    return result

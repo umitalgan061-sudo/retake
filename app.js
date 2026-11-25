@@ -667,7 +667,7 @@ function selectResult(index) {
     item.nvidiaJudgeFinalists > 0 ? 'jüri finalisti: '+item.nvidiaJudgeFinalists : '',
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
-    item.detailRegions ? "Orijinale göre doku enerjisi: " + item.detailRegions.split(",").map(part => { const [region,value]=part.split(":"); const ratio=Number(value); const name=({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz"})[region]; return name && Number.isFinite(ratio) && ratio>=0 ? name+" "+ratio.toFixed(2)+"×" : ""; }).filter(Boolean).join(", ") : "",
+    item.detailRegions ? "Orijinale göre doku enerjisi: " + Object.entries({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz"}).map(([region,name]) => { const part=item.detailRegions.split(",").find(value=>value.startsWith(region+":")); const ratio=part ? Number(part.split(":")[1]) : NaN; return name+" "+(Number.isFinite(ratio) && ratio>=0 ? ratio.toFixed(2)+"×" : "ölçülemedi"); }).join(", ") : "",
     item.photoBalance ? "orijinal fotoğraf dokusu dengelendi" : "",
     item.before === null ? "orijinal kimlik ölçülemedi" : "",
     item.realism ? "fotoğraf gerçekçiliği" : "",

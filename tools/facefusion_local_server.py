@@ -1413,7 +1413,7 @@ def process_swap(
         # rarely land on identical pixels. Try a crisp real reference as an
         # optional UniFace *detail* source, not as a replacement for identity.
         texture_reference_index = select_texture_reference(
-            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index
+            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index, variation=variation
         )
         texture_output: Path | None = None
         if texture_reference_index is not None:

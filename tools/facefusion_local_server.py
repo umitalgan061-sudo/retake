@@ -29,7 +29,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
@@ -48,7 +48,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
@@ -1450,7 +1450,7 @@ def process_swap(
         # beard/jaw-only detail, and model-only identity. Every option starts
         # from the original target; only ArcFace-verified, seamless results
         # are eligible to win. Restrict extra warps to budgeted rounds.
-        lower_reference_rounds = (0, 2, 7, 11, 15, 19, 21, 23)
+        lower_reference_rounds = (0, 2, 3, 6, 7, 11, 15, 19, 21, 23)
         full_reference_rounds = (0, 4, 11, 19)
         transplant_options: list[dict[str, Any] | None] = [None]
         if real_face:
@@ -1573,7 +1573,7 @@ def process_swap(
             original_border = float(identity_border_report.get("border", 0.0))
             max_regional_border = max(BORDER_STEP_FLOOR, original_border * 1.15)
             if real_face and real_face.get("mode") in ("lower", "both") and variation in lower_reference_rounds:
-                for transfer_strength in (0.35, 0.65):
+                for transfer_strength in (0.12, 0.22, 0.35, 0.65):
                     path = temp_dir / f"retake-identity-beard-{int(transfer_strength * 100)}.png"
                     report: dict[str, Any] = {}
                     try:
@@ -1699,43 +1699,17 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 detail = None
             candidate_detail_scores.append(detail)
-        detail_choice = choose_detail_safe_tie(
-            candidate_scores, candidate_detail_scores, chosen_index
+        # Preserve the actual highest verified score, not a chain of near-ties.
+        previous = chosen_index
+        chosen_index = select_verified_regional_candidate(
+            candidate_scores, candidate_detail_scores,
+            [label for label, _ in rescue_candidates], chosen_index
         )
-        if detail_choice != chosen_index:
-            previous = chosen_index
-            chosen_index = detail_choice
+        if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
-            print(
-                f"[Ultra] ArcFace yakın eşitliğinde daha doğal doku seçildi: "
-                f"{rescue_candidates[previous][0]} → {rescue_candidates[chosen_index][0]} "
-                f"(detay {candidate_detail_scores[previous]:.3f} → "
-                f"{candidate_detail_scores[chosen_index]:.3f}).",
-                flush=True
-            )
         selected_identity = rescue_candidates[chosen_index][0]
-        # ArcFace can undervalue beard edges. ONLY when pure identity won
-        # and a measured regional alternative is within 0.003 absolute
-        # cosine (not "3%" similarity), allow the strongest verified
-        # beard/jaw candidate to replace the unmodified beard.
-        if selected_identity == "identity-only":
-            regional_ties = [
-                (index, value)
-                for index, ((label, _), value) in enumerate(zip(rescue_candidates, candidate_scores))
-                if label in ("identity-beard", "identity-full", "identity-jaw")
-                and value is not None and value >= best_score - 0.003
-            ]
-            if regional_ties:
-                chosen_index, best_score = max(regional_ties, key=lambda item: (
-                    item[1],
-                    {"identity-full": 2, "identity-beard": 1, "identity-jaw": 0}
-                    [rescue_candidates[item[0]][0]]
-                ))
-                selected_identity = rescue_candidates[chosen_index][0]
-                print(
-                    f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
-                    f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
-                )
+        if chosen_index != previous:
+            print(f"[Retake] Verified regional/identity finalist: {selected_identity} (ArcFace={best_score:.4f}).", flush=True)
         if selected_identity not in ('head-fit','no-head-warp'):
             chosen_texture = 'average'
         if selected_identity in ("identity-only", "identity-jaw", "photo-balance"):
@@ -1822,10 +1796,10 @@ def process_swap(
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png",
-                                                 **({"extra_strengths": (.20, .50)} if model == flux_model else {}))
+                                                 **({"extra_strengths": (.025, .05, .10, .20, .50)} if model == flux_model else {}))
                     alternatives = [(path, .35)]
                     if model == flux_model:
-                        alternatives.extend((path.with_name(f"{path.stem}-{int(strength*100)}{path.suffix}"), strength) for strength in (.20, .50))
+                        alternatives.extend((path.with_name(f"{path.stem}-{round(strength*100)}{path.suffix}"), strength) for strength in (.025, .05, .10, .20, .50))
                         flux_status = "quality-rejected"
                     measured = []
                     for candidate, strength in alternatives:

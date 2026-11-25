@@ -278,3 +278,10 @@ class UltraJuryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SafeJudgeDiagnosticsTest(unittest.TestCase):
+    def test_only_safe_error_categories_reach_browser(self):
+        self.assertEqual(nj.judge_headers("error",2,error=nj.JudgeError("secret","http-401"))["X-Retake-NVIDIA-Judge-Error"],"http-401")
+        self.assertEqual(nj.judge_headers("error",2,error=nj.JudgeError("secret","private token"))["X-Retake-NVIDIA-Judge-Error"],"unavailable")
+        self.assertGreater(nj.TIMEOUT_SECONDS,120)

@@ -69,10 +69,14 @@ def main():
         # Raw logs may include a pairing token, temporary photo paths and
         # diagnostics. Keep them out of persistent logs; status contains only
         # operational metadata. Health provides live details.
+        original_stdout,original_stderr=sys.stdout,sys.stderr
         with open(os.devnull,"w",encoding="utf-8") as sink:
             sys.stdout=sys.stderr=sink
-            write_status(status,"running")
-            code=serve()
+            try:
+                write_status(status,"running")
+                code=serve()
+            finally:
+                sys.stdout,sys.stderr=original_stdout,original_stderr
         write_status(status,"stopped",exit_code=code)
         return code if code else 1
     except Exception as error:

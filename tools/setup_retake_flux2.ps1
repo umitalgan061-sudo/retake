@@ -41,7 +41,7 @@ if (-not (Test-Path $Py)) { throw "Missing separate environment. Run with -Insta
 if ($Download) {
     # Only download weights/configs from the fixed official repository; do not
     # upload images, run remote Python, or request paid API credits.
-    Invoke-Checked $Py @("-c","from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id='black-forest-labs/FLUX.2-klein-4B',local_dir=sys.argv[1],allow_patterns=['*.json','*.safetensors','*.txt','*.model','*.tiktoken']); print('Local model download completed')",$ModelDir)
+    Invoke-Checked $Py @("-c","from huggingface_hub import snapshot_download; import sys; snapshot_download(repo_id='black-forest-labs/FLUX.2-klein-4B',local_dir=sys.argv[1],allow_patterns=['*.json','*.safetensors','*.txt','*.model','*.tiktoken','*.jinja','LICENSE','README.md']); print('Local model download completed')",$ModelDir)
 }
 if (-not (Test-Path (Join-Path $ModelDir "model_index.json"))) { throw "Model not installed. Run with -Download after reviewing disk space and license." }
 $Runner = Join-Path $PSScriptRoot "local_flux2_editor.py"

@@ -30,3 +30,25 @@ class NimPhotoEditTest(unittest.TestCase):
             self.assertTrue(np.array_equal(src[:,:,3],actual[:,:,3]))
             self.assertTrue(np.array_equal(src[src[:,:,3]==0],actual[src[:,:,3]==0]))
             self.assertGreater(actual[50,50,0],src[50,50,0])
+
+
+    def test_multiple_blends_reuse_inference_and_preserve_matte(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root=Path(folder); base=root/"base.png"; out=root/"out.png"
+            src=np.full((100,100,4),120,np.uint8);src[:,:,3]=0;src[25:75,25:75,3]=255
+            cv2.imwrite(str(base),src)
+            generated=np.full((100,100,3),180,np.uint8)
+            data=base64.b64encode(cv2.imencode(".png",generated)[1]).decode("ascii")
+            calls=[]
+            def request(port,path,payload=None,timeout=180):
+                calls.append(path)
+                return True if payload is None else {"data":[{"b64_json":data}]}
+            candidate_from_editor("qwen/qwen-image-edit-2511",8001,base,[],dict(x=20,y=20,width=60,height=60),out,request,extra_strengths=(.20,.50))
+            self.assertEqual(calls,["/v1/health/ready","/v1/images/edits"])
+            values=[]
+            for path in (root/"out-20.png",out,root/"out-50.png"):
+                actual=cv2.imread(str(path),cv2.IMREAD_UNCHANGED)
+                self.assertTrue(np.array_equal(actual[:,:,3],src[:,:,3]))
+                self.assertTrue(np.array_equal(actual[src[:,:,3]==0],src[src[:,:,3]==0]))
+                values.append(int(actual[50,50,0]))
+            self.assertTrue(values[0]<values[1]<values[2])

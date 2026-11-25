@@ -44,7 +44,7 @@ JPEG_QUALITIES = (90, 82, 74)
 MAX_CROP_BYTES = 600 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 # Render Free sleeps when idle: allow a ~60 s cold start plus the jury itself.
-TIMEOUT_SECONDS = 120.0
+TIMEOUT_SECONDS = 190.0
 MIN_VOTES = 2
 MIN_AGREEMENT = 2 / 3
 OUTCOMES = ("off", "not-consented", "single-finalist", "kept", "switched", "abstain", "error")
@@ -52,6 +52,11 @@ OUTCOMES = ("off", "not-consented", "single-finalist", "kept", "switched", "abst
 
 class JudgeError(RuntimeError):
     """Jury unavailable; the caller keeps its local decision."""
+
+    def __init__(self, message, code="unavailable", upstream_code=""):
+        super().__init__(message)
+        self.code = code
+        self.upstream_code = upstream_code
 
 
 def _ssl_context() -> ssl.SSLContext:
@@ -405,7 +410,11 @@ def _normalize_verdict(payload: Any, count: int) -> dict[str, Any]:
         raise JudgeError("Jüri uzlaşı oranı geçersiz.")
     models = payload.get("models")
     models = [str(item)[:120] for item in models if isinstance(item, str) and re.fullmatch(r"[A-Za-z0-9._/-]{3,120}", item)] if isinstance(models, list) else []
-    return {"decision": decision, "winner": winner, "votes": votes, "agreement": float(agreement), "models": models[:4]}
+    result = {"decision": decision, "winner": winner, "votes": votes, "agreement": float(agreement), "models": models[:4]}
+    reason = payload.get("reason")
+    if reason in ("NOT_ENOUGH_VOTES", "SPLIT_VOTE", "NARROW_MARGIN", "CONSENSUS"):
+        result["reason"] = reason
+    return result
 
 
 def request_judgement(config: JudgeConfig, crops: list[bytes], opener=None, timeout: float = TIMEOUT_SECONDS) -> dict[str, Any]:
@@ -413,6 +422,8 @@ def request_judgement(config: JudgeConfig, crops: list[bytes], opener=None, time
         raise ValueError("Jüriye 2–4 aday gönderilebilir.")
     if any(not crop.startswith(b"\xff\xd8\xff") or len(crop) > MAX_CROP_BYTES for crop in crops):
         raise ValueError("Jüri kırpımları JPEG ve 600 KB altında olmalı.")
+    if sum(map(len, crops)) > 2_000_000:
+        raise JudgeError("Jüri toplam kırpım boyutu aşıldı.", "payload-too-large")
     body = json.dumps({
         "task": TASK,
         "candidates": ["data:image/jpeg;base64," + base64.b64encode(crop).decode("ascii") for crop in crops],
@@ -435,9 +446,11 @@ def request_judgement(config: JudgeConfig, crops: list[bytes], opener=None, time
             code = candidate if isinstance(candidate, str) and re.fullmatch(r"PROJECT_AI_[A-Z0-9_]{1,60}", candidate) else ""
         except (ValueError, OSError):
             code = ""
-        raise JudgeError(f"Hafize jürisi HTTP {error.code}" + (f" ({code})" if code else "")) from None
+        raise JudgeError(f"Hafize jürisi HTTP {error.code}" + (f" ({code})" if code else ""), f"http-{error.code}" if 400 <= error.code <= 599 else "http-unexpected", code) from None
     except (urllib.error.URLError, OSError, TimeoutError) as error:
-        raise JudgeError("Hafize jürisine ulaşılamadı: " + type(error).__name__) from None
+        reason = getattr(error, "reason", error)
+        category = "tls" if isinstance(reason, ssl.SSLError) else "timeout" if isinstance(reason, TimeoutError) else "network"
+        raise JudgeError("Hafize jürisine ulaşılamadı: " + category, category) from None
     if status != 200 or len(raw) > MAX_RESPONSE_BYTES:
         raise JudgeError(f"Hafize jürisi beklenmeyen yanıt verdi (HTTP {status}).")
     try:
@@ -479,11 +492,20 @@ def build_judge(env: Mapping[str, str] | None = None, token_path: Path | None = 
     return lambda crops: request_direct(direct, crops)
 
 
-def judge_headers(outcome: str, finalists: int = 0, verdict: Mapping[str, Any] | None = None) -> dict[str, str]:
+def judge_headers(outcome: str, finalists: int = 0, verdict: Mapping[str, Any] | None = None, error=None) -> dict[str, str]:
     if outcome not in OUTCOMES:
         outcome = "error"
     headers = {"X-Retake-NVIDIA-Judge": outcome, "X-Retake-NVIDIA-Judge-Finalists": str(finalists)}
+    if outcome == "error":
+        code = getattr(error, "code", "unavailable") if isinstance(error, JudgeError) else "unavailable"
+        headers["X-Retake-NVIDIA-Judge-Error"] = code if re.fullmatch(r"http-[45][0-9]{2}|tls|timeout|network|payload-too-large|unavailable|http-unexpected", str(code)) else "unavailable"
+    upstream = getattr(error, "upstream_code", "") if isinstance(error, JudgeError) else ""
+    if isinstance(upstream, str) and re.fullmatch(r"PROJECT_AI_[A-Z0-9_]{1,60}", upstream):
+        headers["X-Retake-NVIDIA-Judge-Reason"] = upstream
     if verdict:
+        reason = verdict.get("reason")
+        if reason in ("NOT_ENOUGH_VOTES", "SPLIT_VOTE", "NARROW_MARGIN", "CONSENSUS"):
+            headers["X-Retake-NVIDIA-Judge-Reason"] = reason
         headers["X-Retake-NVIDIA-Judge-Votes"] = str(int(verdict.get("votes") or 0))
         headers["X-Retake-NVIDIA-Judge-Agreement"] = f"{float(verdict.get('agreement') or 0.0):.3f}"
         headers["X-Retake-NVIDIA-Judge-Models"] = ",".join(verdict.get("models") or [])

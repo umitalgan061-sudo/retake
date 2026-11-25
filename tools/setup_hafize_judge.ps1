@@ -5,6 +5,7 @@
     [switch]$Disable,
     # Yalnız Hafize'nin herkese açık sağlık bilgisini kontrol et (görsel gönderilmez).
     [switch]$Check,
+    [switch]$Probe,
     [string]$HafizeUrl = "https://hafize-free.onrender.com"
 )
 
@@ -16,12 +17,53 @@ $ErrorActionPreference = "Stop"
 $RetakeDir = Join-Path $env:USERPROFILE ".retake"
 $TokenPath = Join-Path $RetakeDir "hafize-project-token"
 
+if ($Probe -and ($Disable -or $Rotate -or $Check)) { throw "Probe cannot be combined with Rotate, Disable or Check." }
+
 if ($Disable) {
     if (Test-Path $TokenPath) {
         Remove-Item -LiteralPath $TokenPath -Force
         Write-Host "NVIDIA jürisi kapatıldı: yerel jeton silindi. Hafize'deki özeti de kaldırabilirsin." -ForegroundColor Yellow
     } else {
         Write-Host "Yerel jeton zaten yok; NVIDIA jürisi kapalı." -ForegroundColor Yellow
+    }
+    return
+}
+
+if ($Probe) {
+    if ($HafizeUrl.TrimEnd("/") -ne "https://hafize-free.onrender.com") {
+        throw "Probe requires the default Hafize Render URL."
+    }
+    if (-not (Test-Path -LiteralPath $TokenPath)) { throw "Local project token missing." }
+    $token = (Get-Content -LiteralPath $TokenPath -Raw).Trim()
+    if ($token -notmatch '^[A-Za-z0-9_-]{43,128}$') { throw "Invalid local token format." }
+    Add-Type -AssemblyName System.Drawing
+    $candidates = @()
+    foreach ($color in @([System.Drawing.Color]::SteelBlue, [System.Drawing.Color]::DarkOrange)) {
+        $bitmap = New-Object System.Drawing.Bitmap(128,128)
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $stream = New-Object System.IO.MemoryStream
+        try {
+            $graphics.Clear($color)
+            $graphics.FillEllipse([System.Drawing.Brushes]::White, 24, 24, 80, 80)
+            $bitmap.Save($stream, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+            $candidates += "data:image/jpeg;base64," + [Convert]::ToBase64String($stream.ToArray())
+        } finally { $graphics.Dispose(); $bitmap.Dispose(); $stream.Dispose() }
+    }
+    $body = @{task="face-realism-rank";candidates=$candidates} | ConvertTo-Json -Compress
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $reply = Invoke-RestMethod -Uri "https://hafize-free.onrender.com/api/project-ai/retake/vision-judge" -Method Post -Headers @{Authorization=("Bearer " + $token)} -ContentType "application/json" -Body $body -TimeoutSec 190 -MaximumRedirection 0
+        [pscustomobject]@{decision=$reply.decision;votes=$reply.votes;reason=$reply.reason;models=$reply.models;diagnostics=$reply.diagnostics;elapsedMs=$timer.ElapsedMilliseconds} | ConvertTo-Json -Depth 6
+        if ($reply.votes -gt 0) { Write-Host "NVIDIA response verified (synthetic test, not photo quality)." -ForegroundColor Green }
+        else { Write-Warning "Endpoint reachable, but no valid model votes." }
+    } catch {
+        $status = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { 0 }
+        $code = ""
+        try {
+            $candidate = ($_.ErrorDetails.Message | ConvertFrom-Json).error
+            if ($candidate -match '^PROJECT_AI_[A-Z0-9_]{1,60}$') { $code = $candidate }
+        } catch {}
+        Write-Warning ("Jury probe failed: HTTP {0} {1}, {2} ms" -f $status,$code,$timer.ElapsedMilliseconds)
     }
     return
 }

@@ -355,3 +355,41 @@ class FluxOutcomeTest(unittest.TestCase):
             )
         self.assertEqual(image,b"verified")
         self.assertEqual(headers["X-Retake-FLUX-Status"],"finalist-not-selected")
+
+
+class AdaptiveFinalistsTest(unittest.TestCase):
+    def test_profile_target_is_adaptive_and_unknown_is_not_invented(self):
+        from tools.ultra_mode import identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations
+        headers = {**score(.796), "X-Retake-Identity-Median-Similarity": ".77", "X-Retake-Similarity-Before": ".06"}
+        self.assertAlmostEqual(identity_aspiration(headers), .835)
+        self.assertAlmostEqual(identity_gain(headers), .736)
+        self.assertTrue(needs_extra_finalist(headers))
+        self.assertIsNone(identity_aspiration(score(.8)))
+        self.assertEqual(choose_extra_variations({0:.8,1:.79,3:.78},1),[3,1])
+        self.assertEqual(choose_extra_variations({0:.8},1),[3,6])
+        self.assertAlmostEqual(identity_aspiration({**headers,"X-Retake-Similarity-Before":".95"}),.95)
+
+    def test_under_target_runs_extra_finalist_and_keeps_verified_improvement(self):
+        calls = []
+        def fake_swap(*args):
+            variation = args[3][6]["variation"]
+            editing = bool((args[5] or {}).get("nim_editors"))
+            calls.append((variation,editing))
+            value = .86 if editing and variation==3 else .796 if variation==0 else .77
+            return str((variation,editing)).encode(), {
+                **score(value),
+                "X-Retake-Detail-Gate":"passed",
+                "X-Retake-Identity-Median-Similarity":".77",
+                "X-Retake-Similarity-Before":".06",
+                "X-Retake-FLUX-Status":"accepted" if editing and variation==3 else "detail-gain-insufficient",
+            }
+        with patch.object(srv,"process_swap",fake_swap):
+            image, headers = srv.run_ultra_search(
+                Path("."),"1024x1024",False,fake_request(),lambda *_a,**_k:None,
+                caches={"nim_editors":{"retake-local/flux2-klein-4b":0}}, min_duration_seconds=0)
+        self.assertEqual(image,b"(3, True)")
+        self.assertEqual(headers["X-Retake-Finalist-Attempts"],"2")
+        self.assertEqual(headers["X-Retake-Ultra-Winner"],"4")
+        self.assertEqual(headers["X-Retake-FLUX-Status"],"accepted")
+        self.assertEqual(headers["X-Retake-Identity-Gain"],".8000".rjust(6,"0"))
+        self.assertEqual(sum(editing for _,editing in calls),2)

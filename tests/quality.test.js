@@ -85,3 +85,15 @@ test("NVIDIA jury badge reports the real outcome and never invents numbers", asy
   assert.equal(describeNvidiaJudge("not-consented"), "");
   assert.equal(describeNvidiaJudge("switched", 6, 7), "NVIDIA jürisi daha doğal görünen finalisti seçti");
 });
+
+
+test("adaptive result and diagnostic labels do not imply missing data or certainty", async () => {
+  const {describeAdaptiveQuality,describeFluxMetrics,describeJudgeError} = await import("../src/quality.js");
+  assert.match(describeAdaptiveQuality(.796,.06,.835,2), /hedefi karşılanamadı/);
+  assert.match(describeAdaptiveQuality(.85,.06,.835,2), /hedefi karşılandı/);
+  assert.equal(describeAdaptiveQuality(.8,.1,null,1),"");
+  assert.equal(describeFluxMetrics(null,"",""),"");
+  assert.match(describeFluxMetrics(-.01,.03,.2),/kimlik farkı -1,0/);
+  assert.match(describeJudgeError("http-401"),/yetkilendirmesi/);
+  assert.equal(describeJudgeError("token=secret"),"");
+});

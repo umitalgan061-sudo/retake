@@ -186,3 +186,63 @@ def should_continue_ultra(
     budget_seconds: float = ULTRA_SEARCH_BUDGET_SECONDS
 ) -> bool:
     return 0 <= completed_rounds < total_rounds and elapsed_seconds < budget_seconds
+
+
+# Search aspirations, not identity guarantees. Median pairwise reference
+# cosine is an imperfect guide, not a calibrated threshold for a person.
+ULTRA_EXTRA_FINALISTS = 2
+ULTRA_EXTRA_START_BUDGET_SECONDS = 240
+ULTRA_PROFILE_MARGIN = .065
+
+def _header_cosine(headers, name):
+    try:
+        value = float(headers.get(name, ""))
+    except (ValueError, TypeError):
+        return None
+    return value if math.isfinite(value) and -1 <= value <= 1 else None
+
+def identity_aspiration(headers):
+    median = _header_cosine(headers, "X-Retake-Identity-Median-Similarity")
+    before = _header_cosine(headers, "X-Retake-Similarity-Before")
+    if median is None or median < .30:
+        return None
+    # Never demand an impossible fixed score; preserve an already strong
+    # original rather than making larger edits merely for the sake of edits.
+    target = min(.93, max(.55, median + ULTRA_PROFILE_MARGIN))
+    if before is not None:
+        target = max(target, before)
+    return target
+
+def identity_gain(headers):
+    after = score_from_headers(headers)
+    before = _header_cosine(headers, "X-Retake-Similarity-Before")
+    return None if after is None or before is None else after - before
+
+def needs_extra_finalist(headers):
+    target = identity_aspiration(headers)
+    score = score_from_headers(headers)
+    return target is not None and score is not None and score < target - ULTRA_SCORE_EPS
+
+def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALISTS):
+    """Try a different verified variation, then a distinct geometry/weight.
+
+    Only metadata is retained here; the next pass starts on the original.
+    Prefer a verified alternative from another swapper-weight family.
+    """
+    if not 1 <= winner_round <= len(ULTRA_VARIATIONS):
+        return []
+    winner = ULTRA_VARIATIONS[winner_round - 1]
+    families = (1.0,1.0,1.0,.95,1.0,1.0,.90,1.0,.95,.95,.95,.95,.95,.95,.95,.95,.90,.90,.95,.95,.90,.90,.90,.90)
+    others = [(variation, score) for variation, score in round_scores.items()
+              if variation in ULTRA_VARIATIONS and variation != winner
+              and isinstance(score, (float, int)) and math.isfinite(score)]
+    others.sort(key=lambda item: (families[item[0]] != families[winner], item[1]), reverse=True)
+    choices = [variation for variation, _ in others[:count]]
+    # If the time budget allowed only one original round, use one of the
+    # different weight/geometry options that has not already been evaluated.
+    for variation in (3, 6, 2, 10, 7):
+        if len(choices) >= count:
+            break
+        if variation != winner and variation not in choices and variation not in round_scores:
+            choices.append(variation)
+    return choices

@@ -1,4 +1,4 @@
-const SHELL_CACHE = "retake-shell-v33";
+const SHELL_CACHE = "retake-shell-v34";
 const AI_CACHE = "retake-ai-assets-v2";
 // Written by src/reference-cache.js; must survive service-worker updates.
 const REFERENCE_CACHE = "retake-reference-photos-v1";

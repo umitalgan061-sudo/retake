@@ -34,6 +34,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
+    from .fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
@@ -58,6 +59,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
+    from fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
@@ -1884,6 +1886,44 @@ def process_swap(
                 elif any(row[2] == flux_model for row in nim_candidates):
                     flux_status = "candidate-not-selected"
                 print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
+        # Finest features (v24): eyes and lashes, brows, lips, nose tip and
+        # teeth are measured one by one on the target mesh against the photo.
+        # A soft feature gets its own detail back, a ringing one is softened
+        # and a lost catchlight returns from the photo's light. Kept only if
+        # ArcFace and the regional detail gate verify the delivered pixels.
+        fine_report: dict[str, Any] = {"status": "no-mesh"}
+        fine_decision = "no-mesh"
+        if metadata.get("targetLandmarks") and centroid:
+            fine_path = temp_dir / "retake-fine-features.png"
+            try:
+                fine_report = refine_fine_features_file(
+                    target_path, final_output, fine_path, metadata["faceBounds"], metadata["targetLandmarks"]
+                )
+                fine_score = None
+                gate_passed = False
+                if fine_report.get("status") == "applied":
+                    gate_passed = check_detail_gate(target_path, fine_path, metadata["faceBounds"])[0]
+                    if gate_passed:
+                        fine_score = score_identity(facefusion_dir, centroid, [fine_path])[0]
+                accepted_fine, fine_decision = accept_fine_refinement(
+                    fine_report, fine_score, result_similarity, gate_passed
+                )
+                if accepted_fine:
+                    shutil.copyfile(fine_path, final_output)
+                    result_similarity = fine_score
+                print(
+                    f"[Retake] İnce bölgeler: karar={fine_decision}; "
+                    f"oranlar={describe_fine_report(fine_report) or '—'}; "
+                    f"göz ışığı={fine_report.get('catchlights', {})}; "
+                    f"göz akı={fine_report.get('sclera', {})}; "
+                    f"kalite {fine_report.get('quality_before', '—')} → {fine_report.get('quality_after', '—')}"
+                    + (f"; ArcFace={fine_score:.3f}" if fine_score is not None else "") + ".",
+                    flush=True
+                )
+            except Exception as error:  # finishing is optional: keep the verified result
+                fine_report, fine_decision = {"status": "error"}, "error"
+                print(f"[Retake] İnce bölge iyileştirmesi atlandı: {error}", flush=True)
+
         # An ink-like one-pixel face outline can survive the global ArcFace
         # gate. Attempt a narrow, local cleanup on the existing face matte,
         # then keep it only if ArcFace still verifies the same identity.
@@ -2022,6 +2062,16 @@ def process_swap(
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
             "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
+            "X-Retake-Fine-Features": fine_decision,
+            "X-Retake-Fine-Detail": describe_fine_report(fine_report),
+            "X-Retake-Catchlights": (
+                f"{fine_report.get('catchlights_restored', 0)}/{len(fine_report.get('catchlights') or {})}"
+                if isinstance(fine_report.get("catchlights"), dict) else ""
+            ),
+            "X-Retake-Sclera": (
+                f"{fine_report.get('sclera_corrected', 0)}/{len(fine_report.get('sclera') or {})}"
+                if isinstance(fine_report.get("sclera"), dict) else ""
+            ),
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
@@ -2772,7 +2822,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
-            "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined"
+            "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined, "
+            "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2862,6 +2913,9 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             # v23: selectable quality depth (longer search, refinement,
             # several realism finalists) and a job-sized pass cache.
             "quality_depths": True,
+            # v24: mesh-guided finishing of eyes, brows, lips, nose tip,
+            # teeth, catchlights and eye whites (verified per candidate).
+            "fine_features": True,
             "ultra_depths": depth_summary(),
             "ultra_default_depth": ULTRA_DEFAULT_DEPTH,
             "pass_cache": (

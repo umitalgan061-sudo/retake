@@ -488,6 +488,42 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Variation-Params"], "1.000,0.260,1.000")
         self.assertEqual(headers["X-Retake-Variation-Refined"], "on")
 
+    def fine_refiner(self, report):
+        def refine(original, composite, output, bounds, landmarks):
+            self.fine_calls = getattr(self, "fine_calls", 0) + 1
+            image = cv2.imread(str(composite), cv2.IMREAD_UNCHANGED)
+            image[250, 195, :3] = (1, 2, 3)  # a visible, verifiable change
+            cv2.imwrite(str(output), image)
+            return report
+        return refine
+
+    def test_fine_feature_refinement_is_kept_only_when_arcface_verifies_it(self):
+        applied = {"status": "applied", "quality_before": 0.70, "quality_after": 0.82,
+                   "catchlights": {"eye_r": "restored", "eye_l": "present"}, "catchlights_restored": 1,
+                   "features": {"eye_r": {"before": 0.61, "after": 0.97, "action": "restore", "shift": [0, 0]}}}
+        mesh = {"targetLandmarks": [[195.0, 250.0]] * 478}
+        self.candidate_scores = {"retake-fine-features.png": 0.80}
+        with patch.object(srv, "refine_fine_features_file", self.fine_refiner(applied)):
+            headers = self.run_swap(0, [], extra_metadata=mesh)
+        self.assertEqual(headers["X-Retake-Fine-Features"], "applied")
+        self.assertEqual(headers["X-Retake-Fine-Detail"], "eye_r:0.610>0.970")
+        self.assertEqual(headers["X-Retake-Catchlights"], "1/2")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8000")
+        self.assertEqual(tuple(int(v) for v in self.last_result[250, 195, :3]), (1, 2, 3))
+
+        self.candidate_scores = {"retake-fine-features.png": 0.70}
+        with patch.object(srv, "refine_fine_features_file", self.fine_refiner(applied)):
+            headers = self.run_swap(0, [], extra_metadata=mesh)
+        self.assertEqual(headers["X-Retake-Fine-Features"], "identity-loss")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.7400")
+        self.assertNotEqual(tuple(int(v) for v in self.last_result[250, 195, :3]), (1, 2, 3))
+
+    def test_fine_features_need_the_target_mesh(self):
+        with patch.object(srv, "refine_fine_features_file", self.fine_refiner({"status": "applied"})):
+            headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Fine-Features"], "no-mesh")
+        self.assertEqual(getattr(self, "fine_calls", 0), 0)
+
     def test_realism_render_that_loses_the_person_is_not_used(self):
         self.render_scores = [0.61, 0.70]
         headers = self.run_swap(0, [], realism={"python": Path("py"), "models": Path("m")})

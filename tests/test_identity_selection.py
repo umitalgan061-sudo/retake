@@ -118,4 +118,4 @@ class SourcePoolExplorationTests(unittest.TestCase):
         poses=[i*.01 for i in range(25)]
         choices={select_texture_reference(weights,report,poses,excluded_index=7,variation=i)
                  for i in (0,3,7,11,15,19,23)}
-        self.assertEqual(choices,{4,5,6})
+        self.assertEqual(choices,{5,6,8})

@@ -27,7 +27,7 @@ try:
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from .identity_selection import plan_identity_source_sets, select_texture_reference
+    from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
@@ -46,7 +46,7 @@ except ImportError:
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from identity_selection import plan_identity_source_sets, select_texture_reference
+    from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
@@ -1360,15 +1360,7 @@ def process_swap(
                 candidate_scores = score_identity(
                     facefusion_dir, centroid, [path for _, path, _, _ in candidates]
                 )
-                best_index = 0
-                best_value = candidate_scores[0]
-                for i, value in enumerate(candidate_scores[1:], start=1):
-                    # Require an observable improvement, not a tiny change
-                    # from embedding / image-encoding measurement noise.
-                    if value is not None and (
-                        best_value is None or value > best_value + 0.006
-                    ):
-                        best_index, best_value = i, value
+                best_index = choose_identity_pool(candidate_scores, variation)
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
                 print(
                     "Kaynak havuzu karşılaştırması: "

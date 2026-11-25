@@ -352,3 +352,12 @@ class AdaptiveFinalistsTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-FLUX-Status"],"accepted")
         self.assertEqual(headers["X-Retake-Identity-Gain"],".8000".rjust(6,"0"))
         self.assertEqual(sum(editing for _,editing in calls),2)
+
+
+class FluxRetryBudgetTest(unittest.TestCase):
+    def test_defer_only_when_both_metrics_are_measured_and_bad(self):
+        from tools.ultra_mode import defer_flux_retry
+        self.assertTrue(defer_flux_retry("identity-loss",{"X-Retake-FLUX-Identity-Delta":"-.076","X-Retake-FLUX-Detail-Delta":"-.11"}))
+        for identity,detail in (("-.01","-.11"),("-.076",".05"),("nan","-.11"),("-.076","")):
+            self.assertFalse(defer_flux_retry("identity-loss",{"X-Retake-FLUX-Identity-Delta":identity,"X-Retake-FLUX-Detail-Delta":detail}))
+        self.assertFalse(defer_flux_retry("accepted",{"X-Retake-FLUX-Identity-Delta":"-.076","X-Retake-FLUX-Detail-Delta":"-.11"}))

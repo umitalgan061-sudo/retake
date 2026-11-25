@@ -2249,7 +2249,7 @@ def run_ultra_search(
                 )
             except Exception as error:
                 # The jury is advisory: never lose a verified local result.
-                judge_result = judge_headers("error", len(pool))
+                judge_result = judge_headers("error", len(pool), error=error)
                 print(f"[NVIDIA jüri] Atlandı, yerel seçim korundu: {error}", flush=True)
     finalists = []
 
@@ -2529,7 +2529,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
-            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, "
+            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")

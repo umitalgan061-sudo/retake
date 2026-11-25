@@ -2529,7 +2529,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
-            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, "
+            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")

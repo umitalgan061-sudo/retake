@@ -32,6 +32,7 @@ try:
     from .ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from .neck_harmonization import neck_candidate_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
@@ -51,6 +52,7 @@ except ImportError:
     from ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from neck_harmonization import neck_candidate_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
@@ -382,7 +384,11 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     nvidia_judge = metadata.get('nvidiaJudge', False)
     if type(nvidia_judge) is not bool:
         raise ValueError('NVIDIA jüri onayı true/false olmalı.')
+    neck_harmonize = metadata.get('neckHarmonize', False)
+    if type(neck_harmonize) is not bool:
+        raise ValueError('Boyun uyumu seçeneği true/false olmalı.')
     return {
+        'neckHarmonize': neck_harmonize,
         'nvidiaJudge': nvidia_judge,
         'exactReferenceIndex': exact_index,
         "poseDistances": pose_distances,
@@ -1875,6 +1881,24 @@ def process_swap(
         except Exception as error:
             print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
 
+        # Neck is a separate optional native-pixel candidate. Require a mesh,
+        # connected skin evidence, and a fresh identity/detail verification.
+        neck_status, neck_pixels = 'off', 0
+        if metadata.get('neckHarmonize') is True and centroid:
+            neck_path = temp_dir / 'retake-neck-harmonized.png'
+            try:
+                neck_status, neck_pixels = neck_candidate_file(target_path, final_output, neck_path, metadata['faceBounds'], metadata.get('targetLandmarks'))
+                if neck_status == 'applied':
+                    neck_score = score_identity(facefusion_dir, centroid, [neck_path])[0]
+                    if neck_score is not None and neck_score >= result_similarity - .001 and check_detail_gate(target_path, neck_path, metadata['faceBounds'])[0]:
+                        shutil.copyfile(neck_path, final_output)
+                        result_similarity = neck_score
+                    else:
+                        neck_status, neck_pixels = 'quality-rejected', 0
+            except Exception as error:
+                neck_status, neck_pixels = 'error', 0
+                print(f'[Retake] Neck candidate skipped: {type(error).__name__}', flush=True)
+
         # Measure the FINAL delivered pixels, not the pre-repair proposal.
         # The ArcFace guard may reject a successful-looking cleanup; never
         # reward a candidate for a repair that wasn't actually committed.
@@ -1931,6 +1955,8 @@ def process_swap(
             raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-Neck-Status': neck_status,
+            'X-Retake-Neck-Pixels': str(neck_pixels),
             'X-Retake-NIM-Editor': nim_used,
             'X-Retake-FLUX-Status': flux_status,
             'X-Retake-FLUX-Identity-Delta': '' if flux_delta is None else f"{flux_delta:.5f}",
@@ -2514,7 +2540,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "

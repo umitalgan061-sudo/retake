@@ -35,7 +35,7 @@ try:
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 except ImportError:
@@ -54,7 +54,7 @@ except ImportError:
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 
@@ -2169,18 +2169,25 @@ def run_ultra_search(
     # quality gates. Only local editors are used on extra finalists; avoid
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
+    skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
     if needs_extra_finalist(best_headers):
         for variation in choose_extra_variations(round_scores, best_round):
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
                 break
             finalist_attempts += 1
+            local_only = skip_flux_once
+            skip_flux_once = False
+            extra_caches = {**(caches or {}), "realism": None}
+            if local_only:
+                extra_caches["nim_editors"] = None
+                print("[Ultra] Poor diffusion result: first extra finalist is identity-only.", flush=True)
             try:
                 if on_finalist is not None:
                     on_finalist()
                 candidate_image, candidate_headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
                     with_variation(parsed, variation), lambda *_a, **_k: None,
-                    {**(caches or {}), "realism": None}
+                    extra_caches
                 )
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
@@ -2189,9 +2196,10 @@ def run_ultra_search(
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
                     peak_identity = max(peak_identity, candidate_score)
-                    flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
-                    flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
-                elif flux_outcome != "accepted":
+                    if not local_only:
+                        flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
+                        flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                elif flux_outcome != "accepted" and not local_only:
                     flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
                     if flux_outcome == "accepted":
                         flux_outcome = "finalist-not-selected"

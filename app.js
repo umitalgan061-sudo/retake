@@ -1,6 +1,7 @@
 import { FaceDetector, FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.2.2/vision_bundle.mjs";
 import {
   formatBytes,
+  findExactReferenceFile,
   getLandmarkBounds,
   settleWithLimit,
   MAX_IMAGE_BYTES,
@@ -18,7 +19,7 @@ import {
   getFaceCropRect,
   createFaceAlphaMask
 } from "./src/nvidia-pipeline.js";
-import { alphaMaskFromRGBA, compositeMaskedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
+import { alphaMaskFromRGBA, binaryExtentFromRGBA, compositeMaskedRGBA, compositePreblendedRGBA, inspectOutsideMaskIntegrity } from "./src/face-only.js";
 import { calculateReferenceWeight, getSimilarityTransform, weightedAverageRGBA } from "./src/identity-profile.js";
 import {
   canonicalJaw,
@@ -36,9 +37,10 @@ import {
   summarizeReferenceShape
 } from "./src/head-geometry.js";
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
-import { meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
+import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
 import {
   bestResultIndex,
+  measureFaceEdit,
   describeProfileHealth,
   describeSimilarity,
   parseSimilarity,
@@ -286,15 +288,29 @@ async function checkFaceFusionStatus() {
       }
       if (!response.ok || !health.ok) throw new Error(health.error || "Yerel FaceFusion servisi hazır değil.");
       if (!health.cuda) throw new Error("FaceFusion çalışıyor ancak CUDAExecutionProvider bulunamadı. CUDA kurulumunu kontrol et.");
+      if (!health.ultra_mode || health.ultra_min_seconds < 420 ||
+          health.model !== "retake_hybrid_25_reference_ultra_v22" ||
+          health.lossless_preblended_transport !== true) {
+        throw new Error(
+          "Kayıpsız kontur düzeltmeli Retake motoru gerekli: GitHub’dan güncelleyip FaceFusion servisini yeniden başlat."
+        );
+      }
       state.faceFusionStatus = {
         checked: true,
         configured: true,
         model: health.model || "uniface_256",
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
-        message: health.realism
-          ? "FaceFusion 3.9.2, CUDA ve fotoğraf gerçekçiliği katmanı hazır."
-          : "FaceFusion 3.9.2 ve CUDA hazır. Gerçekçi cilt/dudak için: tools\\install_realism.ps1"
+        nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
+        finalFaceEditProof: health.final_face_edit_proof === true,
+        personalModel: Boolean(health.personal_model),
+        message: health.final_face_edit_proof !== true
+          ? 'Eski motor: son yüz değişimi denetimi için yerel Retake motorunu güncelle. Tarayıcı son görüntüyü yine kontrol eder.'
+          : health.personal_model
+          ? "Ultra-420 v22 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
+          : health.realism
+            ? "Ultra-420 v22 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
+            : "Ultra-420 v22 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -624,8 +640,16 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
+    item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
+    item.nimEditor ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.realism ? "fotoğraf gerçekçiliği" : "",
-    item.realFace ? "gerçek fotoğraf dokusu" : ""
+    item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
+    item.realFace ? "gerçek fotoğraf dokusu" : "",
+    item.lowerFace ? "referans sakal/çene dokusu" : "",
+    item.completeIdentity ? "tam yüz referans ayrıntısı" : "",
+    item.jawFocused ? "çene geometrisi uyarlaması" : "",
+    item.rimCleanup ? "yüz kenarı yumuşatıldı" : "",
+    item.identitySelection === "identity-only" ? "referans sakal/çene aktarımı finalde seçilemedi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
   elements.qualityBadge.hidden = !quality;
@@ -639,10 +663,18 @@ function addResult(blob, label, scores = {}) {
     blob,
     url: createObjectURL(blob),
     label,
+    faceEdit: scores.faceEdit ?? null,
+    nimEditor: scores.nimEditor || '',
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
+    lowerFace: scores.lowerFace === true,
+    completeIdentity: scores.completeIdentity === true,
+    jawFocused: scores.jawFocused === true,
+    rimCleanup: scores.rimCleanup === true,
+    identitySelection: scores.identitySelection || "",
     realism: scores.realism === true,
+    texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null
   };
   state.results.push(item);
@@ -1440,7 +1472,7 @@ function createAppearanceProfile(candidates) {
   };
 }
 
-async function buildLocalFaceFusionInputs() {
+async function buildLocalFaceFusionInputs(exactReference=null) {
   state.profileIsBuilding = true;
   updateProfileIndicator({
     title: "Yüz profili oluşturuluyor",
@@ -1639,11 +1671,12 @@ async function buildLocalFaceFusionInputs() {
       anchors: face.jaw.anchors.map(toCanvas),
       eyes: face.jaw.eyes.map(toCanvas),
       frontalness: face.jaw.frontalness
-    }, profile.jawContour)
+    }, profile.jawContour, { strength: 1.0, maxShift: 0.10 })
     : null;
-  const realFace = isRealFaceEnabled()
-    ? await prepareRealFace(face, profile, readyReferences, toCanvas)
-    : null;
+  // Always prepare pose-matched real-reference crops for the lower-face-only
+  // candidate. This does NOT activate the full-face transplant switch.
+  // If the mesh/pose is unreliable, the FaceFusion identity path continues.
+  const realFace = await prepareRealFace(face, profile, readyReferences, toCanvas, exactReference);
   // The face's mesh in crop pixels: the engine finds the beard and cheeks
   // with it to give the person's own facial-hair tone.
   const targetLandmarks = face.mesh
@@ -1653,8 +1686,18 @@ async function buildLocalFaceFusionInputs() {
   return {
     targetCanvas,
     referenceBlobs: profile.referenceBlobs,
+    exactReferenceIndex: exactReference ? readyReferences.indexOf(exactReference) : -1,
     referenceWeights: profile.weights,
     appearanceProfileBlob: profile.appearanceProfileBlob,
+    // Only scalar pose distances leave the device: each reference's mesh
+    // signature stays in the local profile; the server can try a smaller
+    // pose-matched identity pool as well as the full 25-photo mean.
+    poseDistances: Array.isArray(profile.poseDescriptors) && face.pose
+      ? profile.poseDescriptors.map((descriptor) => {
+          const distance = descriptorDistance(descriptor, face.pose);
+          return Number.isFinite(distance) ? Math.round(distance * 10000) / 10000 : null;
+        })
+      : null,
     profileCount: profile.validCount,
     totalProfileWeight: profile.totalWeight,
     faceBounds,
@@ -1667,8 +1710,8 @@ async function buildLocalFaceFusionInputs() {
   };
 }
 
-// Off by default: pasting another photo's face reads as a mask; the engine's
-// identity-guided realism layer is the default way to a photographic face.
+// Full-face paste remains opt-in. Retake v18 tries *only* a conservative
+// beard/chin/moustache reference candidate automatically in Ultra mode.
 const REAL_FACE_STORAGE_KEY = "retake-real-face-v2";
 
 function isRealFaceEnabled() {
@@ -1692,10 +1735,12 @@ function restoreRealFacePreference() {
 // engine warps each onto the target face and keeps the one that fits best, so
 // real skin, nose and lips replace the generated ones. Returns null when no
 // reference is close enough; the AI swap alone is then used.
-async function prepareRealFace(face, profile, readyReferences, toCanvas) {
+async function prepareRealFace(face, profile, readyReferences, toCanvas, exactReference=null) {
   if (!face.mesh || !face.pose || !Array.isArray(profile.poseDescriptors)) return null;
   const candidates = [];
-  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose)) {
+  for (const index of rankRealReferences(profile.poseDescriptors, profile.weights, face.pose, undefined, readyReferences.length)) {
+    if(readyReferences[index]===exactReference)continue;
+    if(candidates.length>=3)break;
     try {
       const candidate = await cropRealReference(readyReferences[index]);
       if (candidate) candidates.push(candidate);
@@ -1738,7 +1783,7 @@ async function cropRealReference(reference) {
   };
 }
 
-function applyGeneratedFacePatch(generatedTargetImage, crop) {
+function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false, binaryTransport = false, renderSize = crop) {
   if (!state.target?.image) throw new Error("Hedef fotoğraf bellekte bulunamadı.");
   const sourceImage = state.target.image;
   const imageWidth = sourceImage.naturalWidth;
@@ -1756,26 +1801,79 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
   const generatedContext = generatedCanvas.getContext("2d", { willReadFrequently: true });
   const outputWidth = generatedTargetImage.naturalWidth || generatedTargetImage.width;
   const outputHeight = generatedTargetImage.naturalHeight || generatedTargetImage.height;
+  if (binaryTransport && (outputWidth !== renderSize.width || outputHeight !== renderSize.height)) {
+    throw new Error("Yerel motor kayıpsız çıktı boyutunu koruyamadı.");
+  }
+  // Binary extent must be decoded at native render size before scaling. A
+  // scaled transparent bitmap would reintroduce fractional-alpha artifacts.
+  if (binaryTransport) {
+    generatedCanvas.width = outputWidth;
+    generatedCanvas.height = outputHeight;
+  }
   generatedContext.drawImage(
     generatedTargetImage,
     0, 0, outputWidth, outputHeight,
-    0, 0, crop.width, crop.height
+    0, 0, generatedCanvas.width, generatedCanvas.height
   );
-  const generatedCrop = generatedContext.getImageData(0, 0, crop.width, crop.height);
-  const parserAlphaMask = alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
+  let generatedCrop = generatedContext.getImageData(0, 0, generatedCanvas.width, generatedCanvas.height);
+  if (preblended && !binaryTransport) {
+    throw new Error("Eski yerel motor yumuşak alfa taşıyor. Kontur hatasını önlemek için Retake motorunu güncelleyip yeniden başlat.");
+  }
+  if (binaryTransport && (outputWidth !== crop.width || outputHeight !== crop.height)) {
+    // Resample opaque preblended RGB independently from its binary extent.
+    // Use nearest-neighbor extent; never read resampled low-alpha RGB.
+    const nativeRGBA = generatedCrop.data;
+    binaryExtentFromRGBA(nativeRGBA, outputWidth, outputHeight);
+    const maskCanvas = document.createElement("canvas");
+    maskCanvas.width = outputWidth;
+    maskCanvas.height = outputHeight;
+    const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+    const opaque = new Uint8ClampedArray(nativeRGBA);
+    const extent = new Uint8ClampedArray(nativeRGBA.length);
+    const targetNative = document.createElement("canvas");
+    targetNative.width = outputWidth;
+    targetNative.height = outputHeight;
+    const nativeContext = targetNative.getContext("2d", { willReadFrequently: true });
+    nativeContext.drawImage(cropCanvas, 0, 0, outputWidth, outputHeight);
+    const nativeSource = nativeContext.getImageData(0, 0, outputWidth, outputHeight).data;
+    for (let i = 0; i < nativeRGBA.length; i += 4) {
+      const a = nativeRGBA[i + 3];
+      if (a === 0) opaque.set(nativeSource.subarray(i, i + 3), i);
+      opaque[i + 3] = 255;
+      extent.set([a, a, a, 255], i);
+    }
+    generatedContext.putImageData(new ImageData(opaque, outputWidth, outputHeight), 0, 0);
+    maskContext.putImageData(new ImageData(extent, outputWidth, outputHeight), 0, 0);
+    const scaled = document.createElement("canvas");
+    scaled.width = crop.width;
+    scaled.height = crop.height;
+    const scaledContext = scaled.getContext("2d", { willReadFrequently: true });
+    scaledContext.imageSmoothingQuality = "high";
+    scaledContext.drawImage(generatedCanvas, 0, 0, crop.width, crop.height);
+    generatedCrop = scaledContext.getImageData(0, 0, crop.width, crop.height);
+    scaledContext.imageSmoothingEnabled = false;
+    scaledContext.drawImage(maskCanvas, 0, 0, crop.width, crop.height);
+    const maskPixels = scaledContext.getImageData(0, 0, crop.width, crop.height).data;
+    for (let i = 0; i < generatedCrop.data.length; i += 4) generatedCrop.data[i + 3] = maskPixels[i];
+  }
+  const parserAlphaMask = binaryTransport
+    ? binaryExtentFromRGBA(generatedCrop.data, crop.width, crop.height)
+    : alphaMaskFromRGBA(generatedCrop.data, crop.width, crop.height);
   const hasTransparentPixels = parserAlphaMask.some((alpha) => alpha < 0.999);
   // New local FaceFusion server embeds its parser/occlusion-derived change matte
   // in PNG alpha. Retain the ellipse only as a backward-compatible fallback.
-  const alphaMask = hasTransparentPixels
+  if (binaryTransport && !preblended) {
+    throw new Error("Yerel motorun kayıpsız alfa maskesi geçersiz; bozuk görüntü gösterilmedi.");
+  }
+  const alphaMask = binaryTransport || hasTransparentPixels
     ? parserAlphaMask
     : createFaceAlphaMask(crop.width, crop.height, crop.face);
-  const blended = compositeMaskedRGBA(
-    sourceCrop.data,
-    generatedCrop.data,
-    alphaMask,
-    crop.width,
-    crop.height
-  );
+  // A local engine may deliver final, already-masked RGB + an edit-extent
+  // alpha. Never blend that image a second time: alpha squared erases identity
+  // characteristics along facial transitions.
+  const blended = preblended && (binaryTransport || hasTransparentPixels)
+    ? compositePreblendedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height)
+    : compositeMaskedRGBA(sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height);
 
   const fullCanvas = document.createElement("canvas");
   fullCanvas.width = imageWidth;
@@ -1801,8 +1899,12 @@ function applyGeneratedFacePatch(generatedTargetImage, crop) {
     throw new Error("Güvenlik kontrolü başarısız: yüz maskesi dışında " + integrity.changedPixels + " piksel değişti.");
   }
 
+  // Measure the actual delivered crop at native resolution, after all scaling
+  // and masks. A high embedding score alone never proves an edit occurred.
+  const faceEdit=measureFaceEdit(sourceCrop.data,blended,crop.width,crop.height,crop.face);
+  if(!faceEdit.meaningful)throw new Error('Son görüntüde yüz içi değişim yetersiz; düzenlenmemiş fotoğraf başarılı sonuç olarak gösterilmedi.');
   fullContext.putImageData(output, 0, 0);
-  return canvasToBlob(fullCanvas);
+  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit}));
 }
 
 const stones = { hero: null, wait: null, timer: null };
@@ -1863,7 +1965,7 @@ function hideWaitStage() {
 }
 
 const JOB_POLL_INTERVAL_MS = 1500;
-const JOB_TIMEOUT_MS = 20 * 60 * 1000;
+const JOB_TIMEOUT_MS = 45 * 60 * 1000;
 
 // The engine works on the swap as a background job and reports its real stage,
 // so a long run never depends on a single open connection.
@@ -1887,14 +1989,17 @@ async function waitForEngineJob(jobId, total) {
     }
     if (job.status === "error") throw new Error(job.error || "FaceFusion işlemi başarısız.");
     const remaining = formatRemaining(job.eta_seconds);
+    const minimumRemaining = Number(job.minimum_remaining_seconds) > 0
+      ? formatRemaining(job.minimum_remaining_seconds)
+      : "";
     setWaitProgress(
       job.step,
       job.total || total,
-      `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}` + (remaining ? ` · ${remaining}` : "")
+      `${Math.min(job.step + 1, job.total || total)} / ${job.total || total} · ${job.stage}` + (remaining ? ` · ${remaining}` : "") + (minimumRemaining ? ` · Ultra min. kalan ${minimumRemaining}` : "")
     );
     if (job.status === "done") return;
   }
-  throw new Error("İşlem 20 dakika içinde tamamlanmadı.");
+  throw new Error("İşlem 45 dakika içinde tamamlanmadı.");
 }
 
 async function runFaceFusionEdit() {
@@ -1923,8 +2028,10 @@ async function runFaceFusionEdit() {
 
   state.isSwapping = true;
   updateSwapAvailability();
-  const variation = state.nextVariation;
-  elements.outputTitle.textContent = state.result ? "Yeni görünüm hazırlanıyor" : "Yüz düzenleniyor";
+  // Ultra always runs the complete bounded search on the server. No more
+  // rotating a single head-fit variation when the user taps "generate".
+  const variation = 0;
+  elements.outputTitle.textContent = "Ultra-420 · en az 7 dakika kalite araması";
   elements.outputStatus.textContent = "Bilgisayarda çalışıyor";
   if (!state.result) {
     elements.outputPlaceholder.hidden = false;
@@ -1932,15 +2039,23 @@ async function runFaceFusionEdit() {
     elements.outputMessage.textContent = "İlk kullanımda profil hazırlanması biraz zaman alabilir.";
   }
 
-  showWaitStage(state.result ? "Yeni görünüm hazırlanıyor" : "Yüzün bilgisayarında işleniyor");
+  showWaitStage("Ultra-420 v22 · tam yüz, çene ve sakal referansları karşılaştırılıyor");
 
   let generatedUrl = null;
   try {
+    const targetSnapshot = state.target;
+    const exactReference = await findExactReferenceFile(targetSnapshot.file, state.references);
+    if (state.target !== targetSnapshot) throw new Error("Hedef fotoğraf değişti; işlemi yeniden başlat.");
+    // All 25 references still build the identity profile. Do not copy the
+    // identical target back as the direct photographic reference.
+    if(exactReference)setWaitProgress(0,1,"Aynı dosya referans bankasında mevcut; diğer referanslardan yeni yüz ayrıntıları işleniyor…");
     const {
       targetCanvas,
       referenceBlobs,
+      exactReferenceIndex,
       referenceWeights,
       appearanceProfileBlob,
+      poseDistances,
       faceBounds,
       targetSize,
       headFit,
@@ -1948,7 +2063,7 @@ async function runFaceFusionEdit() {
       realFace,
       targetLandmarks,
       crop
-    } = await buildLocalFaceFusionInputs();
+    } = await buildLocalFaceFusionInputs(exactReference);
     const targetBlob = await canvasToBlob(targetCanvas);
 
     const form = new FormData();
@@ -1957,13 +2072,17 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    const metadata = { referenceWeights, faceBounds, targetSize, headFit, jawWarp, variation };
+    const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
+    if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
     if (realFace) {
       realFace.candidates.forEach((candidate, index) => {
         form.append("real_reference", candidate.blob, `retake-real-reference-${index + 1}.png`);
       });
       metadata.realFace = {
+        // Both candidates are compared automatically in Ultra mode.
+        // The explicit manual switch still forces full-face-only mode.
+        mode: isRealFaceEnabled() ? "full" : "both",
         targetLandmarks: realFace.targetLandmarks,
         references: realFace.candidates.map((candidate) => ({ landmarks: candidate.landmarks }))
       };
@@ -1987,11 +2106,26 @@ async function runFaceFusionEdit() {
         throw new Error(payload.error || `Sonuç alınamadı (HTTP ${response.status}).`);
       }
     }
+    if (response.headers.get("X-Retake-Ultra") !== "on") {
+      throw new Error("Yerel motor Ultra Mod sonucunu doğrulamadı. Motoru güncelleyip tekrar başlat.");
+    }
+    const completedRounds = Number(response.headers.get("X-Retake-Ultra-Rounds"));
+    const attemptedRounds = Number(response.headers.get("X-Retake-Ultra-Attempted"));
+    const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
+    const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
+      nimEditor: response.headers.get('X-Retake-NIM-Editor') || '',
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",
+      lowerFace: response.headers.get("X-Retake-Lower-Face-Transfer") === "on",
+      completeIdentity: response.headers.get("X-Retake-Complete-Identity") === "on",
+      jawFocused: response.headers.get("X-Retake-Jaw-Focused") === "on",
+      rimCleanup: response.headers.get("X-Retake-Rim-Cleanup") === "on",
+      identitySelection: response.headers.get("X-Retake-Identity-Selection") || "",
       realism: response.headers.get("X-Retake-Realism") === "on",
+      texture: response.headers.get("X-Retake-Texture-Source") || "average",
+      detailScore,
       referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
     };
     showProfileHealth(
@@ -2009,12 +2143,23 @@ async function runFaceFusionEdit() {
     }
     const generated = await loadImage(generatedBlob);
     generatedUrl = generated.url;
-    const resultBlob = await applyGeneratedFacePatch(generated.image, crop);
-    state.nextVariation = (variation + 1) % 4;
-    addResult(resultBlob, FACE_VARIATION_LABELS[variationIndex], scores);
-    elements.disabledNote.textContent = "Yeniden oluştur, farklı bir kafa oranı ve sakal dengesi dener.";
+    const delivered = await applyGeneratedFacePatch(
+      generated.image, crop, response.headers.get("X-Retake-Compositing") === "preblended",
+      response.headers.get("X-Retake-Alpha-Transport") === "binary", targetSize
+    );
+    state.nextVariation = 0;
+    const ultraLabel = "Ultra-420 · en iyi sonuç" + (
+      Number.isInteger(completedRounds) && completedRounds >= 1
+        ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
+    );
+    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit});
+    elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
-    showToast(`Sonuç hazır · ${FACE_VARIATION_LABELS[variationIndex]}` + (scoreText ? ` · ${scoreText}` : "") + ".");
+    showToast(
+      "Ultra sonuç hazır" +
+      (Number.isInteger(winnerRound) && winnerRound > 0 ? ` · seçilen tur ${winnerRound}` : "") +
+      (scoreText ? ` · ${scoreText}` : "") + "."
+    );
     setRuntimeStatus("Yüz düzenleme tamamlandı · sonuç hazır");
   } catch (error) {
     state.profileIsBuilding = false;

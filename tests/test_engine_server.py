@@ -101,6 +101,11 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(response.status, 200)
         self.assertTrue(health["async_jobs"])
         self.assertFalse(health["paired"])
+        self.assertTrue(health["ultra_mode"])
+        self.assertTrue(health["lossless_preblended_transport"])
+        self.assertEqual(health["ultra_rounds"], 24)
+        self.assertEqual(health["ultra_min_seconds"], 420)
+        self.assertEqual(health["ultra_search_budget_seconds"], 420)
 
     def test_requests_addressed_to_another_host_are_refused(self):
         response, _ = self.request("GET", "/health", host="evil.example")
@@ -113,21 +118,25 @@ class LocalEngineTest(EngineServerTest):
             for step in range(len(srv.JOB_STAGES)):
                 progress(step)
                 seen.append(step)
-            return PNG, {"X-Retake-Variation": "0"}
+            return PNG, {"X-Retake-Variation": "0", "X-Retake-Similarity": "0.80"}
 
         body, content_type = multipart_body()
-        with patch.object(srv, "process_swap", fake_swap):
+        with patch.object(srv, "process_swap", fake_swap), patch.object(srv, "ULTRA_MIN_SECONDS", 0):
             response, payload = self.request("POST", "/api/face-swap", body, {"Content-Type": content_type})
             self.assertEqual(response.status, 202)
             accepted = json.loads(payload)
             job = self.wait_for_job(accepted["job_id"])
         self.assertEqual(job["status"], "done")
         self.assertEqual(job["step"], job["total"])
-        self.assertEqual(seen, list(range(len(srv.JOB_STAGES))))
+        self.assertEqual(seen, list(range(len(srv.JOB_STAGES))) * len(srv.ULTRA_VARIATIONS))
+        self.assertTrue(job["ultra"])
+        self.assertEqual(job["total"], len(srv.JOB_STAGES) * len(srv.ULTRA_VARIATIONS))
         response, payload = self.request("GET", f"/api/jobs/{accepted['job_id']}/result")
         self.assertEqual(response.status, 200)
         self.assertEqual(response.getheader("Content-Type"), "image/png")
         self.assertEqual(response.getheader("X-Retake-Variation"), "0")
+        self.assertEqual(response.getheader("X-Retake-Ultra"), "on")
+        self.assertEqual(response.getheader("X-Retake-Ultra-Rounds"), "24")
         self.assertEqual(payload, PNG)
 
     def test_failed_swap_is_reported_through_the_job_and_frees_the_engine(self):
@@ -202,6 +211,25 @@ class PairedEngineTest(EngineServerTest):
         self.assertEqual(response.getheader("Access-Control-Allow-Origin"), ORIGIN)
 
 
+class PoseMetadataValidationTests(unittest.TestCase):
+    def test_pose_distances_are_typed_and_optional(self):
+        metadata = {
+            "referenceWeights": [1] * 25,
+            "faceBounds": {"x": 12, "y": 10, "width": 140, "height": 160},
+            "poseDistances": [0.04] * 20 + [None] * 5
+        }
+        checked = srv._validate_metadata(metadata, 25)
+        self.assertEqual(checked["poseDistances"][0], 0.04)
+        self.assertIsNone(checked["poseDistances"][24])
+        self.assertIsNone(srv._validate_metadata({
+            "referenceWeights": [1] * 25,
+            "faceBounds": metadata["faceBounds"]
+        }, 25)["poseDistances"])
+        for bad in ([0.1] * 24, [float("nan")] * 25, [True] * 25, [-1] * 25):
+            with self.assertRaisesRegex(ValueError, "poz mesafeleri"):
+                srv._validate_metadata({**metadata, "poseDistances": bad}, 25)
+
+
 class AllowedOriginsTest(unittest.TestCase):
     def test_new_and_old_sites_are_allowed_by_default(self):
         source = Path(srv.__file__).read_text(encoding="utf-8")
@@ -241,6 +269,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
         self.arcface_calls = 0
         self.facefusion_calls = []
+        self.transplant_modes = []
         rng = np.random.default_rng(5)
         target = np.full((512, 391, 3), (120, 150, 205), np.uint8)
         target = np.clip(target + rng.normal(0, 3, target.shape), 0, 255).astype(np.uint8)
@@ -252,16 +281,24 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_arcface(self, facefusion_dir, reference_paths):
         self.arcface_calls += 1
-        return {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
+        report = {"ok": True, "median_similarity": 0.8, "outlier_indices": [], "outlier_files": [], "centroid": [1.0, 0.0]}
+        if getattr(self, "enable_quality_candidates", False):
+            report["reference_median_similarities"] = [0.55 + index * 0.01 for index in range(srv.MAX_REFERENCES)]
+        return report
 
     render_scores: list = []
 
     reinforce_scores = (0.70, 0.60)
 
     blend_scores = None
+    candidate_scores = None
 
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
+        if names == ["retake-rim-clean.png"]:
+            # The optional post-render cleanup uses a second score probe.
+            # Keep the preceding full-rescue probe available to existing tests.
+            return [self.candidate_scores.get(names[0], 0.74) if self.candidate_scores else 0.74]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)
@@ -269,12 +306,26 @@ class CachedPipelineTest(unittest.TestCase):
             self.blend_probes = names
             return [self.blend_scores[int(name.split("-")[-1][:-4]) if name[-5].isdigit() else 0] for name in names]
         self.scored = (centroid, names)
-        return [0.74, *self.render_scores[:len(probes) - 2], 0.21]
+        values = []
+        for name in names:
+            if self.candidate_scores and name in self.candidate_scores:
+                values.append(self.candidate_scores[name])
+            elif name == "target.png":
+                values.append(0.21)
+            elif name.startswith("realism-"):
+                values.append(self.render_scores[int(name.removeprefix("realism-").removesuffix(".png")) - 1])
+            elif name == "retake-pre-geometry.png" or name == "retake-identity-only.png":
+                values.append(0.73)
+            else:
+                values.append(0.74)
+        return values
 
     def fake_realism(self, realism, final_output, target_path, bounds, centroid, temp_dir, landmarks=None):
         """Two 'renders': the result with a visibly re-rendered face."""
         self.realism_calls = getattr(self, "realism_calls", 0) + 1
         image = cv2.imread(str(final_output), cv2.IMREAD_COLOR)
+        target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
+        self.assertEqual(image.shape, target.shape, "realism receives native-size target, not padded inference copy")
         paths = []
         for index, shade in enumerate((40, 60), start=1):
             render = image.copy()
@@ -286,12 +337,15 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_facefusion(self, facefusion_dir, target_path, sources, output, model, boost, weight):
         self.facefusion_calls.append((model, weight))
+        self.source_sizes = getattr(self, "source_sizes", [])
+        self.source_sizes.append((model, len(sources)))
         image = cv2.imread(str(target_path))
         cv2.ellipse(image, (195, 260), (85, 110), 0, 0, 360, (90, 110, 170), -1)
         cv2.imwrite(str(output), image)
         return boost
 
     def fake_transplant(self, result, target, real_face, face_width):
+        self.transplant_modes.append(real_face.get("mode"))
         painted = result.copy()
         cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
         return painted, True
@@ -306,7 +360,7 @@ class CachedPipelineTest(unittest.TestCase):
             "headFit": {"scaleX": 0.97, "scaleY": 1.04}
         }
         if real_face:
-            metadata["realFace"] = {"targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
+            metadata["realFace"] = {"mode": real_face if real_face in ("lower", "full", "both") else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
             metadata["realReferenceBytes"] = [b"photo"]
         parsed = (self.target_png, [self.reference] * srv.MAX_REFERENCES, ".png", [".png"] * srv.MAX_REFERENCES,
                   self.reference, ".png", metadata)
@@ -320,6 +374,11 @@ class CachedPipelineTest(unittest.TestCase):
                 lambda step, cached=False: stages.append((step, cached)), {**self.caches, "realism": realism}
             )
         self.last_result = cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED)
+        self.assertEqual(headers["X-Retake-Alpha-Transport"], "binary")
+        self.assertTrue(set(np.unique(self.last_result[:, :, 3])) <= {0, 255})
+        original = cv2.imdecode(np.frombuffer(self.target_png, np.uint8), cv2.IMREAD_COLOR)
+        outside = self.last_result[:, :, 3] == 0
+        np.testing.assert_array_equal(self.last_result[outside, :3], original[outside])
         self.assertEqual(cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED).shape[:2], (512, 391))
         return headers
 
@@ -366,7 +425,7 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual([step for step, _ in stages][-2:], [srv.REALISM_STAGE, srv.SCORING_STAGE])
         self.assertEqual(headers["X-Retake-Realism"], "on")
         self.assertEqual(headers["X-Retake-Similarity"], "0.7900", "the closer render is reported")
-        self.assertEqual(self.scored[1][1:3], ["realism-1.png", "realism-2.png"])
+        self.assertEqual(self.scored[1][3:5], ["realism-1.png", "realism-2.png"])
         # Its re-rendered face is in the result, and covered by the matte.
         self.assertTrue(np.all(self.last_result[250, 195, :3] == 60))
         self.assertEqual(int(self.last_result[250, 195, 3]), 255)
@@ -378,6 +437,63 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Similarity"], "0.7400")
         self.assertFalse(np.all(self.last_result[250, 195, :3] == 60))
 
+    def test_chooses_unwarped_face_when_head_fit_damages_identity(self):
+        self.candidate_scores = {"retake-pre-geometry.png": 0.88}
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "no-head-warp")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8800")
+        self.assertEqual(headers["X-Retake-Compositing"], "preblended")
+
+    def test_falls_back_to_identity_only_when_beautifying_loses_resemblance(self):
+        self.candidate_scores = {"retake-identity-only.png": 0.89}
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-only")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8900")
+
+    def test_refuses_to_claim_success_when_arcface_cannot_verify_any_result(self):
+        with patch.object(self, "fake_score") as mocked:
+            def fake_score(facefusion_dir, centroid, probes):
+                if any(path.name == "retake-identity-reinforced.png" for path in probes):
+                    return [None] * len(probes)
+                if any(path.name.startswith("retake-hybrid") for path in probes):
+                    return [None] * len(probes)
+                return [None] * len(probes)
+            mocked.side_effect = fake_score
+            with self.assertRaisesRegex(srv.IdentityVerificationError, "doğrulanamadı"):
+                self.run_swap(0, [])
+
+    def test_refuses_output_if_identity_regresses_below_original(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.35,
+            "retake-pre-geometry.png": 0.36,
+            "retake-identity-only.png": 0.38,
+            "target.png": 0.50,
+        }
+        with self.assertRaisesRegex(srv.IdentityConflictError, "düşük"):
+            self.run_swap(0, [])
+
+    def test_consensus_identity_uses_reference_agreement_when_it_improves_arcface(self):
+        self.enable_quality_candidates = True
+        self.candidate_scores = {
+            "retake-identity-alpha.png": 0.73,
+            "retake-identity-consensus.png": 0.85
+        }
+        headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Source"], "consensus")
+        self.assertIn(("alphaface_256", 25), self.source_sizes)
+        self.assertIn(("alphaface_256", 12), self.source_sizes)
+        self.assertEqual(headers["X-Retake-Compositing"], "preblended")
+
+    def test_real_reference_texture_can_win_over_a_blurred_mean(self):
+        self.enable_quality_candidates = True
+        self.candidate_scores = {"retake-texture-0.png": 0.91, "retake-texture-1.png": 0.89}
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Texture-Source"], "reference-25")
+        self.assertIn(("uniface_256", 1), self.source_sizes)
+        self.assertEqual(headers["X-Retake-Similarity"], "0.7400",
+                         "post-processing score is evaluated separately from blend candidate score")
+
     def test_without_the_realism_environment_nothing_changes(self):
         headers = self.run_swap(0, [])
         self.assertEqual(headers["X-Retake-Realism"], "unavailable")
@@ -386,6 +502,12 @@ class CachedPipelineTest(unittest.TestCase):
     def test_photo_transplant_is_a_candidate_not_forced(self):
         # Order: tone 0.9 plain, + transplant, tone 0.6 plain, + transplant, ...
         self.blend_scores = [0.70, 0.60, 0.72, 0.61, 0.69, 0.62]
+        # Model the same weak identity in the independently measured full-face
+        # rescue candidates; native-size detail scoring now really runs here.
+        # Otherwise the fake ArcFace assigns these candidates the default .74
+        # (a tie), incorrectly simulating a successful identity-preserving rescue.
+        self.candidate_scores = {"retake-identity-full-20.png": 0.60,
+                                 "retake-identity-full-40.png": 0.61}
         guard = patch.object(srv, "BORDER_STEP_FLOOR", 1e9)   # the selection is what is tested here
         guard.start()
         self.addCleanup(guard.stop)
@@ -397,15 +519,163 @@ class CachedPipelineTest(unittest.TestCase):
         headers = self.run_swap(1, [], real_face=True)
         self.assertEqual(headers["X-Retake-Real-Face"], "on")
 
+    def test_lower_face_candidate_can_win_when_arcface_prefers_reference_beard(self):
+        self.blend_scores = [0.70, 0.88, 0.69, 0.75, 0.68, 0.72]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(2, [], real_face="lower")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Real-Face"], "off",
+                         "lower-only mode must not pretend to have pasted the whole face")
+        self.assertEqual(headers["X-Retake-Variation"], "2")
+
+    def test_complete_and_lower_reference_face_compete_for_identity(self):
+        # Three blends, each evaluating [model, lower reference, full photo].
+        self.blend_scores = [.70, .81, .83, .68, .80, .81, .69, .79, .80]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(len(self.blend_probes), 9)
+        self.assertEqual(headers["X-Retake-Real-Face"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "on")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
+
+    def test_lower_face_wins_when_full_reference_loses_identity(self):
+        self.blend_scores = [.70, .85, .79, .68, .83, .78, .69, .82, .77]
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+
+    def test_real_reference_warp_is_cached_across_three_tone_variants(self):
+        self.run_swap(0, [], real_face="both")
+        self.assertEqual(self.transplant_modes.count("lower"), 3,
+                         "once across tone variants plus two strength-adjusted identity rescues")
+        self.assertEqual(self.transplant_modes.count("full"), 3,
+                         "once across tone variants plus two low-strength identity rescues")
+
+    def test_weak_complete_face_reference_can_win_when_identity_is_preserved(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-full-20.png": 0.832,
+            "retake-identity-full-40.png": 0.829,
+            "retake-identity-beard-35.png": 0.829,
+            "retake-identity-beard-65.png": 0.828,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-full")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "on")
+        self.assertEqual(headers["X-Retake-Real-Face"], "on")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8320")
+
+    def test_bad_full_photo_cannot_override_strong_identity_fallback(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-full-20.png": 0.80,
+            "retake-identity-full-40.png": 0.78,
+            "retake-identity-beard-35.png": 0.82,
+            "retake-identity-beard-65.png": 0.81,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-only")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8330")
+
+    def test_identity_beard_can_survive_if_cosine_is_near_tied_with_identity_only(self):
+        # The observed v19 failure: 0.833 pure-identity fallback always
+        # removed the actual reference beard. A feathered reference beard
+        # within .003 cosine is now allowed, with an additional seam gate.
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-beard-35.png": 0.832,
+            "retake-identity-beard-65.png": 0.831,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-beard")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "on")
+        self.assertEqual(headers["X-Retake-Complete-Identity"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8320")
+
+    def test_identity_beard_rejected_when_cosine_loss_is_not_a_tie(self):
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.806,
+            "retake-pre-geometry.png": 0.806,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-beard-35.png": 0.826,
+            "retake-identity-beard-65.png": 0.824,
+        }
+        with patch.object(srv, "BORDER_STEP_FLOOR", 1e9):
+            headers = self.run_swap(0, [], real_face="both")
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-only")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
+        self.assertEqual(headers["X-Retake-Similarity"], "0.8330")
+
+    def test_identity_only_jaw_candidate_is_scored_and_may_win_a_strict_tie(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 381]}], "anchors": [[195, 200]]}
+        self.candidate_scores = {
+            "retake-hybrid-profile.png": 0.804,
+            "retake-pre-geometry.png": 0.804,
+            "retake-identity-only.png": 0.833,
+            "retake-identity-jaw.png": 0.832,
+        }
+        headers = self.run_swap(2, [], jaw_warp=jaw)
+        self.assertEqual(headers["X-Retake-Identity-Selection"], "identity-jaw")
+        self.assertEqual(headers["X-Retake-Jaw-Focused"], "on")
+        self.assertEqual(headers["X-Retake-Lower-Face-Transfer"], "off")
+
+    def test_measured_jaw_variant_has_dedicated_header(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
+        focused = self.run_swap(2, [], jaw_warp=jaw)
+        ordinary = self.run_swap(0, [], jaw_warp=jaw)
+        self.assertEqual(focused["X-Retake-Jaw-Focused"], "on")
+        self.assertEqual(ordinary["X-Retake-Jaw-Focused"], "off")
+
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])
         self.run_swap(3, [])
         self.assertEqual(self.arcface_calls, 1)
         self.assertEqual([model for model, _ in self.facefusion_calls].count("alphaface_256"), 2)
-        self.assertEqual(self.facefusion_calls[-1][1], 0.94)
+        self.assertEqual(self.facefusion_calls[-1][1], 0.95)
 
 
 class RemainingTimeTest(unittest.TestCase):
+    def test_24_round_eta_stops_at_search_deadline_not_all_24_rounds(self):
+        from tools.retake_cache import StageTimings
+        with tempfile.TemporaryDirectory() as directory:
+            timings = StageTimings(Path(directory) / "times.json")
+            for name, seconds in zip(srv.JOB_STAGES, (40, 120, 30, 90, 5, 60, 8)):
+                timings.record(name, seconds)
+            job = srv.create_job(realism=True)
+            job.update(
+                status="running",
+                step=19,
+                created=time.time() - 260,
+                stage_started=time.time() - 30
+            )
+            estimate = srv.estimate_remaining(job, timings)
+            self.assertIsNotNone(estimate)
+            self.assertGreaterEqual(estimate, 150)
+            self.assertLess(estimate, 300, "do not project 24 complete model passes (73 minutes)")
+
+    def test_wait_stage_has_no_gpu_eta_and_incomplete_history_does_not_crash(self):
+        from tools.retake_cache import StageTimings
+        with tempfile.TemporaryDirectory() as directory:
+            empty = StageTimings(Path(directory) / "empty.json")
+            job = srv.create_job(realism=True)
+            job.update(status="running", created=time.time() - 270, stage_started=None)
+            remaining = srv.estimate_remaining(job, empty)
+            self.assertIsNotNone(remaining)
+            self.assertAlmostEqual(remaining, 150, delta=2)
+            job["stage_started"] = time.time()
+            self.assertIsNotNone(srv.estimate_remaining(job, empty))
+
     def test_estimate_skips_cached_stages(self):
         from tools.retake_cache import StageTimings
         with tempfile.TemporaryDirectory() as directory:
@@ -465,7 +735,9 @@ class RealismChoiceTest(unittest.TestCase):
     def test_choice_needs_a_verified_identity(self):
         renders = [Path("a.png"), Path("b.png")]
         self.assertEqual(srv.choose_realism_render(0.40, renders, [0.38, 0.51]), (Path("b.png"), 0.51))
-        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.395, None]), (Path("a.png"), 0.395))
+        self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.395, None]),
+                          "v16 rejects even 0.005 cosine loss for optional realism")
+        self.assertEqual(srv.choose_realism_render(0.40, renders, [0.398, None]), (Path("a.png"), 0.398))
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [0.30, 0.38]))
         self.assertIsNone(srv.choose_realism_render(None, renders, [0.9, 0.9]), "unverifiable")
         self.assertIsNone(srv.choose_realism_render(0.40, renders, [None, None]))
@@ -529,6 +801,24 @@ class CompositeChoiceTest(unittest.TestCase):
             chosen = srv.choose_composite(Path("ff"), [1.0, 0.0], self.blends)
         self.assertEqual(chosen, Path("middle.png"))
         self.assertEqual(calls, [["seamless.png", "middle.png"]], "a visible border is never scored")
+
+    def test_real_lower_face_wins_only_within_tiny_arcface_tie(self):
+        labels = ["normal", "ton 0.6 + referans alt yüz", "ton 0.35 + doku nakli"]
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.8389]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("middle.png"),
+                         "real beard detail may win only when ArcFace is effectively equal")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.82]):
+            best = srv.choose_composite(Path("ff"), [1.0], self.blends, labels)
+        self.assertEqual(best, Path("seamless.png"),
+                         "do not sacrifice meaningful global identity for any beard texture")
+        with patch.object(srv, "score_identity", return_value=[0.84, 0.839]):
+            best = srv.choose_composite(
+                Path("ff"), [1.0], self.blends,
+                ["normal", "ton 0.6 + doku nakli", "normal"]
+            )
+        self.assertEqual(best, Path("seamless.png"),
+                         "full-face transplant is not rewarded just for having a reference image")
 
     def test_without_a_measurement_the_most_seamless_blend_is_kept(self):
         with patch.object(srv, "score_identity", lambda *args: [None, None]):

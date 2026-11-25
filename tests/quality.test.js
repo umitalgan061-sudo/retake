@@ -19,8 +19,10 @@ test("scores and verdicts", () => {
   assert.equal(similarityScore(-0.2), 0);
   assert.equal(similarityScore(null), null);
   assert.deepEqual([60, 45, 31, 12].map(similarityVerdict), ["Çok güçlü", "Güçlü", "Orta", "Zayıf"]);
-  assert.equal(describeSimilarity(0.74, 0.21), "Kimlik benzerliği 74 · Çok güçlü · orijinal 21");
-  assert.equal(describeSimilarity(0.44, null), "Kimlik benzerliği 44 · Güçlü");
+  assert.equal(describeSimilarity(0.74, 0.21), "Kimlik benzerliği 74,0 · Çok güçlü · orijinal 21");
+  assert.equal(describeSimilarity(0.44, null), "Kimlik benzerliği 44,0 · Güçlü");
+  assert.match(describeSimilarity(0.8334, 0.0), /83,3 · Çok güçlü/);
+  assert.match(describeSimilarity(0.8279, 0.0), /82,8 · Çok güçlü/);
   assert.equal(describeSimilarity(null, 0.2), "");
 });
 
@@ -44,6 +46,6 @@ test("the result is compared with the person's own photos", async () => {
   assert.equal(referenceComparison(0.76, 0.766), "fotoğraflarınla aynı düzeyde (77)");
   assert.equal(referenceComparison(0.62, 0.766), "fotoğraflarının düzeyi 77");
   assert.equal(referenceComparison(0.62, null), "");
-  assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
-  assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80 · Çok güçlü");
+  assert.equal(describeSimilarity(0.80, 0.05, 0.766), "Kimlik benzerliği 80,0 · Çok güçlü · fotoğraflarınla aynı düzeyde (77) · orijinal 5");
+  assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80,0 · Çok güçlü");
 });

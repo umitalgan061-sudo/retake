@@ -8,7 +8,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 
 0. Kamera API'si, canlı video, kamera önizlemesi veya kamera izni kesinlikle eklenmez. Yalnızca fotoğraf seçici kullanılır.
 0.1. Değişiklik yalnızca seçilen yüz crop'u ve alfa matı içinde yapılır; mat dışı pikseller orijinalle aynı kalır. Kullanıcı isteğiyle (12 Kasım 2026) mat, yüzün kafaya oturması için kafayı yumuşakça uzatan/kısaltan/genişleten/daraltan çarpıtma bölgesini de kapsar; bu bölge yüz crop'unun kenarına varmadan biter.
-0.2. En çok 20 referans fotoğrafı aynı kimliğe ait olmalıdır; farklı kişiler bir identity bank içinde karıştırılmaz.
+0.2. 25 referans fotoğrafın tamamı tek ve aynı kimliğe ait olmalıdır; farklı kişiler bir identity bank içinde karıştırılmaz.
 0.3. Göz/ifade retarget yalnızca ihtiyaç varsa ve yalnızca hedef yüz crop'unda çalışır. Kapalı göz doğal açılabilir, fakat saç/arka plan/diğer kişiler değiştirilmez.
 
 
@@ -25,7 +25,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 
 Detaylı işlem hattı: `docs/FACE_ONLY_PIPELINE.md`.
 
-- 20 kaynak fotoğrafını kaliteye göre hizala ve tek identity profile oluştur.
+- 25 kaynak fotoğrafını kaliteye göre hizala ve tek identity profile oluştur.
 - Hedefte kullanıcı tarafından seçilen yüz crop'unda kimlik aktarımı yap.
 - Pose/ışık/skin target attributes korunur.
 - Gerekirse eyes-open ve sınırlı expression retarget uygula.
@@ -40,9 +40,9 @@ Detaylı işlem hattı: `docs/FACE_ONLY_PIPELINE.md`.
 - MediaPipe Tasks Vision sürümü sabitlenir; doğru API ile \`HTMLImageElement\` üzerinden \`detect()\` çağrılır.
 - Fotoğraf algılama tarayıcıda çalışır; görsel içeriği üçüncü tarafa yüklenmez.
 - Hedef fotoğraf oturum belleğinde tutulur; hedef fotoğraf IndexedDB'ye kaydedilmez.
-- Kullanıcının eklediği en fazla 20 referans fotoğrafı IndexedDB'de saklanır; tek yüz doğrulaması yapılır.
+- Kullanıcının 25 referans fotoğrafı IndexedDB'de saklanır; tek yüz ve aynı kişi tutarlılık doğrulaması yapılır.
 - Servis çalışanı uygulama kabuğunu ve izin verilen MediaPipe/WASM/model varlıklarını önbelleğe alır. Kullanıcı isteğiyle (13 Kasım 2026) varsayılan 25 referans fotoğrafı ilk açılışta bir kez indirilir ve tarayıcının Cache Storage alanında (`retake-reference-photos-v1`) kalıcı olarak saklanır; sonraki açılışlarda ve PWA'da yeniden indirilmez.
-- Web uygulamasında gerçek Face Swap modeli yoktur; swap ve indirme eylemleri kapalı kalır.
+- Statik Firebase Hosting tek başına Face Swap inference çalıştırmaz. Yalnız eşleştirilmiş yerel FaceFusion/CUDA motoru hazır ve sağlıklıysa gerçek fotoğraf üretme/indirme açılır; aksi halde başarı taklidi yapılmaz.
 
 Web değişikliklerinde \`npm test\`, \`npm run validate\`, JavaScript sözdizimi ve GitHub Actions sonucu kontrol edilir.
 
@@ -59,3 +59,18 @@ Web değişikliklerinde \`npm test\`, \`npm run validate\`, JavaScript sözdizim
 MobileFaceSwap, MobileFSGAN ve GHOST araştırma adaylarıdır; hiçbirinin tüm yardımcı ağırlık lisansları ve iOS dağıtım koşulları otomatik olarak onaylanmış sayılmaz. ArcFace/InsightFace gibi encoder ve landmark bileşenleri ayrıca denetlenmelidir.
 
 Ayrıntılı teknik durum: \`docs/IOS_OFFLINE_AI_STATUS.md\` ve \`ios/README.md\`.
+## Retake yüz gerçekçiliği kalite kapısı (2026-11-23)
+
+- ArcFace cosine skorunu "gerçekçilik yüzdesi" ya da biyometrik kanıt sayma.
+- Ultra adaylar, anlamlı kimlik farkı varsa önce kimliği korur; yalnız çok yakın
+  kimlik sonuçlarında yüz çevresi koyu kontur oranını ve bölgesel mikrodetayı
+  tie-break amacıyla karşılaştırır.
+- Son dosyada kalan halo, gerçek çıktı üzerinden ölçülür. Kontur düzeltmesi
+  ArcFace kontrolünden geçmediyse uygulanmış gibi gösterilmez.
+- Çıktı fotoğrafları ve 25 referans kişisel veridir: kamuya açık GitHub,
+  test fixture'ı, GitHub Actions artifact'ı veya loglara yüklenmez.
+- Hafize'nin GitHub App üzerinden Retake'e yazma devri için önce ayrı dal,
+  dosya, taslak PR ve canlı onay akışının uçtan uca doğrulanması gerekir.
+  Self-development agent merge/deploy yapmaz; gizli anahtarları görmez.
+- Model gerçeği ancak aynı referanslarla, aynı orijinal hedefe karşı yerel GPU
+  A/B testi ve kimlik + yüz dokusu + kontur ölçümleriyle doğrulanabilir.

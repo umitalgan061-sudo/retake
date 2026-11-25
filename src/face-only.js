@@ -51,6 +51,49 @@ export function compositeMaskedRGBA(sourceRGBA, generatedRGBA, alphaMask, width,
 }
 
 /**
+ * Insert an ALREADY COMPOSITED local-engine PNG over the source image.
+ *
+ * The FaceFusion backend has applied the soft mask, tone harmonization and
+ * multiband blending to the RGB values before writing its RGBA PNG. Applying
+ * that PNG's alpha once more would square the feather mask and dilute the
+ * swapped identity, especially around the eyes, jaw and mouth.
+ *
+ * Here alpha is an *edit-extent matte*: 0 means keep the original pixel;
+ * any nonzero value means copy the final preblended RGB. The source's opacity
+ * is always preserved. Only use this function for confirmed preblended output,
+ * not ordinary RGBA foreground patches.
+ */
+export function compositePreblendedRGBA(sourceRGBA, preblendedRGBA, extentMask, width, height) {
+  const pixels = width * height;
+  const channels = pixels * CHANNELS;
+  if (!Number.isInteger(width) || width <= 0 || !Number.isInteger(height) || height <= 0) {
+    throw new TypeError("width and height must be positive integers");
+  }
+  if (!isByteArray(sourceRGBA) || sourceRGBA.length !== channels ||
+      !isByteArray(preblendedRGBA) || preblendedRGBA.length !== channels) {
+    throw new TypeError("RGBA buffers must match width * height * 4 channels");
+  }
+  if (!(extentMask instanceof Float32Array || extentMask instanceof Float64Array) ||
+      extentMask.length !== pixels) {
+    throw new TypeError("extentMask must contain one value per pixel");
+  }
+
+  const result = new Uint8ClampedArray(sourceRGBA);
+  for (let pixel = 0; pixel < pixels; pixel += 1) {
+    const alpha = extentMask[pixel];
+    if (!Number.isFinite(alpha) || alpha < 0 || alpha > 1) {
+      throw new RangeError("extentMask values must be finite and between 0 and 1");
+    }
+    if (alpha === 0) continue;
+    const offset = pixel * CHANNELS;
+    result[offset] = preblendedRGBA[offset];
+    result[offset + 1] = preblendedRGBA[offset + 1];
+    result[offset + 2] = preblendedRGBA[offset + 2];
+  }
+  return result;
+}
+
+/**
  * Reports changes outside the binary face area (mask <= 0).
  * Useful as a post-compositing integrity gate before exporting the image.
  */
@@ -100,6 +143,15 @@ export function alphaMaskFromRGBA(rgba, width, height) {
   const mask = new Float32Array(expectedPixels);
   for (let pixel = 0; pixel < expectedPixels; pixel += 1) {
     mask[pixel] = rgba[pixel * CHANNELS + 3] / 255;
+  }
+  return mask;
+}
+
+/** The already-feathered RGB must never be decoded with fractional alpha. */
+export function binaryExtentFromRGBA(rgba, width, height) {
+  const mask = alphaMaskFromRGBA(rgba, width, height);
+  if (mask.some(alpha => alpha !== 0 && alpha !== 1)) {
+    throw new Error("Yerel motorun kayıpsız alfa maskesi geçersiz.");
   }
   return mask;
 }

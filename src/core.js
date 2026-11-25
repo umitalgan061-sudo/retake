@@ -105,3 +105,19 @@ export async function settleWithLimit(items, limit, task) {
   await Promise.all(Array.from({ length: workers }, worker));
   return results;
 }
+
+/** Exact encoded-file equality only. Never infer that two faces are identical
+ * from a visual similarity score, filename, or equal file size. */
+export async function findExactReferenceFile(target, references) {
+  if (!target || !Number.isFinite(target.size) || target.size <= 0 ||
+      typeof target.arrayBuffer !== "function" || !Array.isArray(references)) return null;
+  const eligible = references.filter(item => item.status === "ready" &&
+    item.blob?.size === target.size && typeof item.blob.arrayBuffer === "function");
+  if (!eligible.length) return null;
+  const bytes = new Uint8Array(await target.arrayBuffer());
+  for (const item of eligible) {
+    const other = new Uint8Array(await item.blob.arrayBuffer());
+    if (bytes.length === other.length && bytes.every((value, index) => value === other[index])) return item;
+  }
+  return null;
+}

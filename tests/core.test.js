@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   settleWithLimit,
+  findExactReferenceFile,
   ACCEPTED_IMAGE_TYPES,
   getContainedRect,
   getLandmarkBounds,
@@ -87,4 +88,14 @@ test("settleWithLimit keeps order, reports failures and never exceeds the limit"
   assert.deepEqual(results.map((item) => item.status), ["fulfilled", "fulfilled", "fulfilled", "rejected", "fulfilled"]);
   assert.deepEqual(results.filter((item) => item.value !== undefined).map((item) => item.value), [0, 1, 2, 4]);
   assert.deepEqual(await settleWithLimit([], 3, async () => 1), []);
+});
+
+test("exact reference lookup requires identical bytes, not filename or size", async () => {
+  const blob = new Blob([Uint8Array.from([1, 2, 3, 4])], { type: "image/png" });
+  const same = { file: "other.png", status: "ready", blob: new Blob([Uint8Array.from([1, 2, 3, 4])]) };
+  const different = { file: "same-name.png", status: "ready", blob: new Blob([Uint8Array.from([1, 2, 3, 5])]) };
+  assert.equal(await findExactReferenceFile(blob, [different]), null);
+  assert.equal(await findExactReferenceFile(blob, [{ ...same, status: "error" }, different]), null);
+  assert.equal(await findExactReferenceFile(blob, [different, same]), same);
+  assert.equal(await findExactReferenceFile(null, [same]), null);
 });

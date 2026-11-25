@@ -116,6 +116,54 @@ class LowerFaceHybridTest(unittest.TestCase):
         self.assertEqual(int(hybrid[180, 170, 0]), 100)
 
 
+    def test_conservative_lower_face_blend_preserves_the_upper_face(self):
+        points = face_points()
+        swap = np.full((480, 400, 3), 100, np.uint8)
+        render = np.full_like(swap, 20)
+        for strength in (0.20, 0.35, 0.50):
+            result = rr.lower_face_hybrid(swap, render, points, strength)
+            self.assertAlmostEqual(int(result[290, 160, 0]), 100 - 80 * strength, delta=3)
+            self.assertEqual(int(result[180, 170, 0]), 100)
+            np.testing.assert_array_equal(result[:60], swap[:60])
+        with self.assertRaises(ValueError):
+            rr.lower_face_hybrid(swap, render, points, -0.1)
+        with self.assertRaises(ValueError):
+            rr.lower_face_hybrid(swap, render, points * float("nan"))
+
+
+class IdentityEmbeddingTest(unittest.TestCase):
+    def test_faceid_embedding_requires_a_finite_single_centroid(self):
+        vector = rr.validated_identity(np.ones(512))
+        self.assertEqual(vector.shape, (512,))
+        self.assertAlmostEqual(float(np.linalg.norm(vector)), 1.0, places=5)
+        for bad in (np.zeros(512), np.ones(511), np.ones((2, 512)), np.full(512, float("nan"))):
+            with self.assertRaises(ValueError):
+                rr.validated_identity(bad)
+
+
+class WorkerPreflightTest(unittest.TestCase):
+    def test_dimension_mismatch_fails_before_renderer_load(self):
+        import tempfile
+        import json
+        from pathlib import Path
+        from unittest.mock import patch
+        from tools import retake_realism_worker as worker
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for path in worker.model_paths(root).values():
+                path.touch()
+            cv2.imwrite(str(root / "target.png"), np.zeros((81, 101, 3), np.uint8))
+            cv2.imwrite(str(root / "swap.png"), np.zeros((82, 102, 3), np.uint8))
+            (root / "identity.json").write_text(json.dumps([1.0] * 512))
+            argv = ["worker", "--models-dir", str(root), "--swapped", str(root / "swap.png"),
+                    "--target", str(root / "target.png"), "--bounds", json.dumps(BOUNDS),
+                    "--identity-file", str(root / "identity.json"), "--out-dir", str(root / "out")]
+            with patch("sys.argv", argv), patch.object(worker, "Renderer") as renderer:
+                with self.assertRaisesRegex(SystemExit, "boyut uyuşmazlığı"):
+                    worker.main()
+                renderer.assert_not_called()
+
+
 class PersonalModelTest(unittest.TestCase):
     def test_training_plan_follows_the_hardware(self):
         from tools import retake_personal_model as pm

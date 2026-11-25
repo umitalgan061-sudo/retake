@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import math
 
 MESH_POINTS = 478
 
@@ -308,7 +309,9 @@ def choose_and_transplant(
     candidates: list[tuple[np.ndarray, np.ndarray]],
     target_points: np.ndarray,
     face_width: float,
-    min_fit: float | None = MIN_REAL_FACE_FIT
+    min_fit: float | None = MIN_REAL_FACE_FIT,
+    complete_face: bool = False,
+    strength: float = 1.0
 ) -> tuple[np.ndarray, int, list[dict[str, float]]]:
     """Warp each (image, mesh) candidate onto the face, keep the one that fits best.
 
@@ -319,7 +322,16 @@ def choose_and_transplant(
     """
     if not candidates:
         raise ValueError("gerçek fotoğraf adayı yok")
+    if not math.isfinite(strength) or not 0.0 < strength <= 1.0:
+        raise ValueError("Tam yüz referans aktarımı gücü geçersiz.")
     allowed = _changed_mask(swapped, target, face_width)
+    if complete_face:
+        # The parser-based FaceFusion result does not always change beard
+        # or cheek-hair pixels. For a full-face *candidate*, reference detail
+        # may also be carried through unchanged pixels INSIDE the mesh oval.
+        # The transplant_region below still rejects outside-face pixels and
+        # protects the mouth and the reference's forehead hairline.
+        allowed = np.maximum(allowed, 0.78)
     best = None
     fits = []
     for index, candidate in enumerate(candidates):
@@ -337,7 +349,8 @@ def choose_and_transplant(
         scores = ", ".join(f"{fit['structure']:.2f}" for fit in fits)
         raise ValueError(f"hiçbir aday yüze yeterince oturmadı (uyum {scores})")
     warped = match_broad_light(warped, swapped, weight, face_width)
-    blended = swapped.astype(np.float32) * (1.0 - weight[:, :, None]) + warped * weight[:, :, None]
+    amount = np.clip(weight * strength, 0.0, 1.0)
+    blended = swapped.astype(np.float32) * (1.0 - amount[:, :, None]) + warped * amount[:, :, None]
     return np.clip(np.rint(blended), 0, 255).astype(np.uint8), index, fits
 
 

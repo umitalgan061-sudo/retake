@@ -273,7 +273,6 @@ def regional_edit_statistics(original_path, edited_path, bounds):
         return {}
     if not all(math.isfinite(v) for v in (x,y,fw,fh)) or min(fw,fh) < 20:
         return {}
-    delta = np.max(np.abs(edited.astype(np.int16)-original.astype(np.int16)), axis=2)
     regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92)}
     result = {}
     for name, (left,top,right,bottom) in regions.items():
@@ -281,6 +280,8 @@ def regional_edit_statistics(original_path, edited_path, bounds):
         y0,y1 = max(0,int(y+fh*top)), min(height,int(y+fh*bottom))
         if min(x1-x0,y1-y0) < 4:
             continue
-        values = delta[y0:y1,x0:x1]
+        before = original[y0:y1,x0:x1].astype(np.int16)
+        after = edited[y0:y1,x0:x1].astype(np.int16)
+        values = np.max(np.abs(after-before),axis=2)
         result[name] = round(float(np.mean(values)),3)
     return result

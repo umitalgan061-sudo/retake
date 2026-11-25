@@ -339,3 +339,19 @@ class UltraNaturalnessTest(unittest.TestCase):
         self.assertEqual(identity_slack(self.headers(0.78, 82), strongest), ULTRA_NATURALNESS_FLOOR_BAND)
         self.assertEqual(identity_slack(self.headers(0.78, 64), self.headers(0.80, 50)), ULTRA_NATURALNESS_BAND)
         self.assertEqual(identity_slack(self.headers(0.78, 82), self.headers(0.80, 80)), ULTRA_REALISM_TIE_LOSS)
+
+
+class FluxOutcomeTest(unittest.TestCase):
+    def test_rejected_finalist_keeps_original_and_reports_real_outcome(self):
+        def fake_swap(*args):
+            if args[5] and args[5].get("nim_editors"):
+                return b"rejected", {**score(.61), "X-Retake-FLUX-Status":"accepted"}
+            return b"verified", score(.87)
+        with patch.object(srv, "process_swap", fake_swap):
+            image, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, fake_request(),
+                lambda *_a, **_k: None, min_duration_seconds=0,
+                caches={"nim_editors":{"retake-local/flux2-klein-4b":0}}
+            )
+        self.assertEqual(image,b"verified")
+        self.assertEqual(headers["X-Retake-FLUX-Status"],"finalist-not-selected")

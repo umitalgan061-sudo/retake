@@ -74,3 +74,15 @@ test("the NVIDIA judge verdict reads as a short second opinion", async () => {
   assert.equal(parseJudge("12"), null);
   assert.equal(describeJudge(null), "");
 });
+
+test("original cosine below zero is not silently displayed as zero", () => {
+  assert.match(describeSimilarity(.87, -.12), /orijinal -12,00 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, .001), /orijinal 0,10 \(kosinüs\)/);
+});
+test("FLUX configuration is not evidence of a selected candidate", async () => {
+  const {describeFluxStatus} = await import("../src/quality.js");
+  assert.match(describeFluxStatus("accepted"), /kullanıldı/);
+  assert.match(describeFluxStatus("worker-error"), /hatası/);
+  assert.match(describeFluxStatus("quality-rejected"), /elendi/);
+  assert.equal(describeFluxStatus("unknown"), "");
+});

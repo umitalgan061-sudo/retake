@@ -366,7 +366,12 @@ class CachedPipelineTest(unittest.TestCase):
         cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
         return painted, True
 
-    def run_swap(self, variation, stages, jaw_warp=None, realism=None, real_face=False):
+    def run_swap(self, variation, stages, jaw_warp=None, realism=None, real_face=False, detail_gate=None):
+        # These orchestration tests deliberately paint flat synthetic ellipses
+        # instead of real faces. Stub photographic detail independently so the
+        # original identity/geometry invariants remain under test. The detail
+        # gate itself has pixel-based tests in test_ultra_quality.py.
+        gate = detail_gate or (lambda *_a: (True, "passed", .9, {"eyes": .9, "mouth": .9}))
         metadata = {
             "jawWarp": jaw_warp,
             "referenceWeights": [1] * srv.MAX_REFERENCES,
@@ -384,7 +389,8 @@ class CachedPipelineTest(unittest.TestCase):
                 patch.object(srv, "run_with_memory_fallback", self.fake_facefusion), \
                 patch.object(srv, "score_identity", self.fake_score), \
                 patch.object(srv, "run_realism", self.fake_realism), \
-                patch.object(srv, "apply_real_face", self.fake_transplant):
+                patch.object(srv, "apply_real_face", self.fake_transplant), \
+                patch.object(srv, "check_detail_gate", gate):
             result, headers = srv.process_swap(
                 Path(self.temp.name), "1024x1024", False, parsed,
                 lambda step, cached=False: stages.append((step, cached)), {**self.caches, "realism": realism}
@@ -397,6 +403,21 @@ class CachedPipelineTest(unittest.TestCase):
         np.testing.assert_array_equal(self.last_result[outside, :3], original[outside])
         self.assertEqual(cv2.imdecode(np.frombuffer(result, np.uint8), cv2.IMREAD_UNCHANGED).shape[:2], (512, 391))
         return headers
+
+    def test_blurry_high_identity_candidate_is_ineligible(self):
+        self.candidate_scores = {"retake-pre-geometry.png": .99}
+        def gate(original, candidate, bounds):
+            if candidate.name == "retake-pre-geometry.png":
+                return False, "eyes-blur", .5, {"eyes": .4}
+            return True, "passed", .9, {"eyes": .9}
+        headers = self.run_swap(0, [], detail_gate=gate)
+        self.assertNotEqual(headers["X-Retake-Identity-Selection"], "no-head-warp")
+        self.assertLess(float(headers["X-Retake-Similarity"]), .99)
+        self.assertEqual(headers["X-Retake-Detail-Gate"], "passed")
+
+    def test_all_blurry_candidates_fail_without_success_image(self):
+        with self.assertRaisesRegex(srv.NoOpSwapError, "bölgesel fotoğraf"):
+            self.run_swap(0, [], detail_gate=lambda *_a: (False, "eyes-blur", .5, {"eyes": .4}))
 
     def test_regenerating_reuses_arcface_and_both_gpu_passes(self):
         first, second = [], []

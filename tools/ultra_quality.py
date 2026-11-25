@@ -156,3 +156,44 @@ def check_photo_detail(
     result = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
     return regional_photo_detail(original, result, bounds)
 
+
+
+# A high cosine score must not rescue obvious detail destruction. Thresholds
+# are deliberately conservative heuristics, not identity or authenticity tests.
+DETAIL_FLOORS = {"eyes": .70, "nose": .55, "mouth": .70, "lower_face": .50}
+DETAIL_CEILINGS = {"eyes": 2.5, "nose": 3.0, "mouth": 2.5}
+
+def detail_gate(score, ratios):
+    if score is None or not ratios:
+        return False, "unmeasured"
+    for name, ratio in ratios.items():
+        if not math.isfinite(ratio) or ratio < DETAIL_FLOORS.get(name, .50):
+            return False, name + "-blur"
+        if ratio > DETAIL_CEILINGS.get(name, float("inf")):
+            return False, name + "-oversharpen"
+    return True, "passed"
+
+def check_detail_gate(original_path, result_path, bounds):
+    score, ratios = check_photo_detail(original_path, result_path, bounds)
+    accepted, reason = detail_gate(score, ratios)
+    return accepted, reason, score, ratios
+
+def balance_with_original(original_path, candidate_path, output_path, strength):
+    """A separately verified alternative, not a post-score pixel mutation.
+
+    Recover native texture and color using the original pixels. Never change
+    pixels outside the pre-existing matte or change alpha. Allow genuine
+    reference beard/jaw edits to survive partial blending; no fixed beard rule.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    candidate = cv2.imread(str(candidate_path), cv2.IMREAD_UNCHANGED)
+    if original is None or candidate is None or candidate.ndim != 3 or candidate.shape[2] != 4 or candidate.shape[:2] != original.shape[:2]:
+        raise ValueError("Invalid source or candidate matte")
+    if not 0 < strength <= .65:
+        raise ValueError("Invalid recovery strength")
+    result = candidate.copy()
+    weight = (candidate[:, :, 3].astype(np.float32) / 255.0 * strength)[:, :, None]
+    result[:, :, :3] = np.clip(np.rint(candidate[:, :, :3] * (1 - weight) + original * weight), 0, 255).astype(np.uint8)
+    if not cv2.imwrite(str(output_path), result):
+        raise OSError("Detail recovery candidate could not be written")
+    return output_path

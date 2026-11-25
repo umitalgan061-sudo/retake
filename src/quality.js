@@ -34,7 +34,8 @@ export function referenceComparison(after, referenceMedian) {
 export function describeSimilarity(after, before, referenceMedian = null) {
   const score = similarityScore(after);
   if (score === null) return "";
-  const previous = similarityScore(before);
+  const rawBefore = parseSimilarity(before);
+  const previous = rawBefore === null ? null : rawBefore <= 0.005 ? (rawBefore * 100).toFixed(2).replace(".", ",") + " (kosinüs)" : similarityScore(rawBefore);
   const comparison = referenceComparison(after, referenceMedian);
   // Scores shown as integers hide genuine small changes: 0.825–0.834
   // all display as 83. Show one decimal, never claim a calibrated percent.
@@ -140,4 +141,21 @@ export function measureFaceEdit(source,output,width,height,bounds){
   }
   const changedRatio=count?changed/count:0,meanDelta=count?sum/count:0;
   return {changedRatio,meanDelta,meaningful:changedRatio>=.03&&meanDelta>=1.5};
+}
+
+
+// Distinguish configured from attempted and selected. The engine supplies
+// these statuses from actual execution, never infer them from readiness.
+export function describeFluxStatus(value) {
+  return ({
+    "accepted": "FLUX.2 · finalde kullanıldı",
+    "quality-rejected": "FLUX.2 · doku kontrolünde elendi",
+    "identity-or-detail-rejected": "FLUX.2 · kimlik veya detay kazanımı yetersiz",
+    "candidate-not-selected": "FLUX.2 · başka aday seçildi",
+    "finalist-not-selected": "FLUX.2 · önceki doğrulanmış sonuç korundu",
+    "worker-error": "FLUX.2 · yerel düzenleme hatası",
+    "finalist-error": "FLUX.2 · finalist aşaması tamamlanamadı",
+    "not-attempted": "FLUX.2 · bu işlemde denenmedi",
+    "not-configured": "FLUX.2 · yapılandırılmadı"
+  })[value] || "";
 }

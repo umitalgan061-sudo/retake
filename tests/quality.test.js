@@ -61,3 +61,13 @@ test("FLUX configuration is not evidence of a selected candidate", async () => {
   assert.match(describeFluxStatus("quality-rejected"), /elendi/);
   assert.equal(describeFluxStatus("unknown"), "");
 });
+test("NVIDIA jury badge reports the real outcome and never invents numbers", async () => {
+  const {describeNvidiaJudge} = await import("../src/quality.js");
+  assert.equal(describeNvidiaJudge("switched", 6, 0.833), "NVIDIA jürisi daha doğal görünen finalisti seçti (6 oy, %83 uzlaşı)");
+  assert.equal(describeNvidiaJudge("kept", null, null), "NVIDIA jürisi yerel seçimi onayladı");
+  assert.match(describeNvidiaJudge("abstain", 6, 0.5), /yerel seçim korundu/);
+  assert.match(describeNvidiaJudge("error"), /ulaşılamadı/);
+  assert.equal(describeNvidiaJudge("off"), "");
+  assert.equal(describeNvidiaJudge("not-consented"), "");
+  assert.equal(describeNvidiaJudge("switched", 6, 7), "NVIDIA jürisi daha doğal görünen finalisti seçti");
+});

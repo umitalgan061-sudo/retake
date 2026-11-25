@@ -94,3 +94,19 @@ class IdentitySourcePlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SourcePoolExplorationTests(unittest.TestCase):
+    def test_canonical_round_uses_best_measured_pool(self):
+        from tools.identity_selection import choose_identity_pool
+        self.assertEqual(choose_identity_pool([.78,.82,.81],0),1)
+
+    def test_later_rounds_only_explore_verified_close_sources(self):
+        from tools.identity_selection import choose_identity_pool
+        scores=[.80,.81,.805,.62,None,float("nan")]
+        choices={choose_identity_pool(scores,i) for i in (4,7,9,12,15,17,19,21,23)}
+        self.assertEqual(choices,{0,2})
+
+    def test_missing_alternatives_do_not_override_a_good_pool(self):
+        from tools.identity_selection import choose_identity_pool
+        self.assertEqual(choose_identity_pool([None,.81,.65],7),1)

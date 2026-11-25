@@ -13,6 +13,7 @@ interval in the clearly labelled final waiting phase.
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass
 from typing import Any
 
 # 24 genuinely different blend/weight/head-shape candidates. The execution
@@ -292,3 +293,196 @@ def defer_flux_retry(outcome, diagnostics):
     except (TypeError,ValueError):
         return False
     return math.isfinite(identity) and math.isfinite(detail) and identity < -.03 and detail <= 0
+
+
+# --- Quality depth (v23) ---------------------------------------------------
+# A bounded seven-minute search can only try a few of the 24 variants. When
+# the person prefers the best photo over a quick one, the engine may search
+# longer, refine the winner's continuous settings, and give more than one
+# finalist the photographic realism pass. Gates and selection rules are the
+# same at every depth; depth only buys more measured candidates.
+
+@dataclass(frozen=True)
+class UltraDepth:
+    name: str
+    search_seconds: float          # no new search round starts after this
+    extra_finalists: int           # bounded second search when under target
+    extra_start_seconds: float
+    realism_finalists: int         # distinct candidates given the realism pass
+    refinements: int               # compass-search steps around the winner
+    refine_seconds: float          # no new refinement starts after this
+    expected_minutes: tuple[int, int]
+    client_timeout_seconds: int
+
+
+ULTRA_DEPTHS: dict[str, UltraDepth] = {
+    "standard": UltraDepth("standard", ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_EXTRA_FINALISTS,
+                           ULTRA_EXTRA_START_BUDGET_SECONDS, 1, 0, 0, (8, 15), 45 * 60),
+    "deep": UltraDepth("deep", 1500, 3, 600, 2, 3, 600, (25, 40), 90 * 60),
+    "max": UltraDepth("max", 3600, 4, 900, 3, 6, 1200, (60, 95), 150 * 60),
+}
+# Old browsers send no depth: they keep the seven-minute behaviour.
+ULTRA_DEFAULT_DEPTH = "standard"
+
+
+def ultra_depth(name: Any) -> UltraDepth:
+    return ULTRA_DEPTHS.get(name) if isinstance(name, str) and name in ULTRA_DEPTHS else ULTRA_DEPTHS[ULTRA_DEFAULT_DEPTH]
+
+
+def depth_summary() -> dict[str, dict[str, Any]]:
+    """Health payload: what each depth will do on this engine."""
+    return {
+        name: {
+            "search_seconds": int(depth.search_seconds),
+            "extra_finalists": depth.extra_finalists,
+            "realism_finalists": depth.realism_finalists,
+            "refinements": depth.refinements,
+            "expected_minutes": list(depth.expected_minutes),
+            "client_timeout_seconds": depth.client_timeout_seconds,
+        }
+        for name, depth in ULTRA_DEPTHS.items()
+    }
+
+
+# Refinement: the 24 variants are a coarse grid. Around the winner, step the
+# continuous settings (lower-face detail strength, head-fit strength) and
+# keep a step only when the normal selection rules prefer it. The swapper
+# weight is not changed, so the cached FaceFusion passes are reused and a
+# refinement costs compositing and scoring, not new identity passes.
+REFINE_DETAIL_STEP = 0.06
+REFINE_HEAD_STEP = 0.30
+REFINE_DETAIL_RANGE = (0.04, 0.40)
+REFINE_HEAD_RANGE = (0.0, 1.50)
+REFINE_DIRECTIONS = ((1, 0), (-1, 0), (0, 1), (0, -1))
+REFINE_MIN_SCALE = 0.5
+
+
+def _clamp(value: float, bounds: tuple[float, float]) -> float:
+    return min(bounds[1], max(bounds[0], value))
+
+
+def normalize_refinement(params: Any) -> tuple[float, float, float] | None:
+    """A refinement is (swapper weight, detail strength, head-fit strength)."""
+    if not isinstance(params, (tuple, list)) or len(params) != 3:
+        return None
+    values = []
+    for value in params:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return None
+        values.append(float(value))
+    weight, detail, head = values
+    if not 0.5 <= weight <= 1.0:
+        return None
+    if not REFINE_DETAIL_RANGE[0] - 1e-9 <= detail <= REFINE_DETAIL_RANGE[1] + 1e-9:
+        return None
+    if not REFINE_HEAD_RANGE[0] - 1e-9 <= head <= REFINE_HEAD_RANGE[1] + 1e-9:
+        return None
+    return round(weight, 2), round(detail, 3), round(head, 3)
+
+
+class RefinePlanner:
+    """Compass search: keep a direction while it wins, halve the step when
+    every neighbour has been measured. Pure bookkeeping, no image work."""
+
+    def __init__(self, start: Any, tried: Any = (), budget: int = 0) -> None:
+        best = normalize_refinement(start)
+        if best is None:
+            # Grid variants may sit outside the refinement box; clamp once.
+            weight, detail, head = (float(value) for value in start)
+            best = (round(weight, 2), round(_clamp(detail, REFINE_DETAIL_RANGE), 3),
+                    round(_clamp(head, REFINE_HEAD_RANGE), 3))
+        self.best = best
+        self.tried = {best}
+        for params in tried:
+            try:
+                weight, detail, head = (float(value) for value in params)
+            except (TypeError, ValueError):
+                continue
+            self.tried.add((round(weight, 2), round(detail, 3), round(head, 3)))
+        self.budget = max(0, int(budget))
+        self.used = 0
+        self.direction = 0
+        self.scale = 1.0
+        self._pending: tuple[tuple[float, float, float], int] | None = None
+
+    def _step(self, index: int) -> tuple[float, float, float]:
+        weight, detail, head = self.best
+        d_sign, h_sign = REFINE_DIRECTIONS[index]
+        return (
+            weight,
+            round(_clamp(detail + d_sign * REFINE_DETAIL_STEP * self.scale, REFINE_DETAIL_RANGE), 3),
+            round(_clamp(head + h_sign * REFINE_HEAD_STEP * self.scale, REFINE_HEAD_RANGE), 3),
+        )
+
+    def next(self) -> tuple[float, float, float] | None:
+        if self.used >= self.budget:
+            return None
+        while self.scale >= REFINE_MIN_SCALE:
+            for offset in range(len(REFINE_DIRECTIONS)):
+                index = (self.direction + offset) % len(REFINE_DIRECTIONS)
+                candidate = self._step(index)
+                if candidate not in self.tried:
+                    self.tried.add(candidate)
+                    self.used += 1
+                    self._pending = (candidate, index)
+                    return candidate
+            self.scale /= 2
+        return None
+
+    def feedback(self, params: Any, improved: bool) -> None:
+        if self._pending is None or normalize_refinement(params) != self._pending[0]:
+            return
+        candidate, index = self._pending
+        self._pending = None
+        if improved:
+            self.best = candidate
+            self.direction = index  # momentum: try further the same way
+        else:
+            self.direction = (index + 1) % len(REFINE_DIRECTIONS)
+
+
+def with_refinement(parsed: tuple, variation: int, params: Any = None,
+                    realism_seed: int | None = None) -> tuple:
+    """A variant request with optional refined settings and realism seed.
+
+    Only the engine sets these keys: client metadata is validated into a
+    whitelist, so a browser cannot inject either of them.
+    """
+    request = with_variation(parsed, variation)
+    if params is not None:
+        normalized = normalize_refinement(params)
+        if normalized is None:
+            raise ValueError("Ultra ince ayar değeri geçersiz.")
+        request[6]["variationParams"] = normalized
+    if realism_seed is not None:
+        if isinstance(realism_seed, bool) or not isinstance(realism_seed, int) or not 0 <= realism_seed < 2 ** 31:
+            raise ValueError("Gerçekçilik tohumu geçersiz.")
+        request[6]["realismSeedBase"] = realism_seed
+    return request
+
+
+REALISM_SEED_BASE = 7
+REALISM_SEED_STRIDE = 100
+
+
+def finalist_specs(records: list, best_spec: tuple, peak_identity: float, count: int) -> list[tuple]:
+    """The winner first, then the next distinct candidates the normal rules
+    prefer, for the realism pass. A spec is (variation, params or None)."""
+    if count <= 0:
+        return []
+    specs = [best_spec]
+    remaining = [
+        (spec, headers) for spec, headers in records
+        if spec != best_spec and score_from_headers(headers) is not None
+        and identity_acceptable(headers, peak_identity)
+    ]
+    while remaining and len(specs) < count:
+        chosen_index = 0
+        for index in range(1, len(remaining)):
+            if prefer_ultra_candidate(remaining[index][1], remaining[chosen_index][1]):
+                chosen_index = index
+        spec, _ = remaining.pop(chosen_index)
+        if spec not in specs:
+            specs.append(spec)
+        remaining = [item for item in remaining if item[0] != spec]
+    return specs

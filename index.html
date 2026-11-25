@@ -151,6 +151,15 @@
               <input id="realFaceToggle" type="checkbox">
               <span><strong>Fotoğraftan doku nakli (deneysel)</strong><small>Yüz, en uygun açılı fotoğrafından bükülerek alınır; bazı fotoğraflarda maske gibi durabilir</small></span>
             </label>
+            <fieldset id="qualityDepthRow" class="quality-depth" hidden>
+              <legend><strong>Kalite derinliği</strong><small>Daha uzun süre = daha çok ölçülmüş aday; kimlik ve doku kontrolleri her seviyede aynı</small></legend>
+              <div class="quality-depth-options">
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="standard"><span><strong>Standart</strong><small id="qualityDepthStandardTime">≈8–15 dk</small></span></label>
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="deep" checked><span><strong>Derin</strong><small id="qualityDepthDeepTime">≈25–40 dk · önerilen</small></span></label>
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="max"><span><strong>En yüksek</strong><small id="qualityDepthMaxTime">≈60–95 dk</small></span></label>
+              </div>
+              <p id="qualityDepthNote" class="quality-depth-note">Derin: 25 dakikalık arama, kazananın çevresinde ince ayar, 2 gerçekçilik finalisti.</p>
+            </fieldset>
             <label id="nvidiaJudgeRow" class="real-face-toggle" for="nvidiaJudgeToggle" hidden>
               <input id="nvidiaJudgeToggle" type="checkbox" disabled>
               <span><strong>NVIDIA görsel jürisi (Hafize üzerinden)</strong><small>Kimliği eşit en iyi 2–4 sonucun yüz kırpımları NVIDIA görsel modellerine gösterilir; jüri en doğal görüneni seçer, görseller saklanmaz</small></span>

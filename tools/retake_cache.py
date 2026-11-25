@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -69,13 +70,48 @@ class IdentityReportCache:
                 pass  # a cache that cannot be written is only slower
 
 
-class PassCache:
-    """Small in-memory LRU of FaceFusion pass outputs (PNG bytes)."""
+# One Ultra round makes ~6-9 FaceFusion passes (identity pools, reinforcement,
+# appearance, texture) per swapper weight. The 24 variants use three weights,
+# so 8 entries thrashed: every weight change re-ran every pass (~3 min/round).
+# Keep a whole job's passes; the cache is cleared after each job.
+PASS_CACHE_MAX_ENTRIES = 96
+PASS_CACHE_MAX_BYTES = 1536 * 1024 * 1024
 
-    def __init__(self, max_entries: int = 8) -> None:
-        self.max_entries = max_entries
+
+class PassCache:
+    """In-memory LRU of FaceFusion pass outputs (PNG bytes), bounded by count
+    and by total bytes; job-local (cleared after every job)."""
+
+    def __init__(self, max_entries: int = PASS_CACHE_MAX_ENTRIES, max_bytes: int | None = None) -> None:
+        self.max_entries = max(1, int(max_entries))
+        self.max_bytes = PASS_CACHE_MAX_BYTES if max_bytes is None else max(1, int(max_bytes))
         self._entries: OrderedDict[str, tuple[bytes, str]] = OrderedDict()
+        self._bytes = 0
+        self._hits = 0
+        self._misses = 0
+        self._last_job: dict[str, int] | None = None
         self._lock = threading.Lock()
+
+    @classmethod
+    def from_environment(cls, environ: dict[str, str] | None = None) -> "PassCache":
+        """RETAKE_PASS_CACHE_MB (64..8192) overrides the byte bound."""
+        value = (environ if environ is not None else os.environ).get("RETAKE_PASS_CACHE_MB", "")
+        try:
+            megabytes = int(value)
+        except ValueError:
+            return cls()
+        if not 64 <= megabytes <= 8192:
+            return cls()
+        return cls(max_bytes=megabytes * 1024 * 1024)
+
+    def describe(self) -> dict[str, int]:
+        with self._lock:
+            return {
+                "max_entries": self.max_entries, "max_mb": self.max_bytes // (1024 * 1024),
+                "entries": len(self._entries), "mb": round(self._bytes / (1024 * 1024)),
+                "hits": self._hits, "misses": self._misses,
+                "last_job": dict(self._last_job) if self._last_job else None,
+            }
 
     @staticmethod
     def key(target: bytes, sources: Iterable[bytes], model: str, weight: float, pixel_boost: str) -> str:
@@ -86,20 +122,36 @@ class PassCache:
             value = self._entries.get(key)
             if value is not None:
                 self._entries.move_to_end(key)
+                self._hits += 1
+            else:
+                self._misses += 1
             return value
 
     def put(self, key: str, output: bytes, used_boost: str) -> None:
         with self._lock:
+            if len(output) > self.max_bytes:
+                return  # larger than the whole budget: never cache
+            previous = self._entries.pop(key, None)
+            if previous is not None:
+                self._bytes -= len(previous[0])
             self._entries[key] = (output, used_boost)
-            self._entries.move_to_end(key)
-            while len(self._entries) > self.max_entries:
-                self._entries.popitem(last=False)
+            self._bytes += len(output)
+            while len(self._entries) > self.max_entries or self._bytes > self.max_bytes:
+                _, (evicted, _) = self._entries.popitem(last=False)
+                self._bytes -= len(evicted)
 
     def clear(self) -> int:
         """Release job-local image bytes; keep model weights and identity reports."""
         with self._lock:
             count = len(self._entries)
+            if self._hits or self._misses:
+                # Diagnostics for /health: did the last job reuse its passes?
+                self._last_job = {"hits": self._hits, "misses": self._misses,
+                                  "entries": count, "mb": round(self._bytes / (1024 * 1024))}
             self._entries.clear()
+            self._bytes = 0
+            self._hits = 0
+            self._misses = 0
             return count
 
     def __len__(self) -> int:

@@ -106,6 +106,11 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(health["ultra_rounds"], 24)
         self.assertEqual(health["ultra_min_seconds"], 420)
         self.assertEqual(health["ultra_search_budget_seconds"], 420)
+        # v23: depths are advertised; old clients still get the seven-minute default.
+        self.assertTrue(health["quality_depths"])
+        self.assertEqual(health["ultra_default_depth"], "standard")
+        self.assertEqual(set(health["ultra_depths"]), {"standard", "deep", "max"})
+        self.assertGreater(health["ultra_depths"]["deep"]["search_seconds"], 420)
 
     def test_calibration_summary_is_numbers_only_and_health_advertises_learning(self):
         from tools.ultra_calibration import CalibrationStore
@@ -372,7 +377,7 @@ class CachedPipelineTest(unittest.TestCase):
         cv2.circle(painted, (195, 230), 20, (10, 200, 10), -1)
         return painted, True
 
-    def run_swap(self, variation, stages, jaw_warp=None, realism=None, real_face=False, detail_gate=None):
+    def run_swap(self, variation, stages, jaw_warp=None, realism=None, real_face=False, detail_gate=None, extra_metadata=None):
         # These orchestration tests deliberately paint flat synthetic ellipses
         # instead of real faces. Stub photographic detail independently so the
         # original identity/geometry invariants remain under test. The detail
@@ -384,7 +389,8 @@ class CachedPipelineTest(unittest.TestCase):
             "faceBounds": {"x": 96.0, "y": 116.0, "width": 200.0, "height": 270.0},
             "variation": variation,
             "targetSize": {"width": 391, "height": 512},
-            "headFit": {"scaleX": 0.97, "scaleY": 1.04}
+            "headFit": {"scaleX": 0.97, "scaleY": 1.04},
+            **(extra_metadata or {})
         }
         if real_face:
             metadata["realFace"] = {"mode": real_face if real_face in ("lower", "full", "both") else "full", "targetLandmarks": [[0.0, 0.0]] * 478, "references": [{"landmarks": [[0.0, 0.0]] * 478}]}
@@ -472,6 +478,15 @@ class CachedPipelineTest(unittest.TestCase):
         # Its re-rendered face is in the result, and covered by the matte.
         self.assertTrue(np.all(self.last_result[250, 195, :3] == 60))
         self.assertEqual(int(self.last_result[250, 195, 3]), 255)
+
+    def test_refined_settings_reuse_cached_passes_and_are_reported(self):
+        first = self.run_swap(0, [])
+        self.assertEqual(first["X-Retake-Variation-Refined"], "off")
+        passes = len(self.facefusion_calls)
+        headers = self.run_swap(0, [], extra_metadata={"variationParams": (1.0, 0.26, 1.0)})
+        self.assertEqual(len(self.facefusion_calls), passes, "same swapper weight: no new FaceFusion pass")
+        self.assertEqual(headers["X-Retake-Variation-Params"], "1.000,0.260,1.000")
+        self.assertEqual(headers["X-Retake-Variation-Refined"], "on")
 
     def test_realism_render_that_loses_the_person_is_not_used(self):
         self.render_scores = [0.61, 0.70]

@@ -298,3 +298,44 @@ class UltraSelectionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UltraNaturalnessTest(unittest.TestCase):
+    @staticmethod
+    def headers(identity, naturalness=None):
+        value = {"X-Retake-Similarity": f"{identity:.4f}"}
+        if naturalness is not None:
+            value["X-Retake-Naturalness"] = f"{naturalness:.1f}"
+        return value
+
+    def test_a_clearly_more_natural_photo_wins_a_small_identity_gap(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        natural = self.headers(0.795, 90)
+        pasted = self.headers(0.800, 78)
+        self.assertTrue(prefer_ultra_candidate(natural, pasted))
+        self.assertFalse(prefer_ultra_candidate(pasted, natural))
+
+    def test_below_the_floor_loses_to_a_natural_one_nearly_as_close(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.78, 80), self.headers(0.80, 55)))
+        self.assertFalse(prefer_ultra_candidate(self.headers(0.80, 55), self.headers(0.78, 80)))
+
+    def test_identity_still_decides_a_real_gap(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        # 0.05 ArcFace is beyond every naturalness allowance.
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.85, 70), self.headers(0.80, 92)))
+        self.assertFalse(prefer_ultra_candidate(self.headers(0.80, 92), self.headers(0.85, 70)))
+
+    def test_without_naturalness_the_old_rules_apply(self):
+        from tools.ultra_mode import identity_slack, prefer_ultra_candidate, ULTRA_REALISM_TIE_LOSS
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.81), self.headers(0.80)))
+        self.assertEqual(identity_slack(self.headers(0.79), self.headers(0.80)), ULTRA_REALISM_TIE_LOSS)
+
+    def test_identity_slack_follows_naturalness(self):
+        from tools.ultra_mode import (
+            ULTRA_NATURALNESS_BAND, ULTRA_NATURALNESS_FLOOR_BAND, ULTRA_REALISM_TIE_LOSS, identity_slack
+        )
+        strongest = self.headers(0.80, 60)
+        self.assertEqual(identity_slack(self.headers(0.78, 82), strongest), ULTRA_NATURALNESS_FLOOR_BAND)
+        self.assertEqual(identity_slack(self.headers(0.78, 64), self.headers(0.80, 50)), ULTRA_NATURALNESS_BAND)
+        self.assertEqual(identity_slack(self.headers(0.78, 82), self.headers(0.80, 80)), ULTRA_REALISM_TIE_LOSS)

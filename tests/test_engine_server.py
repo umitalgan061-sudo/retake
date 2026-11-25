@@ -265,6 +265,15 @@ class CachedPipelineTest(unittest.TestCase):
 
     def setUp(self):
         from tools.retake_cache import IdentityReportCache, PassCache
+        # These fakes paint flat shapes; the naturalness guard is tested on its
+        # own (CompositeChoiceTest), here the identity logic is.
+        guard = patch.object(srv, "NATURALNESS_TOLERANCE", 1e9)
+        guard.start()
+        self.addCleanup(guard.stop)
+        from tools import retake_compositing
+        grain = patch.object(retake_compositing, "match_skin_grain", lambda composite, *args, **kwargs: composite)
+        grain.start()
+        self.addCleanup(grain.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
         self.arcface_calls = 0
@@ -825,6 +834,23 @@ class CompositeChoiceTest(unittest.TestCase):
             self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends), Path("seamless.png"))
         self.assertEqual(srv.choose_composite(Path("ff"), None, self.blends), Path("seamless.png"))
         self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends[:1]), Path("seamless.png"))
+
+    def test_a_blend_that_looks_pasted_cannot_win_on_identity(self):
+        calls = []
+
+        def fake_score(facefusion_dir, centroid, probes):
+            calls.append([path.name for path in probes])
+            return {"natural.png": 0.74, "pasted.png": 0.80, "close.png": 0.76}.__getitem__ and [
+                {"natural.png": 0.74, "pasted.png": 0.80, "close.png": 0.76}[path.name] for path in probes]
+
+        blends = [(Path("natural.png"), 0.3, 90.0), (Path("pasted.png"), 0.3, 70.0), (Path("close.png"), 0.3, 85.0)]
+        with patch.object(srv, "score_identity", fake_score):
+            chosen = srv.choose_composite(Path("ff"), [1.0, 0.0], blends)
+        self.assertEqual(chosen, Path("close.png"), "pasted one is 20 points less natural: never scored")
+        self.assertEqual(calls, [["natural.png", "close.png"]])
+        # Without naturalness measurements the old identity choice stands.
+        with patch.object(srv, "score_identity", fake_score):
+            self.assertEqual(srv.choose_composite(Path("ff"), [1.0], [(p, b) for p, b, _ in blends]), Path("pasted.png"))
 
     def test_engine_and_compositor_agree_on_the_default_shading(self):
         from tools import retake_compositing as rc

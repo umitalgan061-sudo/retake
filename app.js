@@ -43,6 +43,8 @@ import {
   measureFaceEdit,
   describeProfileHealth,
   describeSimilarity,
+  describeNaturalness,
+  parseNaturalness,
   parseSimilarity,
   similarityScore
 } from "./src/quality.js";
@@ -640,6 +642,7 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
+    describeNaturalness(item.naturalness),
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     item.nimEditor ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.realism ? "fotoğraf gerçekçiliği" : "",
@@ -675,7 +678,8 @@ function addResult(blob, label, scores = {}) {
     identitySelection: scores.identitySelection || "",
     realism: scores.realism === true,
     texture: scores.texture || "average",
-    referenceMedian: scores.referenceMedian ?? null
+    referenceMedian: scores.referenceMedian ?? null,
+    naturalness: scores.naturalness ?? null
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -2126,7 +2130,10 @@ async function runFaceFusionEdit() {
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
       detailScore,
-      referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity"))
+      referenceMedian: parseSimilarity(response.headers.get("X-Retake-Identity-Median-Similarity")),
+      naturalness: parseNaturalness(
+        response.headers.get("X-Retake-Naturalness"), response.headers.get("X-Retake-Naturalness-Checks")
+      )
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -2154,7 +2161,10 @@ async function runFaceFusionEdit() {
     );
     addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
-    const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
+    const scoreText = [
+      describeSimilarity(scores.similarity, scores.before, scores.referenceMedian),
+      describeNaturalness(scores.naturalness)
+    ].filter(Boolean).join(" · ");
     showToast(
       "Ultra sonuç hazır" +
       (Number.isInteger(winnerRound) && winnerRound > 0 ? ` · seçilen tur ${winnerRound}` : "") +

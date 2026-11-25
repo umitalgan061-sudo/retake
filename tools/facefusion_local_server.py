@@ -28,7 +28,7 @@ try:
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+        identity_slack, prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -41,7 +41,7 @@ except ImportError:
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
-        prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
+        identity_slack, prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 
 MAX_REFERENCES = 25
@@ -77,6 +77,9 @@ DEFAULT_SHADING_STRENGTH = 0.35
 # one (per 100 px of face width), and always this much.
 BORDER_STEP_RATIO = 2.0
 BORDER_STEP_FLOOR = 0.6
+# A blend may be at most this many naturalness points (0-100) behind the most
+# natural one to compete on identity.
+NATURALNESS_TOLERANCE = 8.0
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
 IDENTITY_REPORT_VERSION = "centroid-v1"
 PAIRING_HEADER = "X-Retake-Token"
@@ -803,23 +806,80 @@ def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None)
     return {"points": target_landmarks, "offset": offset.tolist()}
 
 
+def _face_box(bounds: dict[str, float]) -> tuple[float, float, float, float]:
+    return (float(bounds["x"]), float(bounds["y"]), float(bounds["width"]), float(bounds["height"]))
+
+
+def photo_naturalness_score(composite, target, face_bounds: dict[str, float]) -> float | None:
+    """0..100 photographic naturalness of a composite (tools/photo_naturalness.py).
+
+    Measured where the edit really changed the photo (near the face), not on
+    the matte: a wide matte would put the border check on untouched pixels.
+    """
+    try:
+        try:
+            from .photo_naturalness import naturalness
+        except ImportError:
+            from photo_naturalness import naturalness
+        return naturalness(composite, target, region=_face_box(face_bounds))["score"]
+    except Exception as error:  # informative only
+        print(f"Gerçeklik ölçümü atlandı: {error}", flush=True)
+        return None
+
+
+def final_naturalness(target_path: Path, final_path: Path, face_bounds: dict[str, float]) -> dict[str, Any]:
+    """Naturalness report of the finished crop (RGBA matte over the target)."""
+    import cv2
+    import numpy as np
+    try:
+        try:
+            from .photo_naturalness import naturalness
+        except ImportError:
+            from photo_naturalness import naturalness
+        target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
+        final = cv2.imread(str(final_path), cv2.IMREAD_UNCHANGED)
+        if target is None or final is None or final.shape[:2] != target.shape[:2]:
+            return {"score": None, "checks": {}}
+        if final.ndim == 3 and final.shape[2] == 4:
+            alpha = final[:, :, 3]
+            weight = alpha[:, :, None].astype(np.float32) / 255.0
+            color = np.clip(final[:, :, :3] * weight + target * (1.0 - weight), 0, 255).astype(np.uint8)
+            return naturalness(color, target, region=_face_box(face_bounds))
+        return naturalness(final[:, :, :3], target, region=_face_box(face_bounds))
+    except Exception as error:  # informative only
+        print(f"Gerçeklik ölçümü atlandı: {error}", flush=True)
+        return {"score": None, "checks": {}}
+
+
 def choose_composite(
     facefusion_dir: Path,
     centroid: list[float] | None,
-    blends: list[tuple[Path, float]],
+    blends: list[tuple],
     labels: list[str] | None = None
 ) -> Path:
-    """The blend closest to the person among those with an invisible border.
+    """The blend closest to the person among those that look like a photograph.
 
-    `blends` is (path, border step) with the most seamless one first; it is
-    the fallback when nothing can be measured.
+    `blends` is (path, border step[, naturalness 0..100]) with the most
+    seamless one first; it is the fallback when nothing can be measured.
+    Two guards come before identity: an invisible border, and a photographic
+    naturalness within NATURALNESS_TOLERANCE of the most natural blend, so a
+    blend never wins on ArcFace while clearly looking pasted.
     """
     if len(blends) == 1 or not centroid:
         return blends[0][0]
+    naturalness = {item[0]: (item[2] if len(item) > 2 else None) for item in blends}
+    blends = [(item[0], item[1]) for item in blends]
     limit = max(BORDER_STEP_FLOOR, BORDER_STEP_RATIO * min(border for _, border in blends))
     names = {path: (labels[index] if labels and index < len(labels) else str(index + 1))
              for index, (path, _) in enumerate(blends)}
     allowed = [(path, border) for path, border in blends if border <= limit]
+    measured = [naturalness[path] for path, _ in allowed if isinstance(naturalness[path], (int, float))]
+    if measured:
+        floor = max(measured) - NATURALNESS_TOLERANCE
+        natural = [(path, border) for path, border in allowed
+                   if not isinstance(naturalness[path], (int, float)) or naturalness[path] >= floor]
+        if natural:
+            allowed = natural
     scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
     scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
     if not scored:
@@ -848,7 +908,9 @@ def choose_composite(
     elif matched_lower:
         value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
-        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
+        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f}"
+        + (f", gerçeklik {naturalness[item[0]]:.0f}" if isinstance(naturalness[item[0]], (int, float)) else "")
+        + ")"
         for item, score in zip(allowed, scores)
     )
     print(f"Kimlik öncelikli birleştirme: {listed}; seçilen benzerlik {value:.3f}.", flush=True)
@@ -1161,6 +1223,7 @@ def blend_lower_face(
         )
     if report is not None:
         report["border"] = matte_border_step(composite, target, alpha, face_width)
+        report["naturalness"] = photo_naturalness_score(composite, target, face_bounds)
     rgba = cv2.cvtColor(composite, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 
@@ -1438,7 +1501,7 @@ def process_swap(
                     continue
                 if used:
                     transplanted[path] = transplant.get("mode", "full") if transplant else "full"
-                blends.append((path, float(report.get("border", 0.0))))
+                blends.append((path, float(report.get("border", 0.0)), report.get("naturalness")))
                 label = f"ton {harmonize:g}"
                 if path in transplanted:
                     label += " + referans alt yüz" if transplanted[path] == "lower" else " + tam referans yüzü"
@@ -1461,7 +1524,7 @@ def process_swap(
                 if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
                     continue
                 texture_blends.add(path)
-                blends.append((path, float(report.get("border", 0.0))))
+                blends.append((path, float(report.get("border", 0.0)), report.get("naturalness")))
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         if not blends:
             raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
@@ -1857,8 +1920,17 @@ def process_swap(
         edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
+        natural = final_naturalness(target_path, final_output, metadata["faceBounds"])
+        if natural.get("score") is not None:
+            print(
+                f"Gerçeklik puanı: {natural['score']:.0f}/100 ("
+                + ", ".join(f"{name} {value:.0f}" for name, value in natural["checks"].items()) + ").",
+                flush=True
+            )
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            "X-Retake-Naturalness": "" if natural.get("score") is None else f"{natural['score']:.1f}",
+            "X-Retake-Naturalness-Checks": ",".join(f"{name}={value:.0f}" for name, value in natural.get("checks", {}).items()),
             'X-Retake-NIM-Editor': nim_used,
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
@@ -1976,9 +2048,13 @@ def run_ultra_search(
             strongest = (image, headers, round_number)
         # Keep a global identity anchor: pairwise near-ties must not drift
         # downward over 24 rounds. Retain only two full images in memory.
-        if best_headers is not None and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS:
+        # A clearly more natural photo earns a little identity room (see
+        # ultra_mode.identity_slack); otherwise only near-ties compete.
+        strongest_headers = strongest[1] if strongest else None
+        if best_headers is not None and score_from_headers(best_headers) < (
+                peak_identity - identity_slack(best_headers, strongest_headers)):
             best_result, best_headers, best_round = strongest
-        if identity >= peak_identity - ULTRA_REALISM_TIE_LOSS and prefer_ultra_candidate(headers, best_headers):
+        if identity >= peak_identity - identity_slack(headers, strongest_headers) and prefer_ultra_candidate(headers, best_headers):
             best_result, best_headers, best_round = image, headers, round_number
             print(
                 f"[Ultra] En iyi aday güncellendi: tur {round_number}, "
@@ -2007,7 +2083,8 @@ def run_ultra_search(
             )
             upgraded_identity = score_from_headers(upgraded_headers)
             if (upgraded_identity is not None
-                    and upgraded_identity >= peak_identity - ULTRA_REALISM_TIE_LOSS
+                    and upgraded_identity >= peak_identity - identity_slack(
+                        upgraded_headers, strongest[1] if strongest else None)
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):
                 best_result, best_headers = upgraded_image, upgraded_headers
                 print("[Ultra] Finalist gerçekçilik adayı kimlik ve doku testlerini geçti.", flush=True)
@@ -2233,7 +2310,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
-            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor"
+            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
+            "X-Retake-Naturalness, X-Retake-Naturalness-Checks"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

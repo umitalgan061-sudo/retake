@@ -44,6 +44,32 @@ export function describeSimilarity(after, before, referenceMedian = null) {
     (previous === null ? "" : ` · orijinal ${previous}`);
 }
 
+const NATURALNESS_WORDS = { border: "kenar", tone: "ten uyumu", grain: "gren", detail: "detay", light: "ışık" };
+
+/** Engine's photographic naturalness (0–100) and its checks ("border=89,tone=100,…"). */
+export function parseNaturalness(value, checksValue = "") {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const score = Number(value);
+  if (!Number.isFinite(score) || score < 0 || score > 100) return null;
+  const checks = {};
+  String(checksValue || "").split(",").forEach((part) => {
+    const [name, raw] = part.split("=");
+    const number = Number(raw);
+    if (name && Number.isFinite(number)) checks[name.trim()] = number;
+  });
+  return { score, checks };
+}
+
+/** "Gerçeklik 88/100" plus the weakest check when one clearly lags. */
+export function describeNaturalness(naturalness) {
+  if (!naturalness || !Number.isFinite(naturalness.score)) return "";
+  const text = `Gerçeklik ${Math.round(naturalness.score)}/100`;
+  const entries = Object.entries(naturalness.checks || {});
+  if (!entries.length) return text;
+  const [name, value] = entries.reduce((low, item) => (item[1] < low[1] ? item : low));
+  return value < 70 ? `${text} · zayıf: ${NATURALNESS_WORDS[name] || name}` : text;
+}
+
 /** Index of the most similar result, or -1 when none has a score. */
 export function bestResultIndex(results) {
   let best = -1;

@@ -29,7 +29,8 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 from urllib.parse import urlsplit
 
-DEFAULT_URL = "https://hafize-ua.web.app/api/project-ai/retake/vision-judge"
+# Hafize's live backend is the Render service (hafize-ua.web.app serves no /api).
+DEFAULT_URL = "https://hafize-free.onrender.com/api/project-ai/retake/vision-judge"
 JUDGE_PATH = "/api/project-ai/retake/vision-judge"
 ALLOWED_HOSTS = frozenset({"hafize-ua.web.app", "hafize-ua.firebaseapp.com", "hafize-free.onrender.com"})
 ALLOWED_HOST_SUFFIXES = (".run.app",)
@@ -42,8 +43,8 @@ CROP_EDGE = 512
 JPEG_QUALITIES = (90, 82, 74)
 MAX_CROP_BYTES = 600 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
-# Hafize's Cloud Run request window is 60 s; allow for a cold start on top.
-TIMEOUT_SECONDS = 75.0
+# Render Free sleeps when idle: allow a ~60 s cold start plus the jury itself.
+TIMEOUT_SECONDS = 120.0
 MIN_VOTES = 2
 MIN_AGREEMENT = 2 / 3
 OUTCOMES = ("off", "not-consented", "single-finalist", "kept", "switched", "abstain", "error")

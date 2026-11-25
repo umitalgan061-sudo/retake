@@ -4,6 +4,8 @@ import {
   findExactReferenceFile,
   getLandmarkBounds,
   settleWithLimit,
+  transparentFraction,
+  TRANSPARENT_TARGET_FRACTION,
   MAX_IMAGE_BYTES,
   MAX_REFERENCE_FACES,
   validateImageDimensions,
@@ -721,8 +723,29 @@ function addResult(blob, label, scores = {}) {
 
 // The file that is saved or shared: the selected look at the chosen strength
 // and format. At full strength as PNG it is the untouched lossless result.
+function measureTransparency(image) {
+  try {
+    const width = image.naturalWidth || image.width;
+    const height = image.naturalHeight || image.height;
+    const scale = Math.min(1, 256 / Math.max(width, height));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return transparentFraction(context.getImageData(0, 0, canvas.width, canvas.height).data);
+  } catch {
+    return 0;
+  }
+}
+
 async function buildExportFile() {
-  const format = elements.exportFormat.value === "jpeg" ? "jpeg" : "png";
+  let format = elements.exportFormat.value === "jpeg" ? "jpeg" : "png";
+  if (format === "jpeg" && state.target?.transparent) {
+    // JPG has no transparency: a removed background would be saved as black.
+    format = "png";
+    showToast("Fotoğrafın arka planı saydam; JPG'de siyah olacağı için PNG olarak kaydedildi.");
+  }
   const strength = resultStrength();
   let blob = state.result.blob;
   if (format === "jpeg" || strength < 1) {
@@ -731,7 +754,8 @@ async function buildExportFile() {
       const canvas = document.createElement("canvas");
       canvas.width = original.image.naturalWidth;
       canvas.height = original.image.naturalHeight;
-      const context = canvas.getContext("2d", { alpha: false });
+      // PNG keeps a removed (transparent) background instead of turning it black.
+      const context = canvas.getContext("2d", { alpha: format === "png" });
       if (!context) throw new Error("Dışa aktarma alanı oluşturulamadı.");
       context.drawImage(original.image, 0, 0);
       context.globalAlpha = strength;
@@ -813,7 +837,8 @@ async function setTargetPhoto(file) {
     }
     if (state.target?.url) URL.revokeObjectURL(state.target.url);
     clearResult();
-    state.target = { file, image: loaded.image, url: loaded.url, faces };
+    const transparent = measureTransparency(loaded.image) > TRANSPARENT_TARGET_FRACTION;
+    state.target = { file, image: loaded.image, url: loaded.url, faces, transparent };
     state.nextVariation = 0;
     state.targetLoading = false;
     state.selectedFaceIndex = faces.length > 0 ? 0 : null;
@@ -825,7 +850,10 @@ async function setTargetPhoto(file) {
     drawTargetPreview();
     renderFaceChips();
     updateSwapAvailability();
-    showToast(detectionMessage);
+    // The background warning must not be overwritten by the detection toast.
+    showToast(transparent
+      ? detectionMessage + " Bu fotoğrafın arka planı silinmiş (saydam): Retake yalnız yüzü değiştirir, arka planı geri getiremez. Arka planın görünmesi için orijinal fotoğrafı seç."
+      : detectionMessage);
   } catch (error) {
     if (token === state.targetLoadToken) {
       state.targetLoading = false;

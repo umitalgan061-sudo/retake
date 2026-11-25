@@ -210,3 +210,35 @@ def balance_with_original(original_path, candidate_path, output_path, strength):
     if not cv2.imwrite(str(output_path), result):
         raise OSError("Detail recovery candidate could not be written")
     return output_path
+
+
+# InSwapper 128 draws the face at 128 px. On a large face the upscale blurs
+# eyes and lips and leaves ghosted double lids, while ArcFace still rises
+# (the swapper is driven by the same ArcFace embedding family it is scored
+# with). Reinforcement must therefore not cost visible eye/mouth detail
+# relative to the 256 px pass it would replace.
+REINFORCE_MIN_DETAIL = {"eyes": 0.85, "mouth": 0.85}
+
+
+def reinforcement_detail_decision(ratios: dict[str, float]) -> tuple[bool, str]:
+    """Accept only when every measurable eye/mouth region keeps its detail.
+
+    Unmeasurable regions (tiny or textureless faces, where a 128 px render
+    loses little) keep the previous ArcFace-only behavior.
+    """
+    measured = [name for name in REINFORCE_MIN_DETAIL if name in ratios]
+    for name in measured:
+        ratio = ratios[name]
+        if not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio < REINFORCE_MIN_DETAIL[name]:
+            return False, name + "-blur"
+    return True, "passed" if measured else "unmeasured"
+
+
+def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds: dict[str, Any]) -> tuple[bool, str, dict[str, float]]:
+    single = cv2.imread(str(single_path), cv2.IMREAD_COLOR)
+    reinforced = cv2.imread(str(reinforced_path), cv2.IMREAD_COLOR)
+    if single is None or reinforced is None or single.shape != reinforced.shape:
+        return False, "unreadable", {}
+    _score, ratios = regional_photo_detail(single, reinforced, bounds)
+    accepted, reason = reinforcement_detail_decision(ratios)
+    return accepted, reason, ratios

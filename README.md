@@ -52,6 +52,10 @@ ArcFace benzerliği bir noktadan sonra "daha çok sen" demek değildir. Motor, 2
 - NVIDIA jürisine giden finalistler de artık yalnız ArcFace'e yakınlıkla değil, yeterli adaylar arasından gerçekçilik sırasıyla seçilir.
 - Sonuç rozeti "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" der; "fotoğraflarınla aynı düzeyde" karşılaştırması da artık aynı ölçekteki bu değere göre yapılır.
 
+Aynı kural tek bir işlemin içinde de geçerli: 256 px geçiş zaten bu düzeye ulaştıysa 128 px InSwapper pekiştirmesi hiç uygulanmaz (`X-Retake-Reinforce-Guard: identity-sufficient`), ve başlık uydurma/ham-kafa/fotoğraf-dengesi gibi iç adaylar arasından gerçek fotoğraf ayrıntısını en çok koruyan seçilir.
+
+**Öz-test ölçümü.** Hedef fotoğraf 25 referansından biriyse (aynı dosya), orijinal yüz doğru cevaptır. Bu durumda motor sonucu orijinalle karşılaştırır: yüz bölgesinde yapısal benzerlik (SSIM, 1 = aynı) ve ortalama renk farkı (ΔE, 0 = aynı); sonuç rozetinde "Öz-test" satırı olarak görünür (`X-Retake-Self-Fidelity`). Ölçek için: aynı fotoğrafı JPEG olarak yeniden kaydetmek ≈ 0,97 / 1,3 verir; 25 Kasım testindeki yapay görünen sonuç 0,69 / 7,2 idi (σ=2 bulanıklaştırılmış orijinal bile 0,77 / 2,4). Bu yalnız ölçümdür; seçimde kullanılmaz, yoksa test kendi cevabını görmüş olurdu.
+
 Neden: Kendi referans fotoğrafınla yapılan bir testte sonuç ArcFace'te 0,85'ten 0,91'e çıktı ama gözler bulanık, burun delikleri lekeli, cilt mumsu göründü. Yüksek puan, gerçek bir fotoğrafından daha "sen" olduğu anlamına gelmiyordu.
 
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)

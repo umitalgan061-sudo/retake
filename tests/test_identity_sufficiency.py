@@ -133,5 +133,34 @@ class UltraLoopTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Identity-Sufficient"], "no")
 
 
+class InsideRenderTest(unittest.TestCase):
+    def test_reinforcement_is_skipped_once_the_256px_pass_reaches_the_photo_level(self):
+        from tools.ultra_quality import reinforcement_wanted
+        from tools.ultra_mode import sufficiency_from_level
+        threshold = sufficiency_from_level(0.86)
+        self.assertAlmostEqual(threshold, 0.84)
+        self.assertEqual(reinforcement_wanted(0.85, 0.91, threshold), (False, "identity-sufficient"))
+        self.assertEqual(reinforcement_wanted(0.78, 0.83, threshold), (True, "gain"))
+        self.assertEqual(reinforcement_wanted(0.78, 0.785, threshold), (False, "no-identity-gain"))
+        self.assertEqual(reinforcement_wanted(None, 0.9, threshold), (False, "unscored"))
+        # Without a measured level the old ArcFace-gain rule applies.
+        self.assertEqual(reinforcement_wanted(0.85, 0.91, None), (True, "gain"))
+        for bad in (None, True, "x", float("nan"), 0.2, 1.2):
+            self.assertIsNone(sufficiency_from_level(bad))
+
+    def test_sufficient_candidate_with_more_real_detail_wins_inside_a_render(self):
+        from tools.ultra_quality import select_sufficient_realism
+        identity = [0.90, 0.86, 0.80, None]
+        detail = [0.78, 0.93, 0.99, 0.99]
+        self.assertEqual(select_sufficient_realism(identity, detail, 0, 0.84), 1)
+        # Not enough detail gain: keep the identity winner.
+        self.assertEqual(select_sufficient_realism(identity, [0.90, 0.91, 0.99, 0.99], 0, 0.84), 0)
+        # Below the level, or unmeasured, nothing changes.
+        self.assertEqual(select_sufficient_realism([0.80, 0.79], [0.7, 0.99], 0, 0.84), 0)
+        self.assertEqual(select_sufficient_realism(identity, detail, 0, None), 0)
+        self.assertEqual(select_sufficient_realism(identity, [None, 0.93, 0.99, 0.99], 0, 0.84), 0)
+        self.assertEqual(select_sufficient_realism(identity, detail[:2], 0, 0.84), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

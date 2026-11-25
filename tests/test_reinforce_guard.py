@@ -61,3 +61,31 @@ class ReinforceGuardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SelfFidelityTest(unittest.TestCase):
+    """Ground-truth self-test metric on synthetic images."""
+
+    def measure(self, original, edited, bounds):
+        from tools.ultra_quality import self_fidelity
+        with tempfile.TemporaryDirectory() as folder:
+            a, b = Path(folder) / "a.png", Path(folder) / "b.png"
+            cv2.imwrite(str(a), original)
+            cv2.imwrite(str(b), edited)
+            return self_fidelity(a, b, bounds)
+
+    def test_identical_blurred_and_recoloured_faces_rank_as_expected(self):
+        bounds = {"x": 170, "y": 200, "width": 460, "height": 600}
+        original = textured()
+        self.assertEqual(self.measure(original, original.copy(), bounds), {"ssim": 1.0, "delta_e": 0.0})
+        blurred = self.measure(original, render_at(original, bounds, 128), bounds)
+        self.assertLess(blurred["ssim"], 0.9)
+        tinted = original.copy()
+        tinted[:, :, 2] = np.clip(tinted[:, :, 2].astype(int) + 40, 0, 255).astype(np.uint8)
+        self.assertGreater(self.measure(original, tinted, bounds)["delta_e"], 5)
+
+    def test_bad_inputs_return_nothing(self):
+        original = textured()
+        self.assertEqual(self.measure(original, original[:400], {"x": 1, "y": 1, "width": 100, "height": 100}), {})
+        self.assertEqual(self.measure(original, original, {"x": 1, "y": 1, "width": float("nan"), "height": 100}), {})
+        self.assertEqual(self.measure(original, original, {"x": 1}), {})

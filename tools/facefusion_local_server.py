@@ -29,14 +29,14 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
@@ -50,14 +50,14 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
@@ -1388,7 +1388,10 @@ def process_swap(
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
                 single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
-                if single is not None and double is not None and double > single + 0.008:
+                wanted, why = reinforcement_wanted(
+                    single, double, sufficiency_from_level(identity_report.get("photo_level_similarity"))
+                )
+                if wanted:
                     # A higher ArcFace from the 128 px swapper is not worth
                     # blurred, ghosted eyes or lips on a large face.
                     keeps_detail, reinforce_guard, reinforce_ratios = check_reinforcement_detail(
@@ -1403,7 +1406,8 @@ def process_swap(
                             flush=True
                         )
                 else:
-                    reinforce_guard = "no-identity-gain"
+                    # Already at the person's photo level, or no real gain.
+                    reinforce_guard = why
                 print(
                     "Kimlik pekiştirme: "
                     + ("uygulandı" if reinforced else "kullanılmadı")
@@ -1711,6 +1715,12 @@ def process_swap(
         chosen_index = select_verified_regional_candidate(
             candidate_scores, candidate_detail_scores, effective_labels, chosen_index
         )
+        # At the person's photo level, keep the candidate with the most real
+        # photographic detail rather than the highest cosine.
+        chosen_index = select_sufficient_realism(
+            candidate_scores, candidate_detail_scores, chosen_index,
+            sufficiency_from_level(identity_report.get("photo_level_similarity"))
+        )
         if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
         selected_identity = rescue_candidates[chosen_index][0]
@@ -1955,8 +1965,19 @@ def process_swap(
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
         if not accepted:
             raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
+        # Self-test: the target is one of the person's own references, so the
+        # original face is ground truth. Measured, never used for selection.
+        self_test: dict[str, float] = {}
+        if type(exact_index) is int:
+            try:
+                self_test = self_fidelity(target_path, final_output, metadata["faceBounds"])
+            except (ValueError, OSError, cv2.error):
+                self_test = {}
+            if self_test:
+                print(f"[Öz-test] Orijinale yapısal benzerlik {self_test['ssim']:.3f}, renk farkı ΔE {self_test['delta_e']:.2f}.", flush=True)
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-Self-Fidelity': (f"ssim:{self_test['ssim']:.4f},deltaE:{self_test['delta_e']:.3f}" if self_test else ""),
             'X-Retake-Neck-Status': neck_status,
             'X-Retake-Neck-Pixels': str(neck_pixels),
             'X-Retake-NIM-Editor': nim_used,
@@ -2545,7 +2566,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Access-Control-Expose-Headers",
             "X-Retake-Identity-Median-Similarity, X-Retake-Identity-Outliers, "
-            "X-Retake-Identity-Photo-Level, X-Retake-Identity-Sufficient, "
+            "X-Retake-Identity-Photo-Level, X-Retake-Identity-Sufficient, X-Retake-Self-Fidelity, "
             "X-Retake-Pixel-Boost, X-Retake-Face-Enhancer, X-Retake-Identity-Weighted-Votes, "
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "

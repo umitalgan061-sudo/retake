@@ -171,3 +171,16 @@ export function describeJudgeError(code) {
 export function describeIdentitySufficiency(value) {
   return value === "yes" ? "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" : "";
 }
+
+// Self-test: when the target is one of the person's own reference photos,
+// the original face is the right answer. SSIM 1 / ΔE 0 mean identical; for
+// scale, re-saving the same photo as JPEG gives about 0.97 / 1.3.
+export function describeSelfFidelity(value) {
+  const match = /^ssim:(-?\d+(?:\.\d+)?),deltaE:(\d+(?:\.\d+)?)$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const ssim = Number(match[1]);
+  const deltaE = Number(match[2]);
+  if (!Number.isFinite(ssim) || ssim < -1 || ssim > 1 || !Number.isFinite(deltaE) || deltaE < 0 || deltaE > 200) return "";
+  const comma = (number, digits) => number.toFixed(digits).replace(".", ",");
+  return `Öz-test (fotoğraf referanslarında da var): orijinale yapısal benzerlik ${comma(ssim, 2)} · renk farkı ΔE ${comma(deltaE, 1)} (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 · 1,3)`;
+}

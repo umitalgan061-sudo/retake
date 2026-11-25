@@ -90,3 +90,11 @@ test("identity sufficiency badge only speaks when the engine measured it", async
   assert.equal(describeIdentitySufficiency("unknown"), "");
   assert.equal(describeIdentitySufficiency(undefined), "");
 });
+test("self-test fidelity is shown only for a well-formed engine measurement", async () => {
+  const {describeSelfFidelity} = await import("../src/quality.js");
+  assert.equal(describeSelfFidelity("ssim:0.6929,deltaE:7.152"), "Öz-test (fotoğraf referanslarında da var): orijinale yapısal benzerlik 0,69 · renk farkı ΔE 7,2 (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 · 1,3)");
+  assert.equal(describeSelfFidelity(""), "");
+  assert.equal(describeSelfFidelity("ssim:2,deltaE:1"), "");
+  assert.equal(describeSelfFidelity("ssim:0.9,deltaE:-1"), "");
+  assert.equal(describeSelfFidelity("<script>"), "");
+});

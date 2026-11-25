@@ -93,9 +93,21 @@ def photo_level_from_headers(headers: dict[str, str] | None) -> float | None:
     return value if math.isfinite(value) and 0.40 <= value <= 0.99 else None
 
 
+def sufficiency_from_level(level: Any) -> float | None:
+    """ArcFace score from which a result counts as this person's photo level."""
+    if isinstance(level, bool):
+        return None
+    try:
+        value = float(level)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or not 0.40 <= value <= 0.99:
+        return None
+    return min(0.92, value - ULTRA_SUFFICIENCY_TOLERANCE)
+
+
 def identity_sufficiency(headers: dict[str, str] | None) -> float | None:
-    level = photo_level_from_headers(headers)
-    return None if level is None else min(0.92, level - ULTRA_SUFFICIENCY_TOLERANCE)
+    return sufficiency_from_level(photo_level_from_headers(headers))
 
 
 def is_identity_sufficient(headers: dict[str, str] | None) -> bool:

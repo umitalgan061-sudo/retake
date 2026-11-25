@@ -29,7 +29,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from .ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
@@ -48,7 +48,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
@@ -1933,6 +1933,7 @@ def process_swap(
         edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
+        region_edits = regional_edit_statistics(target_path, final_output, metadata["faceBounds"])
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
         if not accepted:
             raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
@@ -1949,6 +1950,7 @@ def process_swap(
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
+            "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
@@ -2512,7 +2514,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "

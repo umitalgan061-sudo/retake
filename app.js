@@ -301,6 +301,7 @@ async function checkFaceFusionStatus() {
         model: health.model || "uniface_256",
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
+        nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
         personalModel: Boolean(health.personal_model),
         message: health.personal_model
           ? "Ultra-420 v22 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
@@ -637,6 +638,7 @@ function selectResult(index) {
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama RGB farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
+    item.nimEditor ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.realism ? "fotoğraf gerçekçiliği" : "",
     item.texture && item.texture !== "average" ? "gerçek referans cilt dokusu" : "",
     item.realFace ? "gerçek fotoğraf dokusu" : "",
@@ -659,6 +661,7 @@ function addResult(blob, label, scores = {}) {
     url: createObjectURL(blob),
     label,
     faceEdit: scores.faceEdit ?? null,
+    nimEditor: scores.nimEditor || '',
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
     realFace: scores.realFace === true,
@@ -2105,6 +2108,7 @@ async function runFaceFusionEdit() {
     const winnerRound = Number(response.headers.get("X-Retake-Ultra-Winner"));
     const detailScore = parseSimilarity(response.headers.get("X-Retake-Detail-Score"));
     const scores = {
+      nimEditor: response.headers.get('X-Retake-NIM-Editor') || '',
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),
       realFace: response.headers.get("X-Retake-Real-Face") === "on",

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 try:
+    from .nim_photo_edit import configured_editors, candidate_from_editor
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
@@ -30,6 +31,7 @@ try:
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation
     )
 except ImportError:
+    from nim_photo_edit import configured_editors, candidate_from_editor
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
@@ -1647,6 +1649,8 @@ def process_swap(
                     f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
                     f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
                 )
+        if selected_identity not in ('head-fit','no-head-warp'):
+            chosen_texture = 'average'
         if selected_identity in ("identity-only", "identity-jaw"):
             used_lower_face = False
             used_full_face = False
@@ -1709,6 +1713,34 @@ def process_swap(
                 f"({listed}; FaceFusion {result_similarity:.3f}).",
                 flush=True
             )
+        # Optional local NIM finalist candidates. Actual selected pixels, never
+        # a model's own claims, must pass identity, texture and edit checks.
+        nim_used = ""
+        nim_editors = caches.get("nim_editors") or {}
+        if nim_editors and centroid:
+            indices = sorted(range(len(weights)), key=lambda i: (-weights[i], i))
+            nim_refs = [reference_paths[i] for i in indices]
+            nim_candidates = []
+            base_detail, _ = check_photo_detail(target_path, final_output, metadata["faceBounds"])
+            for index, (model, port) in enumerate(nim_editors.items()):
+                try:
+                    path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png")
+                    acceptable, reason = check_render_file(final_output, path, metadata["faceBounds"])
+                    if not acceptable or not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
+                        print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
+                        continue
+                    value = score_identity(facefusion_dir, centroid, [path])[0]
+                    detail, _ = check_photo_detail(target_path, path, metadata["faceBounds"])
+                    if value is not None and value >= result_similarity - ULTRA_REALISM_TIE_LOSS and (
+                        value > result_similarity + .001 or (base_detail is not None and detail is not None and detail > base_detail + .06)
+                    ):
+                        nim_candidates.append((value, detail or 0., model, path))
+                except Exception as error:
+                    print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
+            if nim_candidates:
+                result_similarity, _, nim_used, path = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                shutil.copyfile(path, final_output)
+                print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
         # An ink-like one-pixel face outline can survive the global ArcFace
         # gate. Attempt a narrow, local cleanup on the existing face matte,
         # then keep it only if ArcFace still verifies the same identity.
@@ -1799,6 +1831,7 @@ def process_swap(
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-NIM-Editor': nim_used,
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
@@ -1878,7 +1911,8 @@ def run_ultra_search(
     # all feasible identity candidates first, then invest the heavy GPU
     # realism pass in the single best validated finalist.
     has_realism = bool(caches and caches.get("realism"))
-    search_caches = {**caches, "realism": None} if has_realism else caches
+    has_nim = bool(caches and caches.get('nim_editors'))
+    search_caches = {**caches, 'realism': None, 'nim_editors': None} if has_realism or has_nim else caches
 
     for index, variation in enumerate(ULTRA_VARIATIONS):
         if not should_continue_ultra(completed, clock() - started):
@@ -1934,7 +1968,7 @@ def run_ultra_search(
     # One GPU realism investment on the best identity, not 24. This
     # evaluation always uses the untouched original target and reference
     # sources; it never feeds a generated face back as identity input.
-    if has_realism:
+    if has_realism or has_nim:
         try:
             if on_finalist is not None:
                 on_finalist()
@@ -2036,7 +2070,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
                 "identity": getattr(server, "identity_cache", None),
                 "passes": getattr(server, "pass_cache", None),
                 "shading": getattr(server, "shading_strength", None),
-                "realism": getattr(server, "realism", None)
+                "realism": getattr(server, "realism", None),
+                "nim_editors": getattr(server, "nim_editors", None)
             },
             on_hold=hold, on_finalist=finalist
         )
@@ -2170,7 +2205,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
-            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta"
+            "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -2225,6 +2260,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
             "lossless_preblended_transport": True,
+            "final_face_edit_proof": True,
+            "nim_editors_configured": list(getattr(self.server, 'nim_editors', {}) or {}),
             "identity_model": IDENTITY_MODEL,
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",
@@ -2443,6 +2480,11 @@ def main() -> int:
         print("--shading-strength 0 ile 1.2 arasında olmalı.", file=sys.stderr)
         return 2
     server.shading_strength = args.shading_strength  # type: ignore[attr-defined]
+    try:
+        server.nim_editors = configured_editors()
+    except ValueError as error:
+        print(str(error), file=sys.stderr)
+        return 2
     server.realism = find_realism(args.realism_python, args.realism_models)  # type: ignore[attr-defined]
     if server.realism:  # type: ignore[attr-defined]
         print(f"Fotoğraf gerçekçiliği AÇIK (difüzyon + kimlik yönlendirmesi): {args.realism_models}", flush=True)

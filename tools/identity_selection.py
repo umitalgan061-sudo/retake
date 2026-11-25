@@ -107,7 +107,7 @@ def select_texture_reference(
     weights: Sequence[int],
     identity_report: dict[str, Any],
     pose_distances: Sequence[float | None] | None = None,
-    *, excluded_index: int | None = None,
+    *, excluded_index: int | None = None, variation: int = 0,
 ) -> int | None:
     """Choose one real (not pixel-averaged) face for optional UniFace detail.
 
@@ -139,7 +139,13 @@ def select_texture_reference(
         candidates = sorted(possible, key=lambda i: float(pose_distances[i]))[:8]
     else:
         candidates = accepted
-    return max(candidates, key=lambda i: (weights[i], float(medians[i]), -i))
+    ranked = sorted(candidates, key=lambda i: (-weights[i], -float(medians[i]), i))
+    # Limit later rounds to the strongest few real photos. Excluded references
+    # and poor-pose images remain excluded; every composite is reverified.
+    if variation in (3, 7, 11, 15, 19, 23) and len(ranked) > 1:
+        choices = ranked[:3]
+        return choices[1 + (variation // 4) % (len(choices)-1)]
+    return ranked[0]
 
 
 def choose_identity_pool(scores: Sequence[float | None], variation: int, tolerance: float = .015) -> int:

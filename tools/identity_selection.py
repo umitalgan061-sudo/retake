@@ -107,7 +107,7 @@ def select_texture_reference(
     weights: Sequence[int],
     identity_report: dict[str, Any],
     pose_distances: Sequence[float | None] | None = None,
-    *, excluded_index: int | None = None,
+    *, excluded_index: int | None = None, variation: int = 0,
 ) -> int | None:
     """Choose one real (not pixel-averaged) face for optional UniFace detail.
 
@@ -139,4 +139,32 @@ def select_texture_reference(
         candidates = sorted(possible, key=lambda i: float(pose_distances[i]))[:8]
     else:
         candidates = accepted
-    return max(candidates, key=lambda i: (weights[i], float(medians[i]), -i))
+    ranked = sorted(candidates, key=lambda i: (-weights[i], -float(medians[i]), i))
+    # Limit later rounds to the strongest few real photos. Excluded references
+    # and poor-pose images remain excluded; every composite is reverified.
+    if variation in (3, 7, 11, 15, 19, 23) and len(ranked) > 1:
+        choices = ranked[:3]
+        return choices[1 + (variation // 4) % (len(choices)-1)]
+    return ranked[0]
+
+
+def choose_identity_pool(scores: Sequence[float | None], variation: int, tolerance: float = .015) -> int:
+    """Explore independently verified near-best source pools on later rounds.
+
+    First round uses the best measured source; later rounds explore plausible
+    alternatives, not arbitrarily weak or unmeasured sources. The final native
+    composite is scored independently by the existing identity gates.
+    """
+    valid = [(i,float(value)) for i,value in enumerate(scores)
+             if isinstance(value,(int,float)) and not isinstance(value,bool)
+             and math.isfinite(value) and -1 <= value <= 1]
+    if not valid:
+        return 0
+    ranked = sorted(valid,key=lambda row:(-row[1],row[0]))
+    peak = ranked[0][1]
+    eligible = [i for i,value in ranked if value >= peak-tolerance]
+    # Keep early canonical rounds stable and use selected later rounds to
+    # explore alternate sources without multiplying the number of GPU passes.
+    if variation in (4,7,9,12,15,17,19,21,23) and len(eligible)>1:
+        return eligible[1+(variation//3)%(len(eligible)-1)]
+    return ranked[0][0]

@@ -575,8 +575,8 @@ class CachedPipelineTest(unittest.TestCase):
 
     def test_real_reference_warp_is_cached_across_three_tone_variants(self):
         self.run_swap(0, [], real_face="both")
-        self.assertEqual(self.transplant_modes.count("lower"), 3,
-                         "once across tone variants plus two strength-adjusted identity rescues")
+        self.assertEqual(self.transplant_modes.count("lower"), 5,
+                         "once across tone variants plus four strength-adjusted identity rescues")
         self.assertEqual(self.transplant_modes.count("full"), 3,
                          "once across tone variants plus two low-strength identity rescues")
 

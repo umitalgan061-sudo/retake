@@ -229,3 +229,62 @@ def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds:
     _score, ratios = regional_photo_detail(single, reinforced, bounds)
     accepted, reason = reinforcement_detail_decision(ratios)
     return accepted, reason, ratios
+
+def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent):
+    """Prefer measured regional detail only within the verified identity peak."""
+    if not (len(identity_scores) == len(detail_scores) == len(labels)):
+        return incumbent
+    valid = [i for i, score in enumerate(identity_scores)
+             if isinstance(score, (int, float)) and not isinstance(score, bool)
+             and math.isfinite(score) and -1 <= score <= 1]
+    if not valid:
+        return incumbent
+    peak = max(valid, key=lambda i: identity_scores[i])
+    eligible = [i for i in valid if identity_scores[i] >= identity_scores[peak] - .003]
+    current = incumbent if incumbent in eligible else peak
+    current = choose_detail_safe_tie(identity_scores, detail_scores, current)
+    if labels[current] not in ("identity-beard", "identity-full", "identity-jaw"):
+        baseline = detail_scores[current]
+        if isinstance(baseline, (float, int)) and math.isfinite(baseline):
+            regional = [i for i in eligible
+                        if labels[i] in ("identity-beard", "identity-full", "identity-jaw")
+                        and isinstance(detail_scores[i], (float, int))
+                        and math.isfinite(detail_scores[i])
+                        and detail_scores[i] >= baseline - .025]
+            if regional:
+                current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
+    return current
+
+def regional_edit_statistics(original_path, edited_path, bounds):
+    """Native-pixel edit evidence, independent of source texture energy.
+
+    A change is not a quality or identity gain. In particular, smooth lips
+    and small beards may have insufficient high-frequency baseline energy
+    but still allow a valid measurement of the delivered pixel difference.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    edited = cv2.imread(str(edited_path), cv2.IMREAD_COLOR)
+    if original is None or edited is None or original.shape != edited.shape:
+        return {}
+    height, width = original.shape[:2]
+    try:
+        x, y, fw, fh = (float(bounds[key]) for key in ("x", "y", "width", "height"))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if not all(math.isfinite(v) for v in (x,y,fw,fh)) or min(fw,fh) < 20:
+        return {}
+    regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92),
+               "forehead": (.24,.10,.76,.25), "brows": (.12,.19,.88,.30),
+               "left_cheek": (.12,.43,.34,.68), "right_cheek": (.66,.43,.88,.68),
+               "left_jaw": (.12,.69,.35,.87), "right_jaw": (.65,.69,.88,.87)}
+    result = {}
+    for name, (left,top,right,bottom) in regions.items():
+        x0,x1 = max(0,int(x+fw*left)), min(width,int(x+fw*right))
+        y0,y1 = max(0,int(y+fh*top)), min(height,int(y+fh*bottom))
+        if min(x1-x0,y1-y0) < 4:
+            continue
+        before = original[y0:y1,x0:x1].astype(np.int16)
+        after = edited[y0:y1,x0:x1].astype(np.int16)
+        values = np.max(np.abs(after-before),axis=2)
+        result[name] = round(float(np.mean(values)),3)
+    return result

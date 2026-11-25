@@ -266,3 +266,15 @@ def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALI
         if variation != winner and variation not in choices and variation not in round_scores:
             choices.append(variation)
     return choices
+
+
+def defer_flux_retry(outcome, diagnostics):
+    """Spend the first extra finalist on identity instead of repeated bad diffusion."""
+    if outcome != "identity-loss":
+        return False
+    try:
+        identity = float(diagnostics.get("X-Retake-FLUX-Identity-Delta", ""))
+        detail = float(diagnostics.get("X-Retake-FLUX-Detail-Delta", ""))
+    except (TypeError,ValueError):
+        return False
+    return math.isfinite(identity) and math.isfinite(detail) and identity < -.03 and detail <= 0

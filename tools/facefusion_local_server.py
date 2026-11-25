@@ -27,16 +27,17 @@ try:
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from .identity_selection import plan_identity_source_sets, select_texture_reference
+    from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from .ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from .neck_harmonization import neck_candidate_file
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 except ImportError:
@@ -47,16 +48,17 @@ except ImportError:
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
-    from identity_selection import plan_identity_source_sets, select_texture_reference
+    from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
+    from ultra_quality import check_photo_detail, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from neck_harmonization import neck_candidate_file
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS
     )
 
@@ -103,7 +105,6 @@ DEFAULT_SHADING_STRENGTH = 0.35
 BORDER_STEP_RATIO = 2.0
 BORDER_STEP_FLOOR = 0.6
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
-# v2 adds the leave-one-out real-photo identity level.
 IDENTITY_REPORT_VERSION = "centroid-v2"
 PAIRING_HEADER = "X-Retake-Token"
 IDENTITY_MODEL = "alphaface_256"
@@ -385,7 +386,11 @@ def _validate_metadata(metadata: Any, reference_count: int) -> dict[str, Any]:
     nvidia_judge = metadata.get('nvidiaJudge', False)
     if type(nvidia_judge) is not bool:
         raise ValueError('NVIDIA jüri onayı true/false olmalı.')
+    neck_harmonize = metadata.get('neckHarmonize', False)
+    if type(neck_harmonize) is not bool:
+        raise ValueError('Boyun uyumu seçeneği true/false olmalı.')
     return {
+        'neckHarmonize': neck_harmonize,
         'nvidiaJudge': nvidia_judge,
         'exactReferenceIndex': exact_index,
         "poseDistances": pose_distances,
@@ -1363,15 +1368,7 @@ def process_swap(
                 candidate_scores = score_identity(
                     facefusion_dir, centroid, [path for _, path, _, _ in candidates]
                 )
-                best_index = 0
-                best_value = candidate_scores[0]
-                for i, value in enumerate(candidate_scores[1:], start=1):
-                    # Require an observable improvement, not a tiny change
-                    # from embedding / image-encoding measurement noise.
-                    if value is not None and (
-                        best_value is None or value > best_value + 0.006
-                    ):
-                        best_index, best_value = i, value
+                best_index = choose_identity_pool(candidate_scores, variation)
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
                 print(
                     "Kaynak havuzu karşılaştırması: "
@@ -1424,7 +1421,7 @@ def process_swap(
         # rarely land on identical pixels. Try a crisp real reference as an
         # optional UniFace *detail* source, not as a replacement for identity.
         texture_reference_index = select_texture_reference(
-            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index
+            weights, identity_report, metadata.get('poseDistances'), excluded_index=exact_index, variation=variation
         )
         texture_output: Path | None = None
         if texture_reference_index is not None:
@@ -1453,7 +1450,7 @@ def process_swap(
         # beard/jaw-only detail, and model-only identity. Every option starts
         # from the original target; only ArcFace-verified, seamless results
         # are eligible to win. Restrict extra warps to budgeted rounds.
-        lower_reference_rounds = (0, 2, 7, 11, 15, 19, 21, 23)
+        lower_reference_rounds = (0, 2, 3, 6, 7, 11, 15, 19, 21, 23)
         full_reference_rounds = (0, 4, 11, 19)
         transplant_options: list[dict[str, Any] | None] = [None]
         if real_face:
@@ -1576,7 +1573,7 @@ def process_swap(
             original_border = float(identity_border_report.get("border", 0.0))
             max_regional_border = max(BORDER_STEP_FLOOR, original_border * 1.15)
             if real_face and real_face.get("mode") in ("lower", "both") and variation in lower_reference_rounds:
-                for transfer_strength in (0.35, 0.65):
+                for transfer_strength in (0.12, 0.22, 0.35, 0.65):
                     path = temp_dir / f"retake-identity-beard-{int(transfer_strength * 100)}.png"
                     report: dict[str, Any] = {}
                     try:
@@ -1702,43 +1699,23 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 detail = None
             candidate_detail_scores.append(detail)
-        detail_choice = choose_detail_safe_tie(
-            candidate_scores, candidate_detail_scores, chosen_index
+        # Preserve the actual highest verified score, not a chain of near-ties.
+        previous = chosen_index
+        # Existing full/lower reference composites already carry real texture.
+        # Do not replace one with a weaker regional rescue merely for its label.
+        effective_labels = [
+            ("identity-full" if used_full_face else "identity-beard" if used_lower_face else label)
+            if label in ("head-fit", "no-head-warp") else label
+            for label, _ in rescue_candidates
+        ]
+        chosen_index = select_verified_regional_candidate(
+            candidate_scores, candidate_detail_scores, effective_labels, chosen_index
         )
-        if detail_choice != chosen_index:
-            previous = chosen_index
-            chosen_index = detail_choice
+        if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
-            print(
-                f"[Ultra] ArcFace yakın eşitliğinde daha doğal doku seçildi: "
-                f"{rescue_candidates[previous][0]} → {rescue_candidates[chosen_index][0]} "
-                f"(detay {candidate_detail_scores[previous]:.3f} → "
-                f"{candidate_detail_scores[chosen_index]:.3f}).",
-                flush=True
-            )
         selected_identity = rescue_candidates[chosen_index][0]
-        # ArcFace can undervalue beard edges. ONLY when pure identity won
-        # and a measured regional alternative is within 0.003 absolute
-        # cosine (not "3%" similarity), allow the strongest verified
-        # beard/jaw candidate to replace the unmodified beard.
-        if selected_identity == "identity-only":
-            regional_ties = [
-                (index, value)
-                for index, ((label, _), value) in enumerate(zip(rescue_candidates, candidate_scores))
-                if label in ("identity-beard", "identity-full", "identity-jaw")
-                and value is not None and value >= best_score - 0.003
-            ]
-            if regional_ties:
-                chosen_index, best_score = max(regional_ties, key=lambda item: (
-                    item[1],
-                    {"identity-full": 2, "identity-beard": 1, "identity-jaw": 0}
-                    [rescue_candidates[item[0]][0]]
-                ))
-                selected_identity = rescue_candidates[chosen_index][0]
-                print(
-                    f"[Retake] Saf kimlik korundu; son aşamada {selected_identity} "
-                    f"referans ayrıntısı kullanıldı (ArcFace={best_score:.3f}).", flush=True
-                )
+        if chosen_index != previous:
+            print(f"[Retake] Verified regional/identity finalist: {selected_identity} (ArcFace={best_score:.4f}).", flush=True)
         if selected_identity not in ('head-fit','no-head-warp'):
             chosen_texture = 'average'
         if selected_identity in ("identity-only", "identity-jaw", "photo-balance"):
@@ -1825,10 +1802,10 @@ def process_swap(
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png",
-                                                 **({"extra_strengths": (.20, .50)} if model == flux_model else {}))
+                                                 **({"extra_strengths": (.025, .05, .10, .20, .50)} if model == flux_model else {}))
                     alternatives = [(path, .35)]
                     if model == flux_model:
-                        alternatives.extend((path.with_name(f"{path.stem}-{int(strength*100)}{path.suffix}"), strength) for strength in (.20, .50))
+                        alternatives.extend((path.with_name(f"{path.stem}-{round(strength*100)}{path.suffix}"), strength) for strength in (.025, .05, .10, .20, .50))
                         flux_status = "quality-rejected"
                     measured = []
                     for candidate, strength in alternatives:
@@ -1906,6 +1883,24 @@ def process_swap(
         except Exception as error:
             print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
 
+        # Neck is a separate optional native-pixel candidate. Require a mesh,
+        # connected skin evidence, and a fresh identity/detail verification.
+        neck_status, neck_pixels = 'off', 0
+        if metadata.get('neckHarmonize') is True and centroid:
+            neck_path = temp_dir / 'retake-neck-harmonized.png'
+            try:
+                neck_status, neck_pixels = neck_candidate_file(target_path, final_output, neck_path, metadata['faceBounds'], metadata.get('targetLandmarks'))
+                if neck_status == 'applied':
+                    neck_score = score_identity(facefusion_dir, centroid, [neck_path])[0]
+                    if neck_score is not None and neck_score >= result_similarity - .001 and check_detail_gate(target_path, neck_path, metadata['faceBounds'])[0]:
+                        shutil.copyfile(neck_path, final_output)
+                        result_similarity = neck_score
+                    else:
+                        neck_status, neck_pixels = 'quality-rejected', 0
+            except Exception as error:
+                neck_status, neck_pixels = 'error', 0
+                print(f'[Retake] Neck candidate skipped: {type(error).__name__}', flush=True)
+
         # Measure the FINAL delivered pixels, not the pre-repair proposal.
         # The ArcFace guard may reject a successful-looking cleanup; never
         # reward a candidate for a repair that wasn't actually committed.
@@ -1956,22 +1951,26 @@ def process_swap(
         edit = measure_final_face_edit(target_path, final_output, metadata['faceBounds'])
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
+        region_edits = regional_edit_statistics(target_path, final_output, metadata["faceBounds"])
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
         if not accepted:
             raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            'X-Retake-Neck-Status': neck_status,
+            'X-Retake-Neck-Pixels': str(neck_pixels),
             'X-Retake-NIM-Editor': nim_used,
             'X-Retake-FLUX-Status': flux_status,
             'X-Retake-FLUX-Identity-Delta': '' if flux_delta is None else f"{flux_delta:.5f}",
             'X-Retake-FLUX-Detail-Delta': '' if flux_detail_delta is None else f"{flux_detail_delta:.5f}",
-            'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.2f}",
+            'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.3f}",
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
             'X-Retake-Detail-Gate': 'passed',
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
+            "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
@@ -2036,12 +2035,17 @@ def retain_judge_finalists(
         if identity_acceptable(item[1], peak_identity)
         and item[1].get("X-Retake-Detail-Gate") == "passed"
     ]
-    # Identity-sufficient candidates compete on realism, the rest on identity.
     def rank(item):
         sufficient = is_identity_sufficient(item[1])
         return (sufficient, realism_order(item[1]) if sufficient else (score_from_headers(item[1]) or -1.0,), item[2] == candidate[2])
     kept.sort(key=rank, reverse=True)
-    return kept[:JUDGE_FINALIST_BUFFER]
+    distinct = []
+    for item in kept:
+        if not any(item[0] == prior[0] for prior in distinct):
+            distinct.append(item)
+        if len(distinct) >= JUDGE_FINALIST_BUFFER:
+            break
+    return distinct
 
 
 def judge_pool(
@@ -2051,8 +2055,9 @@ def judge_pool(
     """Local winner first, then the strongest distinct near-ties (max 4)."""
     pool = [(best_result, best_headers, best_round)]
     for item in finalists:
+        score = score_from_headers(item[1])
         if (
-            len(pool) >= JUDGE_MAX_CANDIDATES or item[2] == best_round or item[0] == best_result
+            len(pool) >= JUDGE_MAX_CANDIDATES or any(item[0] == prior[0] for prior in pool)
             or not identity_acceptable(item[1], peak_identity)
             or item[1].get("X-Retake-Detail-Gate") != "passed"
         ):
@@ -2135,8 +2140,6 @@ def run_ultra_search(
             strongest = (image, headers, round_number)
         # Keep a global identity anchor: pairwise near-ties must not drift
         # downward over 24 rounds. Retain only two full images in memory.
-        # A best that already reaches the person's photo level is not dragged
-        # back to a merely higher-cosine (often 128 px reinforced) candidate.
         if (best_headers is not None and not is_identity_sufficient(best_headers)
                 and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS):
             best_result, best_headers, best_round = strongest
@@ -2176,6 +2179,8 @@ def run_ultra_search(
             flux_outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
             flux_diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
             upgraded_identity = score_from_headers(upgraded_headers)
+            if collect_finalists and upgraded_identity is not None:
+                finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, best_round), max(peak_identity, upgraded_identity))
             if (upgraded_identity is not None
                     and identity_acceptable(upgraded_headers, peak_identity)
                     and prefer_ultra_candidate(upgraded_headers, best_headers)):
@@ -2196,18 +2201,25 @@ def run_ultra_search(
     # quality gates. Only local editors are used on extra finalists; avoid
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
-    if has_nim and needs_extra_finalist(best_headers):
+    skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
+    if needs_extra_finalist(best_headers):
         for variation in choose_extra_variations(round_scores, best_round):
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= ULTRA_EXTRA_START_BUDGET_SECONDS:
                 break
             finalist_attempts += 1
+            local_only = skip_flux_once
+            skip_flux_once = False
+            extra_caches = {**(caches or {}), "realism": None}
+            if local_only:
+                extra_caches["nim_editors"] = None
+                print("[Ultra] Poor diffusion result: first extra finalist is identity-only.", flush=True)
             try:
                 if on_finalist is not None:
                     on_finalist()
                 candidate_image, candidate_headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
                     with_variation(parsed, variation), lambda *_a, **_k: None,
-                    {**caches, "realism": None}
+                    extra_caches
                 )
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
@@ -2216,9 +2228,10 @@ def run_ultra_search(
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
                     peak_identity = max(peak_identity, candidate_score)
-                    flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
-                    flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
-                elif flux_outcome != "accepted":
+                    if not local_only:
+                        flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
+                        flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                elif flux_outcome != "accepted" and not local_only:
                     flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
                     if flux_outcome == "accepted":
                         flux_outcome = "finalist-not-selected"
@@ -2538,7 +2551,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
@@ -2602,6 +2615,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
+            "neck_harmonization": True,
+            "regional_edit_evidence": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),

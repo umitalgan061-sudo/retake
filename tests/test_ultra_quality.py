@@ -140,3 +140,45 @@ class DetailGateTest(unittest.TestCase):
             self.assertTrue(np.array_equal(balanced[:,:,3],alpha))
             self.assertTrue(np.array_equal(balanced[alpha==0],candidate[alpha==0]))
             self.assertGreater(np.std(balanced[alpha>0,:3]),np.std(candidate[alpha>0,:3]))
+
+class RegionalCandidateSelectionTest(unittest.TestCase):
+    def test_never_drifts_away_from_peak(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        self.assertEqual(select_verified_regional_candidate([.795,.801,.793],[.9,.8,.99],["head-fit","identity-only","identity-beard"],0),1)
+
+    def test_verified_beard_can_win_a_tight_tie(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        self.assertEqual(select_verified_regional_candidate([.800,.798],[.85,.84],["head-fit","identity-beard"],0),1)
+
+    def test_missing_or_degraded_regional_detail_cannot_win(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        for detail in (None,.50,float("nan")):
+            self.assertEqual(select_verified_regional_candidate([.800,.798],[.85,detail],["identity-only","identity-beard"],0),0)
+
+class NativeRegionalEditTest(unittest.TestCase):
+    def test_flat_texture_can_still_have_measurable_regional_change(self):
+        import tempfile
+        from pathlib import Path
+        from tools.ultra_quality import regional_edit_statistics
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original = np.full((100,100,3),100,np.uint8)
+            edited = original.copy()
+            edited[55:90,20:80,0] = 130
+            cv2.imwrite(str(root/"before.png"),original)
+            cv2.imwrite(str(root/"after.png"),edited)
+            values = regional_edit_statistics(root/"before.png",root/"after.png",
+                {"x":10,"y":10,"width":80,"height":80})
+            self.assertEqual(values["eyes"],0)
+            self.assertGreater(values["mouth"],0)
+            self.assertGreater(values["chin"],0)
+            self.assertLessEqual(values["lower_face"],30)
+    def test_invalid_bounds_or_input_do_not_create_a_fake_measurement(self):
+        import tempfile
+        from pathlib import Path
+        from tools.ultra_quality import regional_edit_statistics
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cv2.imwrite(str(root/"a.png"),np.zeros((50,50,3),np.uint8))
+            self.assertEqual(regional_edit_statistics(root/"a.png",root/"a.png",
+                {"x":0,"y":0,"width":float("nan"),"height":40}),{})

@@ -88,13 +88,16 @@ def edit_image(pipe, torch, prompt, images, max_edge=768, seed=42):
 def smoke_edit(pipe, torch, max_edge):
     """Exercise a real multi-reference image edit, without any personal photo."""
     from PIL import Image, ImageDraw, ImageChops
-    original=Image.new("RGB",(384,384),(245,245,245))
-    ImageDraw.Draw(original).ellipse((80,80,304,304),fill=(190,30,30))
-    reference=Image.new("RGB",(384,384),(245,245,245))
-    ImageDraw.Draw(reference).rectangle((80,80,304,304),fill=(30,70,200))
+    original=Image.new("RGB",(max_edge,max_edge),(245,245,245))
+    inset=max_edge//5
+    ImageDraw.Draw(original).ellipse((inset,inset,max_edge-inset,max_edge-inset),fill=(190,30,30))
+    reference=Image.new("RGB",(512,512),(245,245,245))
+    ImageDraw.Draw(reference).rectangle((100,100,412,412),fill=(30,70,200))
+    second=Image.new("RGB",(512,512),(245,245,245))
+    ImageDraw.Draw(second).ellipse((100,100,412,412),fill=(30,70,200))
     torch.cuda.reset_peak_memory_stats()
     start=time.monotonic()
-    output=edit_image(pipe,torch,"Change the red circle in the first image into a blue circle, preserving the white background. Use the color of the second image.",[original,reference],max_edge,seed=123)
+    output=edit_image(pipe,torch,"Change the red circle in the first image into a blue circle, preserving the white background. Use the color of the second image.",[original,reference,second],max_edge,seed=123)
     torch.cuda.synchronize()
     # Numeric non-noop evidence, not a claim of prompt fidelity or face quality.
     difference=ImageChops.difference(original,output)
@@ -132,8 +135,12 @@ def load_local_pipeline(model_dir, offload):
 
 
 def serve(pipe, torch, proof, port, max_edge):
+    state={"ready":True}
     class Handler(BaseHTTPRequestHandler):
         protocol_version="HTTP/1.0"
+        def setup(self):
+            self.request.settimeout(30)
+            super().setup()
         def log_message(self,*_):
             # Never log prompts or photo payloads.
             pass
@@ -152,10 +159,11 @@ def serve(pipe, torch, proof, port, max_edge):
         def do_GET(self):
             if not self.local():return self.reply(403,{"error":"LOCAL_ONLY"})
             if self.path!="/v1/health/ready":return self.reply(404,{"error":"NOT_FOUND"})
-            self.reply(200,{"ready":True,"model":MODEL_ALIAS,"implementation":"diffusers-local-not-nim",**proof})
+            self.reply(200 if state["ready"] else 503,{"ready":state["ready"],"model":MODEL_ALIAS,"implementation":"diffusers-local-not-nim",**proof})
         def do_POST(self):
             if not self.local():return self.reply(403,{"error":"LOCAL_ONLY"})
             if self.path!="/v1/images/edits":return self.reply(404,{"error":"NOT_FOUND"})
+            if not state["ready"]:return self.reply(503,{"error":"RESTART_AND_REPROBE_REQUIRED"})
             try:
                 if self.headers.get("Content-Type","").split(";")[0].strip()!="application/json":
                     raise ValueError("application/json required")
@@ -170,6 +178,7 @@ def serve(pipe, torch, proof, port, max_edge):
                 self.reply(200,{"data":[{"b64_json":base64.b64encode(buffer.getvalue()).decode("ascii")}]})
             except Exception as error:
                 # Do not include prompt, paths or image data in error messages.
+                state["ready"]=False
                 print("Local editor inference failed:",type(error).__name__,flush=True)
                 self.reply(503,{"error":"LOCAL_GPU_EDIT_FAILED"})
     with HTTPServer(("127.0.0.1",port),Handler) as server:

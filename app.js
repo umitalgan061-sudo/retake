@@ -669,6 +669,7 @@ function selectResult(index) {
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
     item.detailRegions ? "Orijinale göre doku enerjisi: " + Object.entries({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz"}).map(([region,name]) => { const part=item.detailRegions.split(",").find(value=>value.startsWith(region+":")); const ratio=part ? Number(part.split(":")[1]) : NaN; return name+" "+(Number.isFinite(ratio) && ratio>=0 ? ratio.toFixed(2)+"×" : "ölçülemedi"); }).join(", ") : "",
     item.regionalEdit ? "Bölgesel RGB farkı (/255): " + item.regionalEdit.split(",").map(part => { const [region,value]=part.split(":"); const name=({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz",moustache:"bıyık",chin:"çene"})[region]; const delta=Number(value); return name && Number.isFinite(delta) && delta>=0 && delta<=255 ? name+" "+delta.toFixed(1) : ""; }).filter(Boolean).join(", ") : "",
+    item.neckStatus === "applied" ? "boyun/boğaz ten uyumu: "+item.neckPixels+" piksel" : item.neckStatus && item.neckStatus !== "off" ? "boyun korundu: "+(({ "no-mesh":"yüz işaretleri yetersiz","pose-uncertain":"poz belirsiz","skin-uncertain":"ten alanı belirsiz","neck-not-visible":"boyun görünmüyor","already-balanced":"ek düzeltme gerekli değil","quality-rejected":"kalite kontrolü","error":"işlem hatası","unreadable":"görüntü okunamadı"})[item.neckStatus] || "uygun aday yok") : "",
     item.photoBalance ? "orijinal fotoğraf dokusu dengelendi" : "",
     item.before === null ? "orijinal kimlik ölçülemedi" : "",
     item.realism ? "fotoğraf gerçekçiliği" : "",
@@ -710,6 +711,8 @@ function addResult(blob, label, scores = {}) {
     detailGate: scores.detailGate || "",
     detailRegions: scores.detailRegions || "",
     regionalEdit: scores.regionalEdit || "",
+    neckStatus: scores.neckStatus || "",
+    neckPixels: scores.neckPixels ?? null,
     photoBalance: scores.photoBalance === true,
     similarity: scores.similarity ?? null,
     before: scores.before ?? null,
@@ -2120,7 +2123,7 @@ async function runFaceFusionEdit() {
     title: state.result ? "Yeni bir görünüm oluştur?" : "Yerel düzenlemeyi başlat?",
     message: (state.engine.remote
       ? "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı, şifreli tünel sağlayıcısı (Cloudflare veya Tailscale) üzerinden eşleştirdiğin kendi bilgisayarındaki FaceFusion motoruna gönderilir. Görseller bir AI servisine yüklenmez; işlem senin bilgisayarında yapılır."
-      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.") + judgeNotice,
+      : "Bu işlemde seçili fotoğrafın yüz kırpımı, 25 referanstan hazırlanan yüz profili ve gerçek doku için en uygun en fazla 3 referansın yüz kırpımı bu cihazdaki FaceFusion servisine gönderilir. Görseller harici bir AI servisine yüklenmez.") + " Tek yüzlü fotoğraflarda, görünür üst boyun ve çene altındaki ten tonu güvenilir biçimde ayrılabiliyorsa yerel olarak dengelenebilir; boyun şekli değiştirilmez." + judgeNotice,
     confirmLabel: state.engine.remote ? "Bilgisayarıma gönder" : "Yerel olarak devam et"
   });
   if (!consent) return;
@@ -2171,7 +2174,7 @@ async function runFaceFusionEdit() {
     referenceBlobs.forEach((blob, index) => {
       form.append("reference", blob, `retake-reference-${String(index + 1).padStart(2, "0")}.png`);
     });
-    const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation };
+    const metadata = { referenceWeights, poseDistances, faceBounds, targetSize, headFit, jawWarp, variation, neckHarmonize: state.target.faces.length === 1 && Boolean(targetLandmarks) };
     if (exactReferenceIndex >= 0) metadata.exactReferenceIndex = exactReferenceIndex;
     if (useNvidiaJudge) metadata.nvidiaJudge = true;
     if (targetLandmarks) metadata.targetLandmarks = targetLandmarks;
@@ -2231,6 +2234,8 @@ async function runFaceFusionEdit() {
       detailGate: response.headers.get("X-Retake-Detail-Gate") || "",
       detailRegions: response.headers.get("X-Retake-Detail-Regions") || "",
       regionalEdit: response.headers.get("X-Retake-Regional-Edit") || "",
+      neckStatus: response.headers.get("X-Retake-Neck-Status") || "",
+      neckPixels: Number.parseInt(response.headers.get("X-Retake-Neck-Pixels") || "",10),
       photoBalance: response.headers.get("X-Retake-Photo-Balance") === "on",
       similarity: parseSimilarity(response.headers.get("X-Retake-Similarity")),
       before: parseSimilarity(response.headers.get("X-Retake-Similarity-Before")),

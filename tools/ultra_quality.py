@@ -273,7 +273,10 @@ def regional_edit_statistics(original_path, edited_path, bounds):
         return {}
     if not all(math.isfinite(v) for v in (x,y,fw,fh)) or min(fw,fh) < 20:
         return {}
-    regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92)}
+    regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92),
+               "forehead": (.24,.10,.76,.25), "brows": (.12,.19,.88,.30),
+               "left_cheek": (.12,.43,.34,.68), "right_cheek": (.66,.43,.88,.68),
+               "left_jaw": (.12,.69,.35,.87), "right_jaw": (.65,.69,.88,.87)}
     result = {}
     for name, (left,top,right,bottom) in regions.items():
         x0,x1 = max(0,int(x+fw*left)), min(width,int(x+fw*right))

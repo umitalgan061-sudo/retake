@@ -166,7 +166,14 @@ class LocalEngineTest(EngineServerTest):
         self.assertEqual(response.status, 404)
 
     def test_only_recent_jobs_are_kept(self):
-        jobs = [srv.create_job() for _ in range(srv.MAX_KEPT_JOBS + 2)]
+        # Only completed jobs are eviction candidates. The actual inference
+        # lock prevents multiple pending jobs in production.
+        jobs = []
+        for index in range(srv.MAX_KEPT_JOBS + 2):
+            job = srv.create_job()
+            job.update(status="done", finished=job["created"])
+            jobs.append(job)
+        srv.prune_jobs()
         self.assertEqual(len(srv.JOBS), srv.MAX_KEPT_JOBS)
         self.assertNotIn(jobs[0]["id"], srv.JOBS)
         self.assertIn(jobs[-1]["id"], srv.JOBS)

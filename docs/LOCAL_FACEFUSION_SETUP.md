@@ -224,3 +224,25 @@ Set-Location "C:\\AI\\retake"
 ```
 
 Beklenen `/health.model`: `retake_hybrid_25_reference_ultra_v19`. Canlı web `app.js` içindeki `X-Retake-Complete-Identity` satırı sadece arayüz sürümünü teyit eder; FaceFusion motorunu yenilemez. GitHub CI gerçek CUDA, gerçek referans görüntüleri, model ağırlıkları ve Firebase deploy yerine geçmez. Birebir kusursuz fotoğraf garanti edilemez.
+
+
+## 12. Ücretsiz otomatik Windows motoru
+
+FaceFusion kuruluysa mevcut Conda PowerShell'inde Retake klasöründen bir kez:
+
+    Set-ExecutionPolicy -Scope Process Bypass
+    .\tools\install_retake_autostart.ps1
+
+Betik CUDA sağlayıcısını kontrol eder, çalışan FaceFusion Conda Python'unu bulur ve yalnız mevcut Windows kullanıcısı için Görev Zamanlayıcı'da oturum açılışında başlatılan görünmez Pythonw görevi kaydeder. Yönetici yetkisi istenmez; kurumsal Windows politikası görev kaydını engelliyorsa izin gerekebilir. Yeni görev 8765 portunu başka bir motor kullanıyorsa bekler, hiçbir çalışan işlemi öldürmez. O anki fotoğraf tamamlandıktan sonra eski manuel motor penceresini Ctrl+C ile kapat; sonraki açılışlarda PowerShell komutu gerekmez. Model indiren veya FLUX kuran diğer pencereyi kapatma.
+
+    .\tools\install_retake_autostart.ps1 -Action Status
+
+Sağlık yanıtında background_mode=true, cleanup_after_job=true, cuda=true, busy=false ve ilk tamamlanan fotoğraftan sonra last_job_cleanup.ok=true aranır. Son üç tamamlanmış sonuç en fazla 30 dakika RAM'de tutulur; etkin işler temizlenmez. Her işte (hata dahil) ara PNG önbelleği boşalır ve Python GC çalışır. GPU inference zaten ayrı alt süreçlerde çalışır; bunların çıkışı CUDA bağlamlarını bırakır. İsteğe bağlı yerel FLUX editörü model offload ve CUDA empty_cache uygular; fiziksel VRAM'in tümü boşalacağı garanti değildir. İndirilen model ağırlıkları, kişisel referanslar, sınırlı ArcFace rapor önbelleği ve süre istatistikleri korunur. FLUX'un ayrı GPU hizmeti otomatik kurulmaz veya test edilmeden etkinleştirilmez.
+
+Görev Zamanlayıcı, motor beklenmedik çıkışta birer dakika arayla en çok 10 defa tekrar başlatır. Bilgisayar kapalıyken veya kullanıcı oturum açmamışken GPU motoru çalışmaz. Yeni tünel, port yönlendirmesi, bulut hizmeti, ücretli abonelik veya fotoğraf aktarımı oluşturulmaz.
+
+İsteğe bağlı olarak eşleştirme/GFPGAN/realism ayarlarını kurulum seçenekleriyle açıkça belirle. Eski görev zaten çalışıyorsa betik tekrar kayıt yapmaz. Ayar değişimi için fotoğraf işlemi yokken önce Remove, sonra Install çalıştır. Kurulum klasörünü taşımadan önce de görevi kaldır.
+
+    .\tools\install_retake_autostart.ps1 -Action Remove
+
+Görev kaldırma sadece bilinen boşta durumunda çalışan görevi durdurur; kullanıcı fotoğraflarını veya model dosyalarını silmez. Mevcut update_retake_ultra.ps1 artık kayıtlı arka plan görevini kullanır ve aktif iş sırasında yeniden başlatmayı reddeder.

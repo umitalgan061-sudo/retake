@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import gc
+import os
 import hmac
 import json
 import math
@@ -53,6 +55,15 @@ INFERENCE_LOCK = threading.Lock()
 JOBS_LOCK = threading.Lock()
 JOBS: dict[str, dict[str, Any]] = {}
 MAX_KEPT_JOBS = 3
+JOB_RESULT_TTL_SECONDS = 30 * 60
+
+
+def subprocess_options() -> dict[str, Any]:
+    # A Pythonw-hosted Windows bridge must not flash console windows for
+    # each of the FaceFusion/ArcFace/diffusion child processes.
+    if sys.platform == 'win32' and os.environ.get('RETAKE_BACKGROUND') == '1':
+        return {'creationflags': subprocess.CREATE_NO_WINDOW}
+    return {}
 JOB_STAGES = (
     "25 referans ArcFace ile karşılaştırılıyor",
     "Kimlik geçişi (AlphaFace)",
@@ -399,7 +410,7 @@ def score_identity(
     try:
         completed = subprocess.run(
             command, cwd=str(facefusion_dir), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=600, check=False
+            encoding="utf-8", errors="replace", timeout=600, check=False, **subprocess_options()
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[ArcFace] Benzerlik ölçülemedi: {error}", flush=True)
@@ -434,7 +445,7 @@ def verify_reference_identity(facefusion_dir: Path, reference_paths: list[Path])
     try:
         completed = subprocess.run(
             command, cwd=str(facefusion_dir), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=1800, check=False
+            encoding="utf-8", errors="replace", timeout=1800, check=False, **subprocess_options()
         )
     except subprocess.TimeoutExpired as error:
         def decode_output(value: object) -> str:
@@ -605,7 +616,7 @@ def run_facefusion(
         encoding="utf-8",
         errors="replace",
         timeout=900,
-        check=False
+        check=False, **subprocess_options()
     )
     if completed.returncode == 0 and output_path.is_file() and output_path.stat().st_size > 0:
         return True, completed.stdout[-1500:]
@@ -674,7 +685,7 @@ def run_face_enhancer(
     ]
     completed = subprocess.run(
         command, cwd=str(facefusion_dir), capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=900, check=False
+        encoding="utf-8", errors="replace", timeout=900, check=False, **subprocess_options()
     )
     if completed.returncode != 0 or not output_path.is_file() or output_path.stat().st_size <= 0:
         raise RuntimeError(
@@ -887,7 +898,7 @@ def run_realism(
     try:
         completed = subprocess.run(
             command, cwd=str(worker.parent), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=REALISM_TIMEOUT_SECONDS, check=False
+            encoding="utf-8", errors="replace", timeout=REALISM_TIMEOUT_SECONDS, check=False, **subprocess_options()
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         print(f"[Gerçekçilik] Çalıştırılamadı: {error}", flush=True)
@@ -2047,6 +2058,38 @@ def run_ultra_search(
     return best_result, final
 
 
+def prune_jobs(now: float | None = None) -> int:
+    """Retain a bounded result delivery window; never evict active jobs."""
+    current = time.time() if now is None else now
+    with JOBS_LOCK:
+        terminal = sorted((item for item in JOBS.values()
+                           if item.get("status") in {"done", "error"} and item.get("finished") is not None),
+                          key=lambda item: item["finished"], reverse=True)
+        expired = [item for index, item in enumerate(terminal)
+                   if index >= MAX_KEPT_JOBS or current - item["finished"] >= JOB_RESULT_TTL_SECONDS]
+        for item in expired:
+            JOBS.pop(item["id"], None)
+        return len(expired)
+
+
+def cleanup_after_job(server: Any) -> dict[str, Any]:
+    """Run while inference lock is held. Never touch other processes or files."""
+    stats = {"pass_entries_cleared": 0, "objects_collected": 0, "ok": True}
+    try:
+        cache = getattr(server, "pass_cache", None)
+        if cache is not None:
+            stats["pass_entries_cleared"] = cache.clear()
+    except Exception:
+        stats["ok"] = False
+    try:
+        stats["objects_collected"] = gc.collect()
+    except Exception:
+        stats["ok"] = False
+    stats["completed_at"] = time.time()
+    server.last_job_cleanup = stats
+    return stats
+
+
 def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
     """Worker thread: long swaps must not depend on one open HTTP response
     (HTTPS tunnels cut responses that take longer than ~100 seconds)."""
@@ -2089,6 +2132,7 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         )
         job["stage_started"] = now
 
+    terminal_status = "error"
     try:
         job["status"] = "running"
         result, headers = run_ultra_search(
@@ -2109,13 +2153,23 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["step"] = job["total"]
         job["minimum_remaining_seconds"] = 0.0
         job["stage"] = "Ultra · en iyi sonuç seçildi"
-        job["status"] = "done"
+        terminal_status = "done"
     except Exception as error:  # reported to the client through the job
         job["http_status"], job["error"] = _swap_error(error)
-        job["status"] = "error"
     finally:
-        job["finished"] = time.time()
-        INFERENCE_LOCK.release()
+        # Drop uploaded crop buffers before collection. Child GPU processes
+        # are already terminated by subprocess.run; their CUDA contexts exit.
+        parsed = None
+        try:
+            job["stage"] = "Ultra · işlem sonrası kaynaklar temizleniyor"
+            cleanup_after_job(server)
+        finally:
+            job["finished"] = time.time()
+            job["status"] = terminal_status
+            if terminal_status == "done":
+                job["stage"] = "Ultra · en iyi sonuç seçildi"
+            INFERENCE_LOCK.release()
+        prune_jobs()
 
 
 def estimate_remaining(job: dict[str, Any], timings: StageTimings | None) -> float | None:
@@ -2168,8 +2222,7 @@ def create_job(realism: bool = False) -> dict[str, Any]:
     }
     with JOBS_LOCK:
         JOBS[job["id"]] = job
-        for stale in sorted(JOBS.values(), key=lambda item: item["created"])[:-MAX_KEPT_JOBS]:
-            JOBS.pop(stale["id"], None)
+    prune_jobs()
     return job
 
 
@@ -2309,6 +2362,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "ultra_search_budget_seconds": ULTRA_SEARCH_BUDGET_SECONDS,
             "async_jobs": True,
             "caches": True,
+            "background_mode": os.environ.get('RETAKE_BACKGROUND') == '1',
+            "busy": INFERENCE_LOCK.locked(),
+            "cleanup_after_job": True,
+            "last_job_cleanup": getattr(self.server, 'last_job_cleanup', None),
+            "job_result_ttl_seconds": JOB_RESULT_TTL_SECONDS,
             "paired": bool(self.server.pairing_token),  # type: ignore[attr-defined]
             "providers": providers,
             "cuda": "CUDAExecutionProvider" in providers,
@@ -2478,6 +2536,11 @@ def load_pairing_token(path: Path) -> str:
     return token
 
 
+class RetakeHTTPServer(ThreadingHTTPServer):
+    def service_actions(self) -> None:
+        prune_jobs()
+
+
 def main() -> int:
     args = parse_args()
     facefusion_dir = args.facefusion_dir.expanduser().resolve()
@@ -2495,7 +2558,7 @@ def main() -> int:
         "http://localhost:4173",
         "http://127.0.0.1:4173"
     }
-    server = ThreadingHTTPServer((args.host, args.port), RetakeFaceFusionHandler)
+    server = RetakeHTTPServer((args.host, args.port), RetakeFaceFusionHandler)
     server.allowed_origins = origins  # type: ignore[attr-defined]
     server.facefusion_dir = facefusion_dir  # type: ignore[attr-defined]
     server.face_swapper_pixel_boost = args.face_swapper_pixel_boost  # type: ignore[attr-defined]

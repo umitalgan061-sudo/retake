@@ -20,6 +20,23 @@ param(
 )
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$managedTask = $null
+$managedStopped = $false
+if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
+    $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+    $managedTask = Get-ScheduledTask -TaskName ("Retake Local Engine-" + $sid) -ErrorAction SilentlyContinue
+}
+if ($managedTask -and $managedTask.State -eq "Running") {
+    $headers = @{}
+    $tokenFile = Join-Path $HOME ".retake\pairing-token"
+    if (Test-Path $tokenFile) { $headers["X-Retake-Token"] = (Get-Content $tokenFile -Raw).Trim() }
+    try { $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $headers -TimeoutSec 3 } catch { $health = $null }
+    if (-not $health -or $health.background_mode -ne $true -or $health.busy -ne $false) {
+        throw "Managed engine is busy or still waiting for the manual motor. Finish the photo/close the old manual window before updating."
+    }
+    Stop-ScheduledTask -TaskName $managedTask.TaskName
+    $managedStopped = $true
+}
 Push-Location $Root
 try {
     if (-not (Test-Path ".git")) {
@@ -45,6 +62,14 @@ try {
         } else {
             Write-Warning "Firebase CLI bulunamadi; web yayini ATLANDI. npm install -g firebase-tools; firebase login"
         }
+    }
+
+    if ($managedTask) {
+        # Do not start a competing manual server; the registered task keeps its options.
+        Start-ScheduledTask -TaskName $managedTask.TaskName
+        $managedStopped = $false
+        Write-Host "Managed Retake engine restarted. Check: .\tools\install_retake_autostart.ps1 -Action Status" -ForegroundColor Green
+        return
     }
 
     # Stop just the Python command with the Retake bridge, not arbitrary
@@ -80,4 +105,5 @@ try {
     }
 } finally {
     Pop-Location
+    if ($managedStopped) { Start-ScheduledTask -TaskName $managedTask.TaskName -ErrorAction Continue }
 }

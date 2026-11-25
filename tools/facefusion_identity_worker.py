@@ -7,7 +7,10 @@ import traceback
 from pathlib import Path
 from typing import Any
 
-from identity_consistency import analyze_identity_embeddings, identity_centroid, similarity_to_centroid
+from identity_consistency import (
+    analyze_identity_embeddings, identity_centroid, photo_level_similarities, photo_level_summary,
+    similarity_to_centroid
+)
 
 REPORT_PREFIX = "RETAKE_IDENTITY_REPORT="
 
@@ -130,6 +133,8 @@ def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
     report = analyze_identity_embeddings(embeddings, names)
     # The person's identity as one vector: mean of the consistent references.
     report["centroid"] = identity_centroid(embeddings, report["outlier_indices"])
+    # Typical similarity of a genuine photo of this person to that centroid.
+    report.update(photo_level_summary(photo_level_similarities(embeddings, report["outlier_indices"])))
     report["ok"] = True
     return report
 

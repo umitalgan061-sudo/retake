@@ -92,3 +92,36 @@ def identity_centroid(embeddings: Sequence[Sequence[float]], exclude: Sequence[i
 
 def similarity_to_centroid(embedding: Sequence[float], centroid: Sequence[float]) -> float:
     return _cosine(_normalize(embedding), _normalize(centroid))
+
+
+def photo_level_similarities(embeddings: Sequence[Sequence[float]], exclude: Sequence[int] = ()) -> list[float]:
+    """How close each real reference photo is to the centroid of the *others*.
+
+    Leave-one-out keeps a photo from voting for itself, so the values describe
+    how similar a genuine, unseen photo of this person typically is to the
+    identity centroid that results are scored against. Above that level a
+    higher ArcFace cosine no longer means "more like this person"; it mostly
+    means the swapper pulled the embedding (InSwapper is driven by ArcFace).
+    """
+    skip = set(exclude)
+    kept = [_normalize(vector) for index, vector in enumerate(embeddings) if index not in skip]
+    if len(kept) < 3:
+        return []
+    size = len(kept[0])
+    total = [sum(vector[i] for vector in kept) for i in range(size)]
+    values: list[float] = []
+    for vector in kept:
+        rest = [total[i] - vector[i] for i in range(size)]
+        norm = sqrt(sum(value * value for value in rest))
+        if norm <= 1e-12:
+            continue
+        values.append(round(_cosine(vector, [value / norm for value in rest]), 4))
+    return values
+
+
+def photo_level_summary(values: Sequence[float]) -> dict[str, float]:
+    if len(values) < 3:
+        return {}
+    ordered = sorted(values)
+    quarter = ordered[max(0, (len(ordered) - 1) // 4)]
+    return {"photo_level_similarity": round(median(ordered), 4), "photo_level_low": round(quarter, 4)}

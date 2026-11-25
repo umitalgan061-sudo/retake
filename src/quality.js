@@ -165,3 +165,9 @@ export function describeJudgeError(code) {
   }
   return ({tls:"jüri TLS sertifika doğrulama sorunu",timeout:"jüri zaman aşımı",network:"jüri ağ bağlantısı sorunu","payload-too-large":"jüri kırpım boyutu sınırı"})[code] || "";
 }
+
+// Above the person's own photo level a higher ArcFace score is not "more
+// like them"; the engine then picks the most photographic candidate.
+export function describeIdentitySufficiency(value) {
+  return value === "yes" ? "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" : "";
+}

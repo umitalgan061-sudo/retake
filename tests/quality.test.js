@@ -83,3 +83,10 @@ test("adaptive result and diagnostic labels do not imply missing data or certain
   assert.match(describeJudgeError("http-401"),/yetkilendirmesi/);
   assert.equal(describeJudgeError("token=secret"),"");
 });
+test("identity sufficiency badge only speaks when the engine measured it", async () => {
+  const {describeIdentitySufficiency} = await import("../src/quality.js");
+  assert.match(describeIdentitySufficiency("yes"), /en doğal/);
+  assert.equal(describeIdentitySufficiency("no"), "");
+  assert.equal(describeIdentitySufficiency("unknown"), "");
+  assert.equal(describeIdentitySufficiency(undefined), "");
+});

@@ -42,6 +42,18 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
 
+### Kimlik yeterliliği: fotoğraflarının düzeyinden sonra gerçekçilik seçer
+
+ArcFace benzerliği bir noktadan sonra "daha çok sen" demek değildir. Motor, 25 referansının her birini *diğer* 24'ün ortalamasıyla karşılaştırarak senin gerçek bir fotoğrafının kimlik merkezine tipik benzerliğini ölçer (`X-Retake-Identity-Photo-Level`, birini dışarıda bırakarak; fotoğraf kendine oy vermez). Bir aday bu düzeyin 0,02 altına kadar geldiyse kimlik "yeterli" sayılır:
+
+- Yeterli adaylar arasında karar sırası: 128 px pekiştirme olmayan sonuç → daha temiz saç/çene çizgisi → göz/burun/ağızda gerçek fotoğrafın ayrıntısını daha çok koruyan sonuç → ancak sonra ArcFace.
+- Yeterli bir sonuç, sırf daha yüksek kosinüslü (çoğunlukla 128 px pekiştirmeli) bir aday çıktı diye geri çekilmez; ek finalist araması da yapılmaz.
+- Düzeyin altındaki adaylarda eski kimlik öncelikli kurallar aynen geçerlidir. Ölçüm yoksa (eski önbellek) davranış değişmez; kimlik raporu sürümü `centroid-v2` olduğu için ilk işte referanslar bir kez yeniden ölçülür.
+- NVIDIA jürisine giden finalistler de artık yalnız ArcFace'e yakınlıkla değil, yeterli adaylar arasından gerçekçilik sırasıyla seçilir.
+- Sonuç rozeti "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" der; "fotoğraflarınla aynı düzeyde" karşılaştırması da artık aynı ölçekteki bu değere göre yapılır.
+
+Neden: Kendi referans fotoğrafınla yapılan bir testte sonuç ArcFace'te 0,85'ten 0,91'e çıktı ama gözler bulanık, burun delikleri lekeli, cilt mumsu göründü. Yüksek puan, gerçek bir fotoğrafından daha "sen" olduğu anlamına gelmiyordu.
+
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
 
 Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:

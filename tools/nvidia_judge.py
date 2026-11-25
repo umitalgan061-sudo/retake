@@ -7,11 +7,12 @@ belong to the neck. This module asks one of NVIDIA's hosted vision models
 (build.nvidia.com free endpoint, OpenAI-compatible chat API) to compare a
 few near-identical Ultra finalists against the untouched original crop.
 
-What is sent, and only when NVIDIA_API_KEY is set on this computer and
+What is sent, and only when NVIDIA_API_KEY is available on this computer
+(environment, or a git-ignored .env file, see key_source) and
 RETAKE_NVIDIA_JUDGE is not "0": small JPEG face crops of the original photo
 and of at most JUDGE_MAX_CANDIDATES results. The 25 reference photos, the
 full photo, embeddings and file names are never sent. The key is read from
-the environment and never logged or returned.
+there and never logged or returned.
 
 The judge only re-ranks candidates the identity rules already consider a
 tie (see ultra_mode.judge_pick); it cannot trade likeness for looks. It is
@@ -28,6 +29,7 @@ import re
 import ssl
 import urllib.error
 import urllib.request
+from pathlib import Path
 from typing import Any, Callable
 
 import cv2
@@ -85,11 +87,61 @@ def _user_prompt(count: int, sheet: bool = False) -> str:
     )
 
 
-def api_key() -> str | None:
-    if os.environ.get("RETAKE_NVIDIA_JUDGE", "").strip() == "0":
+ROOT = Path(__file__).resolve().parents[1]
+# Git-ignored local secret files, in the order they are consulted after the
+# process environment. RETAKE_ENV_FILE may name one more file explicitly.
+ENV_FILES = (".env", "functions/.env", ".dev.vars")
+KEY_NAME = "NVIDIA_API_KEY"
+
+
+def _key_from_file(path: Path) -> str | None:
+    try:
+        raw = path.read_bytes()
+    except OSError:
         return None
-    key = os.environ.get("NVIDIA_API_KEY", "").strip()
-    return key or None
+    # PowerShell 5 writes UTF-16 by default (Out-File, >); editors write UTF-8.
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    try:
+        lines = raw.decode(encoding).splitlines()
+    except UnicodeDecodeError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, sep, value = line.partition("=")
+        if not sep or name.strip() != KEY_NAME:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        if value:
+            return value
+    return None
+
+
+def key_source() -> tuple[str | None, str]:
+    """(key, where it came from) — the source is a name, never the value."""
+    if os.environ.get("RETAKE_NVIDIA_JUDGE", "").strip() == "0":
+        return None, "RETAKE_NVIDIA_JUDGE=0"
+    key = os.environ.get(KEY_NAME, "").strip()
+    if key:
+        return key, "ortam değişkeni"
+    candidates = [ROOT / name for name in ENV_FILES]
+    explicit = os.environ.get("RETAKE_ENV_FILE", "").strip()
+    if explicit:
+        candidates.insert(0, Path(explicit).expanduser())
+    for path in candidates:
+        key = _key_from_file(path)
+        if key:
+            return key, path.name if path.parent == ROOT else str(path)
+    return None, "bulunamadı"
+
+
+def api_key() -> str | None:
+    return key_source()[0]
 
 
 def enabled() -> bool:
@@ -336,10 +388,12 @@ def describe(score: float | None, issues: list[str]) -> str:
 
 def _selftest() -> int:
     """Checks the key and the model on a synthetic (non-personal) image."""
-    key = api_key()
+    key, source = key_source()
     if key is None:
-        print("NVIDIA_API_KEY bu bilgisayarda tanımlı değil (veya RETAKE_NVIDIA_JUDGE=0).")
-        return 1
+        print(f"NVIDIA_API_KEY bulunamadı ({source}). Aranan: ortam değişkeni, "
+              + ", ".join(ENV_FILES) + " (Retake klasörü), RETAKE_ENV_FILE.")
+        return 2
+    print(f"NVIDIA_API_KEY kaynağı: {source}")
     rng = np.random.default_rng(1)
     yy, xx = np.mgrid[0:384, 0:320].astype(np.float32)
     scene = np.stack([90 + xx * 0.1, 110 + yy * 0.05, 140 + xx * 0.05], 2)

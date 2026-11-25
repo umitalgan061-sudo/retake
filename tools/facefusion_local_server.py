@@ -35,7 +35,7 @@ try:
     )
     from .nvidia_judge import (
         api_key as nvidia_api_key, describe as describe_judge, face_crop, flatten,
-        judge as nvidia_judge_call
+        judge as nvidia_judge_call, key_source as nvidia_key_source
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -53,7 +53,7 @@ except ImportError:
     )
     from nvidia_judge import (
         api_key as nvidia_api_key, describe as describe_judge, face_crop, flatten,
-        judge as nvidia_judge_call
+        judge as nvidia_judge_call, key_source as nvidia_key_source
     )
 
 MAX_REFERENCES = 25
@@ -2817,15 +2817,16 @@ def main() -> int:
     print("Servis yalnızca loopback adresini dinler.", flush=True)
     if nvidia_api_key():
         print(
-            "NVIDIA görsel hakemi AÇIK: Ultra'da kimlikte berabere kalan en çok 3 adayın yalnız yüz "
+            f"NVIDIA görsel hakemi AÇIK (anahtar: {nvidia_key_source()[1]}): Ultra'da kimlikte berabere kalan en çok 3 adayın yalnız yüz "
             "kırpımları (orijinal dahil) NVIDIA'nın barındırılan görsel modeline gönderilir; 25 referans "
             "ve tam fotoğraf gönderilmez. Kapatmak için: RETAKE_NVIDIA_JUDGE=0",
             flush=True
         )
     else:
         print(
-            "NVIDIA görsel hakemi kapalı (bu bilgisayarda NVIDIA_API_KEY yok). "
-            "Açmak için bir kez: .\\tools\\set_nvidia_key.ps1",
+            "NVIDIA görsel hakemi kapalı: NVIDIA_API_KEY ortam değişkeninde ya da Retake klasöründeki "
+            ".env / functions\\.env / .dev.vars dosyalarında bulunamadı (RETAKE_ENV_FILE ile başka dosya "
+            "gösterilebilir). Test: .\\tools\\set_nvidia_key.ps1",
             flush=True
         )
     if server.pairing_token:  # type: ignore[attr-defined]

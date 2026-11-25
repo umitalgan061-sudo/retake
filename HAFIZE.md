@@ -20,7 +20,7 @@ iPhone 17 Pro Max ve modern tarayıcılarda çalışan, yalnızca fotoğraftaki 
 6. API anahtarları kaynak koduna, Info.plist'e veya GitHub'a eklenmez. Native iOS için Keychain; web uygulamasında gizli anahtar gerekiyorsa istemciye koymak yerine güvenli sunucu tarafı proxy gerekir.
 7. Model indirme: HTTPS, boyut, SHA-256 ve yayıncı kimliği doğrulanmalıdır. SHA-256 tek başına manifest yayıncısını doğrulamaz.
 8. NVIDIA API ancak gerçek Face Swap işlevi sunan belgelenmiş endpoint bulunursa değerlendirilir.
-8.1. Kullanıcı isteğiyle (25 Kasım 2026) NVIDIA API, Ultra'da yalnız **görsel kalite hakemi** olarak kullanılır (`tools/nvidia_judge.py`, `docs/NVIDIA_SETUP.md`): sağlayıcı NVIDIA build.nvidia.com, amaç kimlikte berabere adayları gerçekçiliğe göre sıralamak, gönderilen veri yalnız yüz kırpımları. Anahtar yerel `NVIDIA_API_KEY` ortam değişkeninde durur; `RETAKE_NVIDIA_JUDGE=0` kapatır.
+8.1. Kullanıcı isteğiyle (25 Kasım 2026) NVIDIA API, Ultra'da yalnız **görsel kalite hakemi** olarak kullanılır (`tools/nvidia_judge.py`, `docs/NVIDIA_SETUP.md`): sağlayıcı NVIDIA build.nvidia.com, amaç kimlikte berabere adayları gerçekçiliğe göre sıralamak, gönderilen veri yalnız yüz kırpımları. Anahtar yerel `NVIDIA_API_KEY` ortam değişkeninden ya da git dışı `.env` dosyasından okunur; `RETAKE_NVIDIA_JUDGE=0` kapatır.
 
 ## Face-only generation contract
 

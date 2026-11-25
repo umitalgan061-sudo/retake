@@ -120,6 +120,30 @@ class LocalTest(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(nj.api_key())
 
+    def test_key_is_read_from_a_git_ignored_env_file_without_exposing_it(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / ".env").write_text(
+                "# Hafize / Retake\nOTHER=1\nexport NVIDIA_API_KEY = \"nvapi-from-file\"  \n", encoding="utf-8")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(nj.key_source(), ("nvapi-from-file", ".env"))
+            (root / ".env").write_text("NVIDIA_API_KEY=nvapi-plain # yorum\n", encoding="utf-8")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(nj.api_key(), "nvapi-plain")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {"NVIDIA_API_KEY": "nvapi-env"}, clear=True):
+                self.assertEqual(nj.key_source(), ("nvapi-env", "ortam değişkeni"))
+            (root / ".env").write_text("NVIDIA_API_KEY=nvapi-utf16\r\n", encoding="utf-16")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {}, clear=True):
+                self.assertEqual(nj.api_key(), "nvapi-utf16")
+            other = root / "elsewhere.env"
+            other.write_text("NVIDIA_API_KEY='nvapi-explicit'\n", encoding="utf-8")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {"RETAKE_ENV_FILE": str(other)}, clear=True):
+                self.assertEqual(nj.api_key(), "nvapi-explicit")
+            with patch.object(nj, "ROOT", root), patch.dict(os.environ, {"RETAKE_NVIDIA_JUDGE": "0"}, clear=True):
+                self.assertIsNone(nj.api_key())
+        self.assertIn(".env", Path(".gitignore").read_text(encoding="utf-8").splitlines())
+
     def test_crop_is_small_and_alpha_results_are_seen_over_the_photo(self):
         flat = nj.flatten(png(200, alpha=True), png(50))
         self.assertEqual(flat.shape, (240, 200, 3))

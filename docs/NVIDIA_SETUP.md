@@ -95,9 +95,11 @@ sağlayıcının örnek görsellerini düzenler; FLUX/Qwen düzenleyicileri yaln
   gösterilmez; hakem benzerliği güzellik için feda ettiremez.
 - Tek görsel kabul eden model için kırpımlar numaralı tek karşılaştırma görseline dönüşür.
 - Hata, kota (429) veya zaman aşımında Ultra'nın doğrulanmış sonucu aynen kalır.
-- Anahtar: Windows kullanıcı ortam değişkeni `NVIDIA_API_KEY`. Cloudflare/Firebase gizli
-  değerleri yerel motor tarafından okunamaz. Bir kez `.\tools\set_nvidia_key.ps1`
-  (tanımlıysa yalnız test eder; sentetik görsel gönderir, kişisel fotoğraf göndermez).
+- Anahtar sırası: `NVIDIA_API_KEY` ortam değişkeni → Retake klasöründeki `.env`,
+  `functions\.env`, `.dev.vars` (hepsi git dışında) → `RETAKE_ENV_FILE` ile gösterilen
+  dosya. Cloudflare/Firebase gizli değerleri yerel motor tarafından okunamaz.
+  `.\tools\set_nvidia_key.ps1` anahtarı bulursa yalnız sentetik görselle test eder;
+  bulamazsa gizli girişle sorar. Açılış logu anahtarın kaynağını (değerini değil) yazar.
 - Kapatma: `RETAKE_NVIDIA_JUDGE=0`. Arayüz rozeti: "NVIDIA hakem 8,5/10 · gözler".
 - Sentetik video/deepfake dedektörü bilerek kullanılmaz: amaç tespit atlatmak değil,
   fotoğrafın kendi içinde tutarlı görünmesidir.

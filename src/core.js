@@ -121,3 +121,17 @@ export async function findExactReferenceFile(target, references) {
   }
   return null;
 }
+
+// A photo whose background was removed (e.g. "lift subject" on a phone) keeps
+// a transparent background. Retake only edits the face, so that background
+// cannot come back, and a JPG export turns it black.
+export function transparentFraction(rgba, threshold = 250) {
+  if (!rgba || rgba.length < 4 || rgba.length % 4 !== 0) return 0;
+  let transparent = 0;
+  for (let index = 3; index < rgba.length; index += 4) {
+    if (rgba[index] < threshold) transparent += 1;
+  }
+  return transparent / (rgba.length / 4);
+}
+
+export const TRANSPARENT_TARGET_FRACTION = 0.005;

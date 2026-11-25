@@ -29,7 +29,7 @@ try:
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_selection import plan_identity_source_sets, select_texture_reference
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
+    from .ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .ultra_mode import (
@@ -46,7 +46,7 @@ except ImportError:
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_selection import plan_identity_source_sets, select_texture_reference
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original
+    from ultra_quality import check_photo_detail, choose_detail_safe_tie, check_detail_gate, balance_with_original, check_reinforcement_detail
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from ultra_mode import (
@@ -1378,14 +1378,28 @@ def process_swap(
 
         # Identity reinforcement: a second swapper over the selected output.
         reinforced = False
+        reinforce_guard = "not-attempted"
         if centroid and face_swapper_weight >= 1.0:
             reinforced_output = temp_dir / "retake-identity-reinforced.png"
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
                 single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
                 if single is not None and double is not None and double > single + 0.008:
-                    identity_source = reinforced_output
-                    reinforced = True
+                    # A higher ArcFace from the 128 px swapper is not worth
+                    # blurred, ghosted eyes or lips on a large face.
+                    keeps_detail, reinforce_guard, reinforce_ratios = check_reinforcement_detail(
+                        identity_source, reinforced_output, metadata["faceBounds"]
+                    )
+                    if keeps_detail:
+                        identity_source = reinforced_output
+                        reinforced = True
+                    else:
+                        print(
+                            f"Kimlik pekiştirme reddedildi: 128 px sonuç ayrıntı kaybettiriyor ({reinforce_guard}; oranlar={reinforce_ratios}).",
+                            flush=True
+                        )
+                else:
+                    reinforce_guard = "no-identity-gain"
                 print(
                     "Kimlik pekiştirme: "
                     + ("uygulandı" if reinforced else "kullanılmadı")
@@ -1393,6 +1407,7 @@ def process_swap(
                     flush=True
                 )
             except Exception as error:  # informative only; the first pass stays
+                reinforce_guard = "error"
                 print(f"Kimlik pekiştirme atlandı: {error}", flush=True)
 
         appearance_boost = cached_pass(3, [appearance_path], appearance_output, APPEARANCE_MODEL)
@@ -1941,6 +1956,7 @@ def process_swap(
             "X-Retake-Jaw-Focused": "on" if jaw_focused and jaw_scale > 0 and selected_identity in ("head-fit", "identity-jaw") else "off",
             "X-Retake-Complete-Identity": "on" if used_full_face else "off",
             "X-Retake-Identity-Reinforced": "on" if reinforced else "off",
+            "X-Retake-Reinforce-Guard": reinforce_guard,
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
             "X-Retake-Texture-Source": chosen_texture,
@@ -2434,7 +2450,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-FLUX-Status, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
-            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models"
+            "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, "
+            "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

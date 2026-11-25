@@ -99,3 +99,14 @@ test("exact reference lookup requires identical bytes, not filename or size", as
   assert.equal(await findExactReferenceFile(blob, [different, same]), same);
   assert.equal(await findExactReferenceFile(null, [same]), null);
 });
+
+test("detects photos whose background was removed", async () => {
+  const {transparentFraction, TRANSPARENT_TARGET_FRACTION} = await import("../src/core.js");
+  const opaque = new Uint8ClampedArray(4 * 100).fill(255);
+  assert.equal(transparentFraction(opaque), 0);
+  const cutout = opaque.slice();
+  for (let i = 0; i < 40; i += 1) cutout[i * 4 + 3] = 0;
+  assert.equal(transparentFraction(cutout), 0.4);
+  assert.ok(transparentFraction(cutout) > TRANSPARENT_TARGET_FRACTION);
+  assert.equal(transparentFraction(new Uint8ClampedArray(3)), 0);
+});

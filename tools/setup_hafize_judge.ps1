@@ -5,7 +5,7 @@
     [switch]$Disable,
     # Yalnız Hafize'nin herkese açık sağlık bilgisini kontrol et (görsel gönderilmez).
     [switch]$Check,
-    [string]$HafizeUrl = "https://hafize-ua.web.app"
+    [string]$HafizeUrl = "https://hafize-free.onrender.com"
 )
 
 # Retake NVIDIA görsel jürisi kurulumu.
@@ -69,12 +69,12 @@ $Digest = -join ($digestBytes | ForEach-Object { $_.ToString("x2") })
 $SecretValue = '{"retake":"' + $Digest + '"}'
 
 Write-Host ""
-Write-Host "1) Hafize deposunda GitHub > Settings > Secrets and variables > Actions > New repository secret:" -ForegroundColor Cyan
+Write-Host "1) Render > hafize-free > Environment > Add Environment Variable:" -ForegroundColor Cyan
 Write-Host "   Ad:    HAFIZE_PROJECT_AI_TOKEN_HASHES"
 Write-Host "   Değer: $SecretValue"
 Write-Host "   (Bu yalnız özet; ham jeton değildir. Başka proje özetleri varsa aynı JSON nesnesine ekle.)"
-Write-Host "2) Hafize'de 'Hafize Cloud Run backend — deploy and connect' iş akışını yeniden çalıştır." -ForegroundColor Cyan
-Write-Host "   Render kullanıyorsan aynı değeri servis ortam değişkeni olarak ekle."
+Write-Host "2) Kaydet ve 'Manual Deploy > Deploy latest commit' ile Hafize'yi yeniden dağıt." -ForegroundColor Cyan
+Write-Host "   Cloud Run kullanırsan aynı değeri Hafize deposunda HAFIZE_PROJECT_AI_TOKEN_HASHES GitHub Secret'ı yap."
 Write-Host "3) Retake motorunu yeniden başlat; sitede 'NVIDIA görsel jürisi' kutusu görünür (varsayılan kapalı)." -ForegroundColor Cyan
 Write-Host "   Kontrol: .\tools\setup_hafize_judge.ps1 -Check"
 try { Set-Clipboard -Value $SecretValue; Write-Host "Özet değer panoya kopyalandı." -ForegroundColor Green } catch { }

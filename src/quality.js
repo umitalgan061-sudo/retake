@@ -70,6 +70,29 @@ export function describeNaturalness(naturalness) {
   return value < 70 ? `${text} · zayıf: ${NATURALNESS_WORDS[name] || name}` : text;
 }
 
+const JUDGE_WORDS = {
+  seam: "kenar dikişi", plastic_skin: "plastik cilt", tone: "ten rengi", lighting: "ışık",
+  eyes: "gözler", mouth: "ağız/diş", blur: "bulanıklık", oversharp: "aşırı keskinlik",
+  warp: "şekil bozulması", hair: "saç çizgisi", noise: "gren/gürültü"
+};
+
+/** NVIDIA vision judge verdict from the engine headers (0–10 realism). */
+export function parseJudge(value, issuesValue = "", switched = "") {
+  if (value === null || value === undefined || String(value).trim() === "") return null;
+  const score = Number(value);
+  if (!Number.isFinite(score) || score < 0 || score > 10) return null;
+  const issues = String(issuesValue || "").split(",").map((part) => part.trim()).filter((part) => part in JUDGE_WORDS);
+  return { score, issues, switched: switched === "yes" };
+}
+
+/** "NVIDIA hakem 8,5/10 · gözler" — a second opinion, not a guarantee. */
+export function describeJudge(judge) {
+  if (!judge || !Number.isFinite(judge.score)) return "";
+  const text = `NVIDIA hakem ${judge.score.toFixed(1).replace(".", ",")}/10`;
+  const issues = judge.issues.slice(0, 2).map((issue) => JUDGE_WORDS[issue]);
+  return text + (issues.length ? ` · ${issues.join(", ")}` : "") + (judge.switched ? " · hakem seçti" : "");
+}
+
 /** Index of the most similar result, or -1 when none has a score. */
 export function bestResultIndex(results) {
   let best = -1;

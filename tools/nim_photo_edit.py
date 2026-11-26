@@ -85,7 +85,7 @@ def edit_payload(model: str, image: Path, refs: list[Path]):
     images=[image_url(image),*(image_url(p) for p in refs[:count-1])]
     return {"model":model,"prompt":PROMPT,"image":images if count>1 else images[0],"n":1,"response_format":"b64_json"}
 
-def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], bounds, output: Path, request=local_json, extra_strengths=()):
+def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], bounds, output: Path, request=local_json, extra_strengths=(), texture_strengths=()):
     if model == MANAGED_MODEL and port == 0:
         request = managed_request
     import cv2
@@ -131,4 +131,58 @@ def candidate_from_editor(model: str, port: int, base: Path, refs: list[Path], b
         merged[:,:,:3]=np.clip(np.rint(original[:,:,:3]*(1-weight[:,:,None])+generated*weight[:,:,None]),0,255).astype(np.uint8)
         path=output if strength==.35 else output.with_name(f"{output.stem}-{round(strength*100)}{output.suffix}")
         if not cv2.imwrite(str(path),merged): raise OSError("NIM adayı yazılamadı.")
+    for strength in texture_strengths:
+        merged=texture_only_candidate(original,generated,bounds,strength)
+        path=output.with_name(f"{output.stem}-texture-{round(strength*100)}{output.suffix}")
+        if not cv2.imwrite(str(path),merged): raise OSError("NIM doku adayı yazılamadı.")
+    return output
+
+
+def texture_only_candidate(original, generated, bounds, strength):
+    """Limited luminance-band transfer from the SAME diffusion inference.
+
+    No low-frequency color, geometry, facial outline or feature transplant.
+    Restrict the residual to interior forehead/cheeks; reject poorly aligned
+    structures and strongly different local exposure. Every output is still
+    independently scored by the engine.
+    """
+    import cv2
+    import numpy as np
+    if not isinstance(strength,(int,float)) or not 0<strength<=.5:
+        raise ValueError("Invalid texture blend strength")
+    if original.ndim!=3 or original.shape[2]!=4 or generated.shape!=original[:,:,:3].shape:
+        raise ValueError("Invalid texture candidate dimensions")
+    h,w=original.shape[:2]
+    x,y,fw,fh=(float(bounds[k]) for k in ("x","y","width","height"))
+    if not np.isfinite([x,y,fw,fh]).all() or min(fw,fh)<48 or x<0 or y<0 or x+fw>w+1 or y+fh>h+1:
+        return original.copy()
+    x0,y0=max(0,int(x)),max(0,int(y))
+    x1,y1=min(w,int(np.ceil(x+fw))),min(h,int(np.ceil(y+fh)))
+    base=original[y0:y1,x0:x1]
+    gen=generated[y0:y1,x0:x1]
+    a=cv2.cvtColor(base[:,:,:3],cv2.COLOR_BGR2GRAY).astype(np.float32)
+    b=cv2.cvtColor(gen,cv2.COLOR_BGR2GRAY).astype(np.float32)
+    # Only fine residuals, not the diffusion model's face shape or tone.
+    low_a=cv2.GaussianBlur(a,(0,0),1.25)
+    low_b=cv2.GaussianBlur(b,(0,0),1.25)
+    hi_a,hi_b=a-low_a,b-low_b
+    # Suppress mismatched structures and exposure. Compare locally after
+    # smoothing, rather than interpreting a generated texture as real pores.
+    disagreement=cv2.GaussianBlur(np.abs(low_a-low_b),(0,0),2.0)
+    confidence=np.clip((18-disagreement)/12,0,1)
+    gx=cv2.Sobel(low_a,cv2.CV_32F,1,0,ksize=3)/8.
+    gy=cv2.Sobel(low_a,cv2.CV_32F,0,1,ksize=3)/8.
+    edge=np.clip((12-np.hypot(gx,gy))/8,0,1)
+    yy,xx=np.mgrid[y0:y1,x0:x1]
+    nx,ny=(xx-x)/fw,(yy-y)/fh
+    mask=np.zeros(a.shape,np.float32)
+    for cx,cy,rx,ry in ((.50,.17,.23,.095),(.24,.54,.085,.105),(.76,.54,.085,.105)):
+        radius=((nx-cx)/rx)**2+((ny-cy)/ry)**2
+        zone=np.clip((1-radius)*2,0,1).astype(np.float32)
+        mask=np.maximum(mask,zone*zone*(3-2*zone))
+    opacity=base[:,:,3].astype(np.float32)/255.
+    residual=np.clip(hi_b-hi_a,-8,8)*mask*confidence*edge*opacity*strength
+    output=original.copy()
+    corrected=np.clip(np.rint(base[:,:,:3].astype(np.float32)+residual[:,:,None]),0,255).astype(np.uint8)
+    output[y0:y1,x0:x1,:3]=corrected
     return output

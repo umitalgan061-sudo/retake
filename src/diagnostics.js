@@ -96,6 +96,8 @@ export function buildDiagnosticReport({ headers = {}, health = null, depth = "",
   if (depth) lines.push(`Seçilen derinlik: ${scrub(depth)}`);
   const timing = describeUltraTiming(headers["x-retake-ultra-timing"]);
   if (timing) lines.push(timing);
+  const evidence = summarizeQualityEvidence(headers);
+  if (evidence) lines.push(evidence);
   const resultRevision = validQualityRevision(headers["x-retake-quality-revision"]);
   const currentRevision = validQualityRevision(health?.quality_revision);
   lines.push(`Sonucu üreten kalite sürümü: ${resultRevision || "doğrulanamadı (eski motor veya sonuç)"}`);
@@ -127,4 +129,27 @@ export function describeQualityCompatibility(value) {
   const [date,number]=parse(revision), [expectedDate,expectedNumber]=parse(EXPECTED_QUALITY_REVISION);
   if (date>expectedDate || (date===expectedDate && number>=expectedNumber)) return "";
   return "Yerel motor eski kalite paketini kullanıyor ("+revision+"); güncelle ve yeniden başlat.";
+}
+
+
+export function summarizeQualityEvidence(headers) {
+  const read=(key,min,max)=>{
+    const raw=headers[key];
+    if(raw===undefined||raw===null||String(raw).trim()==="")return null;
+    const n=Number(raw);
+    return Number.isFinite(n)&&n>=min&&n<=max?n:null;
+  };
+  const final=read("x-retake-similarity",-1,1);
+  const peak=read("x-retake-ultra-peak-identity",-1,1);
+  const goal=read("x-retake-identity-aspiration",-1,1);
+  const points=value=>(100*value).toFixed(2).replace(".",",");
+  const rows=[];
+  if(final!==null&&peak!==null&&peak>=final-.0001)
+    rows.push("arama zirvesinden fark "+points(Math.max(0,peak-final))+" puan");
+  if(final!==null&&goal!==null)
+    rows.push("arama hedefinden fark "+points(final-goal)+" puan");
+  if(headers["x-retake-detail-gate"]==="passed")rows.push("motor ayrıntı kontrolü geçti");
+  if(headers["x-retake-nim-editor"]==="retake-local/flux2-klein-4b"&&headers["x-retake-flux-status"]==="accepted")
+    rows.push("seçilen adayda FLUX kullanıldı");
+  return rows.length?"Kalite özeti (kosinüs ölçeği, benzerlik yüzdesi değil): "+rows.join(" · "):"";
 }

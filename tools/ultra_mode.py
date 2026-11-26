@@ -277,9 +277,8 @@ def identity_gain(headers):
     return None if after is None or before is None else after - before
 
 def needs_extra_finalist(headers):
-    # At the person's own photo level there is nothing left to chase.
-    if is_identity_sufficient(headers):
-        return False
+    # A strong original may exceed the reference sufficiency level.
+    # Respect the higher aspiration even for an otherwise sufficient result.
     target = identity_aspiration(headers)
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS

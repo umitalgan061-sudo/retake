@@ -1116,7 +1116,10 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
                 # The rescue path can try a gentle real-beard transfer
                 # over the stronger identity-only base, rather than losing
                 # global facial identity to an all-or-nothing transplant.
-                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0))))
+                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0)))),
+                moustache_scale=real_face.get("moustacheScale",1.),
+                jaw_scale=real_face.get("jawScale",1.),
+                alternate=real_face.get("alternateLower",False)
             )
         else:
             transplanted, chosen, fits = choose_and_transplant(
@@ -1513,6 +1516,13 @@ def process_swap(
             {**metadata["realFace"], "images": metadata["realReferenceBytes"]}
             if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
         )
+        if real_face:
+            # Different lower-face hypotheses across existing rounds, not
+            # extra expensive full-face model calls.
+            if variation in (3,11,19):
+                real_face.update(moustacheScale=1.25,jawScale=.8,alternateLower=True)
+            elif variation in (7,15,21,23):
+                real_face.update(moustacheScale=.8,jawScale=1.25,alternateLower=True)
         user_shading = caches.get("shading")
         beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
         blends: list[tuple[Path, float]] = []

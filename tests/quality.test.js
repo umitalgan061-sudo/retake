@@ -211,3 +211,9 @@ test("neck evidence reports measured correction and rejects malformed values", a
   assert.equal(describeNeckEvidence("lab:3,luma:90"),"");
   assert.match(describeFineFeatures("region-regression"),/göz\/dudak ayrıntısı kaybı/);
 });
+
+
+test("jury veto is distinguished from disagreement", async () => {
+  const {describeNvidiaJudge}=await import("../src/quality.js");
+  assert.match(describeNvidiaJudge("local-guard"),/yerel kalite kontrolünü geçemedi/);
+});

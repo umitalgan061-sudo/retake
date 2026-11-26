@@ -142,8 +142,27 @@ class CalibrationStore:
         """Add verified rounds of one job; returns how many were usable."""
         if not self.enabled or not bank:
             return 0
-        rows = [(variation, round_quality(headers)) for variation, headers in observations]
-        rows = [(variation, quality) for variation, quality in rows if type(variation) is int and quality is not None]
+        # One original grid observation per variant per job. Repeated
+        # finalists are correlated trials, not independent evidence.
+        rows = []
+        seen = set()
+        for variation, headers in observations:
+            if type(variation) is not int or not 0 <= variation < 24 or variation in seen:
+                continue
+            if headers.get("X-Retake-Detail-Gate") not in (None, "passed"):
+                continue
+            quality = round_quality(headers)
+            if quality is None:
+                continue
+            if "X-Retake-Similarity" in headers:
+                try:
+                    identity = float(headers["X-Retake-Similarity"])
+                except (TypeError, ValueError):
+                    continue
+                if not math.isfinite(identity) or not -1 <= identity <= 1:
+                    continue
+            seen.add(variation)
+            rows.append((variation,quality))
         if not rows:
             return 0
         with self._lock:

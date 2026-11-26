@@ -35,7 +35,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
-    from .portrait_evidence import reference_evidence_file, format_evidence
+    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from .fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -62,7 +62,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
-    from portrait_evidence import reference_evidence_file, format_evidence
+    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -1801,6 +1801,20 @@ def process_swap(
             candidate_scores, candidate_detail_scores, chosen_index,
             sufficiency_from_level(identity_report.get("photo_level_similarity"))
         )
+        # Compare regional appearance for only a few already measured close
+        # candidates. No extra GPU passes and no preference for missing data.
+        if real_face:
+            level = sufficiency_from_level(identity_report.get('photo_level_similarity'))
+            indices = regional_tie_indices(candidate_scores,candidate_detail_scores,chosen_index,level)
+            if len(indices)>1:
+                evidence_scores = {}
+                for index in indices:
+                    try:
+                        _, value = reference_evidence_file(target_path,rescue_candidates[index][1],metadata['faceBounds'],metadata.get('targetLandmarks'),real_face)
+                        evidence_scores[index] = value
+                    except (ValueError,TypeError,OSError,cv2.error):
+                        continue
+                chosen_index = choose_regional_evidence(candidate_scores,candidate_detail_scores,chosen_index,evidence_scores,level)
         if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
         selected_identity = rescue_candidates[chosen_index][0]

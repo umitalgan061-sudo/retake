@@ -46,3 +46,19 @@ class NeckHarmonizationTest(unittest.TestCase):
         output,status,count=harmonize_neck(original,base,bounds,points)
         self.assertEqual(status,"pose-uncertain")
         self.assertIsNone(output)
+
+
+class NeckTransitionGuardTest(unittest.TestCase):
+    def test_no_new_hard_edge_or_unmasked_change(self):
+        from tools.neck_harmonization import neck_transition_safe
+        src=np.full((40,40,3),120,np.uint8)
+        base=np.dstack((src.copy(),np.zeros((40,40),np.uint8)))
+        mask=np.zeros((40,40),bool);mask[10:30,10:30]=True
+        output=base.copy();output[mask,:3]=124;output[mask,3]=255
+        self.assertTrue(neck_transition_safe(src,base,output,mask))
+        sharp=output.copy();sharp[mask,:3]=140
+        self.assertFalse(neck_transition_safe(src,base,sharp,mask))
+        spill=output.copy();spill[0,0,0]=121
+        self.assertFalse(neck_transition_safe(src,base,spill,mask))
+        base[15,15,3]=255
+        self.assertFalse(neck_transition_safe(src,base,output,mask))

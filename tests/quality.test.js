@@ -54,8 +54,8 @@ test("the result is compared with the person's own photos", async () => {
 });
 
 test("original cosine below zero is not silently displayed as zero", () => {
-  assert.match(describeSimilarity(.87, -.12), /orijinal -12,00 \(kosinüs\)/);
-  assert.match(describeSimilarity(.87, .001), /orijinal 0,10 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, -.12), /orijinal -0,1200 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, .001), /orijinal 0,0010 \(kosinüs\)/);
 });
 test("FLUX configuration is not evidence of a selected candidate", async () => {
   const {describeFluxStatus} = await import("../src/quality.js");
@@ -156,4 +156,14 @@ test("the jury badge says when close-ups were used", async () => {
   assert.equal(describeNvidiaJudge("kept", null, null, "review-sheet"), "NVIDIA jürisi yerel seçimi onayladı (göz ve ağız yakın planlarıyla)");
   assert.equal(describeNvidiaJudge("abstain", 6, 0.5, "review-sheet"), "NVIDIA jürisi kararsız kaldı; yerel seçim korundu");
   assert.equal(describeNvidiaJudge("kept", 6, 1, "face"), "NVIDIA jürisi yerel seçimi onayladı (6 oy, %100 uzlaşı)");
+});
+
+
+test("lower-face measurements are distinguished from identity and malformed evidence is omitted", async () => {
+  const {describePortraitEvidence,describeFluxMetrics}=await import("../src/quality.js");
+  assert.match(describePortraitEvidence("chin:0.00>3.10/0.000>0.120","0.8"), /çene 0,00→3,10/);
+  assert.match(describePortraitEvidence("chin:0.00>3.10/0.000>0.120","0.8"), /doku\/kontrast/);
+  assert.equal(describePortraitEvidence("chin:0.00>3.10/0.000>2.0",""),"");
+  assert.equal(describePortraitEvidence("",""),"");
+  assert.match(describeFluxMetrics(-.005,.009,.025), /karışım %2,5/);
 });

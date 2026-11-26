@@ -35,7 +35,7 @@ export function describeSimilarity(after, before, referenceMedian = null) {
   const score = similarityScore(after);
   if (score === null) return "";
   const rawBefore = parseSimilarity(before);
-  const previous = rawBefore === null ? null : rawBefore <= 0.005 ? (rawBefore * 100).toFixed(2).replace(".", ",") + " (kosinüs)" : similarityScore(rawBefore);
+  const previous = rawBefore === null ? null : rawBefore <= 0.005 ? rawBefore.toFixed(4).replace(".", ",") + " (kosinüs)" : similarityScore(rawBefore);
   const comparison = referenceComparison(after, referenceMedian);
   // Scores shown as integers hide genuine small changes: 0.825–0.834
   // all display as 83. Show one decimal, never claim a calibrated percent.
@@ -154,7 +154,7 @@ export function describeFluxMetrics(identityDelta, detailDelta, strength) {
   return [
     i!==null && Math.abs(i)<=2 ? "FLUX kimlik farkı "+fmt(i) : "",
     d!==null && Math.abs(d)<=1 ? "doku puanı farkı "+fmt(d) : "",
-    s!==null && s>0 && s<=.5 ? "karışım %"+Math.round(s*100) : ""
+    s!==null && s>0 && s<=.5 ? "karışım %"+(s*100).toFixed(1).replace(/\.0$/,"").replace(".",",") : ""
   ].filter(Boolean).join(" · ");
 }
 export function describeJudgeError(code) {
@@ -259,4 +259,21 @@ export function describeFineFeatures(decision, detail = "", catchlights = "", sc
   if (decision === "detail-gate") return "ince bölge adayı ayrıntı kontrolünü geçemedi";
   if (decision === "no-gain") return "ince bölge düzeltmesi ölçülebilir kazanç sağlamadı; sonuç korundu";
   return "";
+}
+
+
+export function describePortraitEvidence(value, appearance) {
+  const labels={moustache:"bıyık",chin:"çene",jaw_l:"sol çene",jaw_r:"sağ çene",lower_face:"alt yüz"};
+  const seen=new Set();
+  const rows=String(value || "").split(",").map(part=>{
+    const match=/^([a-z_]+):(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)$/.exec(part);
+    if(!match || !Object.hasOwn(labels,match[1]) || seen.has(match[1])) return "";
+    const [a,b,e1,e2]=match.slice(2).map(Number);
+    if(![a,b,e1,e2].every(Number.isFinite)||a>255||b>255||e1>1||e2>1) return "";
+    seen.add(match[1]);
+    return labels[match[1]]+" "+a.toFixed(2).replace(".",",")+"→"+b.toFixed(2).replace(".",",");
+  }).filter(Boolean);
+  const score=readFinite(appearance);
+  return [rows.length?"Alt yüz mutlak doku enerjisi (önce→sonra): "+rows.join(", "):"",
+    score!==null && score>=0 && score<=1?"referans alt yüz görünüm uyumu "+score.toFixed(2).replace(".",",")+" / 1 (doku/kontrast)":""].filter(Boolean).join(" · ");
 }

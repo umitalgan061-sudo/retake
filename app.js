@@ -46,6 +46,7 @@ import {
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
 import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming } from "./src/diagnostics.js";
+import { MIN_UPSCALE, describeNativeFinish, finishUpscaledFace } from "./src/grain.js";
 import {
   bestResultIndex,
   measureFaceEdit,
@@ -713,6 +714,7 @@ function selectResult(index) {
     describeUltraDepth(item.ultraDepth, item.ultraRefinements, item.realismFinalists),
     describeFineFeatures(item.fineFeatures, item.fineDetail, item.catchlights, item.sclera),
     describeUltraTiming(item.ultraTiming),
+    describeNativeFinish(item.nativeFinish),
     item.nvidiaJudge === 'error' ? describeJudgeError(item.nvidiaJudgeError) : '',
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
@@ -756,6 +758,7 @@ function addResult(blob, label, scores = {}) {
     ultraDepth: scores.ultraDepth || "",
     fineFeatures: scores.fineFeatures || "",
     ultraTiming: scores.ultraTiming || "",
+    nativeFinish: scores.nativeFinish && typeof scores.nativeFinish === "object" ? scores.nativeFinish : null,
     diagnostics: scores.diagnostics && typeof scores.diagnostics === "object" ? scores.diagnostics : null,
     fineDetail: scores.fineDetail || "",
     catchlights: scores.catchlights || "",
@@ -2119,6 +2122,18 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
   const alphaMask = binaryTransport || hasTransparentPixels
     ? parserAlphaMask
     : createFaceAlphaMask(crop.width, crop.height, crop.face);
+  // Native resolution (v27): a face crop larger than the engine's limit was
+  // scaled up again here, which softens it next to the original skin. Undo
+  // the interpolation blur and restore the photo's own grain level, inside
+  // the matte only (outside pixels stay byte-identical).
+  let nativeFinish = null;
+  const upscale = Math.max(crop.width / outputWidth, crop.height / outputHeight);
+  if (binaryTransport && preblended && upscale >= MIN_UPSCALE) {
+    nativeFinish = finishUpscaledFace(
+      sourceCrop.data, generatedCrop.data, alphaMask, crop.width, crop.height, upscale,
+      (Math.imul(crop.width, 73856093) ^ Math.imul(crop.height, 19349663)) >>> 0
+    );
+  }
   // A local engine may deliver final, already-masked RGB + an edit-extent
   // alpha. Never blend that image a second time: alpha squared erases identity
   // characteristics along facial transitions.
@@ -2155,7 +2170,7 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
   const faceEdit=measureFaceEdit(sourceCrop.data,blended,crop.width,crop.height,crop.face);
   if(!faceEdit.meaningful)throw new Error('Son görüntüde yüz içi değişim yetersiz; düzenlenmemiş fotoğraf başarılı sonuç olarak gösterilmedi.');
   fullContext.putImageData(output, 0, 0);
-  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit}));
+  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit, nativeFinish}));
 }
 
 const stones = { hero: null, wait: null, timer: null };
@@ -2465,7 +2480,12 @@ async function runFaceFusionEdit(options = {}) {
       Number.isInteger(completedRounds) && completedRounds >= 1
         ? ` (${completedRounds}${Number.isInteger(attemptedRounds) && attemptedRounds >= completedRounds ? "/" + attemptedRounds : ""} doğrulanmış tur)` : ""
     );
-    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit});
+    if (delivered.nativeFinish && scores.diagnostics) {
+      const finish = delivered.nativeFinish;
+      scores.diagnostics["browser-native-finish"] =
+        `scale=${finish.scale};sharpen=${finish.sharpen};grain=${finish.resultGrain}>${finish.sourceGrain};added=${finish.addedGrain}`;
+    }
+    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = [
       describeSimilarity(scores.similarity, scores.before, scores.referenceMedian),

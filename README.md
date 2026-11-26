@@ -86,6 +86,14 @@ Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (
 - Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
 - Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
 
+### Doğal çözünürlükte bitiş: gren ve büyütme yumuşaması (v27)
+
+Motor en çok 1600×2048 piksel işler. Telefonla çekilmiş yakın bir portrede yüz kırpımı bundan büyüktür; sonuç tarayıcıda yeniden büyütülür ve yeni yüz fotoğrafın geri kalanından daha pürüzsüz görünür — gözenek ve sensör greni olmayan bir yüz, değiştirilmiş yüzün en bilinen işaretlerinden biridir. Artık yalnız büyütülen sonuçlarda (≥ 1,05×), yalnız düzenleme maskesinin içinde (`src/grain.js`):
+
+- **Büyütme yumuşaması:** Büyütme oranıyla sınırlı, yalnız parlaklık kanalında hafif keskinleştirme (en çok 0,35; renk kenarlarında saçaklanma olmaz).
+- **Fotoğrafın greni:** Orijinal yüz bölgesinin doğal çözünürlükteki gren düzeyi, kenarlardan etkilenmeyen sağlam bir ölçüyle (medyan mutlak sapma) sonucunkiyle karşılaştırılır; sonuç belirgin biçimde daha pürüzsüzse (fotoğrafın %85'inin altında) yalnız eksik kısım parlaklık greni olarak eklenir (en çok 6). Orijinal yüzden doku kopyalanmaz. Gren tohumludur: aynı fotoğraf her dışa aktarmada aynı sonucu verir.
+- Maskenin dışındaki pikseller bayt bayt aynı kalır (son bütünlük denetimi bunu zaten zorunlu kılar). Rozet ne yapıldığını yazar ("Doğal çözünürlük: yüz 1,4× büyütüldü · büyütme yumuşaması giderildi · fotoğrafın greni eklendi (1,4 → 3,1)"); tanı raporunda `browser-native-finish` satırı olarak görünür.
+
 ### Tanı raporu ve süre dökümü; ince bölgeler seçimde (v26)
 
 - **Tanı raporu:** Sonuçtan sonra "Tanı raporu" düğmesi bu sonucun tüm ölçümlerini ve motorun durumunu tek bir metin olarak panoya kopyalar (pano yoksa `.txt` indirir). Rapor yalnız sayılar ve durumlar içerir: görsel, dosya adı, klasör yolu, anahtar veya eşleştirme kodu içermez (yollar ve dosya adları `[yol]`/`[dosya]` olarak silinir; motor durumu beyaz listeden geçer). Sohbete yapıştırınca motor o bilgisayara göre ayarlanabilir.

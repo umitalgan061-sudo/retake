@@ -62,3 +62,16 @@ class NeckTransitionGuardTest(unittest.TestCase):
         self.assertFalse(neck_transition_safe(src,base,spill,mask))
         base[15,15,3]=255
         self.assertFalse(neck_transition_safe(src,base,output,mask))
+
+
+class NeckToneEvidenceTest(unittest.TestCase):
+    def test_only_correction_towards_measured_offset_is_improvement(self):
+        from tools.neck_harmonization import neck_tone_evidence
+        source=np.full((20,20,3),130,np.uint8)
+        mask=np.ones((20,20),bool)
+        brighter=np.full_like(source,135)
+        darker=np.full_like(source,125)
+        desired=np.array([10,0,0],np.float32)
+        self.assertTrue(neck_tone_evidence(source,brighter,mask,desired)["improved"])
+        self.assertFalse(neck_tone_evidence(source,darker,mask,desired)["improved"])
+        self.assertFalse(neck_tone_evidence(source,source,mask,desired)["improved"])

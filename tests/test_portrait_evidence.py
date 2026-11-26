@@ -65,3 +65,15 @@ class PortraitEvidenceTest(unittest.TestCase):
         h={"X-Retake-Similarity":".871","X-Retake-Identity-Photo-Level":".89","X-Retake-Detail-Gate":"passed"}
         below={**h,"X-Retake-Similarity":".869"}
         self.assertEqual(len(srv.judge_pool(b"a",h,1,[(b"b",below,2)],.871)),1)
+
+
+    def test_distinct_finalist_roles_preserve_measured_peaks(self):
+        def row(name,score,appearance,fine):
+            return (name.encode(),{"X-Retake-Similarity":str(score),
+                 "X-Retake-Reference-Appearance":str(appearance),
+                 "X-Retake-Fine-Quality":str(fine),"X-Retake-Detail-Gate":"passed"},1)
+        rows=[row("local",.83,.5,.5),row("regional",.829,.95,.5),
+              row("fine",.829,.5,.95),row("repeat",.83,.6,.6)]
+        pool=srv.judge_pool(*rows[0],rows,.83)
+        self.assertEqual(pool[0][0],b"local")
+        self.assertEqual({r[0] for r in pool},{b"local",b"regional",b"fine",b"repeat"})

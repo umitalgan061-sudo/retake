@@ -117,3 +117,50 @@ def prepare_small_face_inference(model_path: Path, bounds: dict, variation: int,
     if not cv2.imwrite(str(path),output):
         return model_path,"write-failed"
     return path,"native-contrast"
+
+
+def prepare_visible_identity_probe(target_path: Path, candidate_path: Path, temp_dir: Path) -> Path:
+    """ArcFace must see the delivered color, not RGB hidden by alpha.
+
+    Opaque model renders already carry their own visible RGB. For preblended
+    BGRA candidates, restore untouched target pixels and score an opaque,
+    content-addressed PNG local to this job. The name changes with pixels so
+    FaceFusion's static image cache cannot return a stale overwritten image.
+    """
+    import hashlib
+    candidate=cv2.imread(str(candidate_path),cv2.IMREAD_UNCHANGED)
+    if candidate is None:
+        raise ValueError("Kimlik adayı okunamadı.")
+    # The original is immutable for the duration of the job.
+    if candidate_path == target_path and candidate.ndim==3 and candidate.shape[2]==3:
+        return candidate_path
+    if candidate.ndim==3 and candidate.shape[2]==3:
+        visible=candidate
+    else:
+        target=cv2.imread(str(target_path),cv2.IMREAD_COLOR)
+        visible=binary_preblended_rgba(target,candidate)[:,:,:3]
+    ok,encoded=cv2.imencode(".png",visible)
+    if not ok: raise OSError("Kimlik doğrulama görüntüsü yazılamadı.")
+    payload=encoded.tobytes()
+    # Preserve stage names for diagnostics and orchestration tests, while
+    # the full path uniquely identifies immutable pixel content.
+    directory=temp_dir/"visible-identity"/hashlib.sha256(payload).hexdigest()
+    directory.mkdir(parents=True,exist_ok=True)
+    path=directory/(candidate_path.stem+".png")
+    if not path.is_file():
+        path.write_bytes(payload)
+    elif path.read_bytes()!=payload:
+        raise OSError("Kimlik doğrulama görüntüsü değiştirildi.")
+    return path
+
+
+def verify_visible_checkpoint(target_path, final_path, verified_probe, temp_dir):
+    """Prove the final visible pixels match the last scored candidate.
+
+    Do not spend another GPU inference on identical pixels. A changed or
+    missing checkpoint is a verification failure, never a reused score.
+    """
+    if verified_probe is None or not verified_probe.is_file():
+        return False
+    actual=prepare_visible_identity_probe(target_path,final_path,temp_dir)
+    return actual.read_bytes()==verified_probe.read_bytes()

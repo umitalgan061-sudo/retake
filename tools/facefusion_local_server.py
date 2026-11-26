@@ -1856,6 +1856,14 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 detail = None
             candidate_detail_scores.append(detail)
+        # Photographic naturalness of each verified candidate: a regional
+        # reference transfer may not win an identity tie by looking edited.
+        candidate_naturalness: list[float | None] = []
+        for index, (_, candidate_path) in enumerate(rescue_candidates):
+            value = None
+            if candidate_scores[index] is not None:
+                value = final_naturalness(target_path, candidate_path, metadata["faceBounds"]).get("score")
+            candidate_naturalness.append(value)
         # Preserve the actual highest verified score, not a chain of near-ties.
         previous = chosen_index
         # Existing full/lower reference composites already carry real texture.
@@ -1866,14 +1874,19 @@ def process_swap(
             for label, _ in rescue_candidates
         ]
         chosen_index = select_verified_regional_candidate(
-            candidate_scores, candidate_detail_scores, effective_labels, chosen_index
+            candidate_scores, candidate_detail_scores, effective_labels, chosen_index, candidate_naturalness
         )
         # At the person's photo level, keep the candidate with the most real
         # photographic detail rather than the highest cosine.
         chosen_index = select_sufficient_realism(
             candidate_scores, candidate_detail_scores, chosen_index,
-            sufficiency_from_level(identity_report.get("photo_level_similarity"))
+            sufficiency_from_level(identity_report.get("photo_level_similarity")),
+            naturalness_scores=candidate_naturalness
         )
+        print("Aday gerçekliği: " + ", ".join(
+            f"{label}={'—' if score is None else f'{score:.3f}'}/{'—' if nat is None else f'{nat:.0f}'}"
+            for (label, _), score, nat in zip(rescue_candidates, candidate_scores, candidate_naturalness)
+        ) + " (ArcFace/gerçeklik).", flush=True)
         if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
         selected_identity = rescue_candidates[chosen_index][0]

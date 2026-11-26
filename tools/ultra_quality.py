@@ -243,10 +243,34 @@ def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds:
     accepted, reason = reinforcement_detail_decision(ratios)
     return accepted, reason, ratios
 
-def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent):
+# A regional reference transfer (beard / full face / jaw) must earn its place:
+# either a real identity gain or no loss of photographic naturalness
+# (tools/photo_naturalness.py). A low-opacity reference beard ties ArcFace
+# but reads as a grey, ghosted shadow over the jaw and lips.
+REGIONAL_IDENTITY_GAIN = 0.006
+REGIONAL_NATURALNESS_SLACK = 1.5     # naturalness points (of 100) a regional may lose
+REGIONAL_LABELS = ("identity-beard", "identity-full", "identity-jaw")
+
+
+def _finite(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def regional_earns_place(index, current, identity_scores, naturalness_scores) -> bool:
+    if naturalness_scores is None:
+        return True   # legacy callers: identity/detail rules only
+    if identity_scores[index] >= identity_scores[current] + REGIONAL_IDENTITY_GAIN:
+        return True
+    mine, theirs = naturalness_scores[index], naturalness_scores[current]
+    return _finite(mine) and _finite(theirs) and mine >= theirs - REGIONAL_NATURALNESS_SLACK
+
+
+def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent, naturalness_scores=None):
     """Prefer measured regional detail only within the verified identity peak."""
     if not (len(identity_scores) == len(detail_scores) == len(labels)):
         return incumbent
+    if naturalness_scores is not None and len(naturalness_scores) != len(labels):
+        naturalness_scores = None
     valid = [i for i, score in enumerate(identity_scores)
              if isinstance(score, (int, float)) and not isinstance(score, bool)
              and math.isfinite(score) and -1 <= score <= 1]
@@ -254,8 +278,11 @@ def select_verified_regional_candidate(identity_scores, detail_scores, labels, i
         return incumbent
     peak = max(valid, key=lambda i: identity_scores[i])
     eligible = [i for i in valid if identity_scores[i] >= identity_scores[peak] - .003]
-    current = incumbent if incumbent in eligible else peak
-    current = choose_detail_safe_tie(identity_scores, detail_scores, current)
+    start = incumbent if incumbent in eligible else peak
+    current = choose_detail_safe_tie(identity_scores, detail_scores, start)
+    if (current != start and labels[current] in REGIONAL_LABELS
+            and not regional_earns_place(current, start, identity_scores, naturalness_scores)):
+        current = start
     if labels[current] not in ("identity-beard", "identity-full", "identity-jaw"):
         baseline = detail_scores[current]
         if isinstance(baseline, (float, int)) and math.isfinite(baseline):
@@ -263,7 +290,8 @@ def select_verified_regional_candidate(identity_scores, detail_scores, labels, i
                         if labels[i] in ("identity-beard", "identity-full", "identity-jaw")
                         and isinstance(detail_scores[i], (float, int))
                         and math.isfinite(detail_scores[i])
-                        and detail_scores[i] >= baseline - .025]
+                        and detail_scores[i] >= baseline - .025
+                        and regional_earns_place(i, current, identity_scores, naturalness_scores)]
             if regional:
                 current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
     return current
@@ -303,7 +331,8 @@ def regional_edit_statistics(original_path, edited_path, bounds):
     return result
 
 
-def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold, minimum_detail_gain=0.025):
+def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold, minimum_detail_gain=0.025,
+                              naturalness_scores=None):
     """Inside one render: once identity reaches the person's photo level,
     pick the identity-sufficient candidate that keeps the most real photo
     detail (e.g. no-head-warp, photo-balance) instead of the highest cosine.
@@ -320,9 +349,15 @@ def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold,
         or not valid(detail_scores[chosen], 0, 1)
     ):
         return chosen
+    if naturalness_scores is not None and len(naturalness_scores) != len(identity_scores):
+        naturalness_scores = None
     contenders = [
         index for index, score in enumerate(identity_scores)
         if valid(score, -1, 1) and score >= threshold and valid(detail_scores[index], 0, 1)
+        # More regional energy is not realism when the photo reads as edited.
+        and (naturalness_scores is None or index == chosen
+             or not (valid(naturalness_scores[index], 0, 100) and valid(naturalness_scores[chosen], 0, 100))
+             or naturalness_scores[index] >= naturalness_scores[chosen] - REGIONAL_NATURALNESS_SLACK)
     ]
     best = max(contenders, key=lambda index: (detail_scores[index], identity_scores[index]))
     return best if detail_scores[best] >= detail_scores[chosen] + minimum_detail_gain else chosen

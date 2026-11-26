@@ -197,3 +197,45 @@ class NativeRegionalEditTest(unittest.TestCase):
             cv2.imwrite(str(root/"a.png"),np.zeros((50,50,3),np.uint8))
             self.assertEqual(regional_edit_statistics(root/"a.png",root/"a.png",
                 {"x":0,"y":0,"width":float("nan"),"height":40}),{})
+
+
+class RegionalNaturalnessGuardTest(unittest.TestCase):
+    """A reference beard/full-face transfer may not win an identity tie by looking edited."""
+
+    labels = ["head-fit", "no-head-warp", "identity-only", "identity-beard", "identity-beard", "identity-full"]
+
+    def test_a_ghost_beard_on_an_identity_tie_loses_to_the_cleaner_photo(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        identity = [0.796, 0.796, 0.797, 0.798, 0.795, 0.793]
+        detail = [0.90, 0.90, 0.89, 0.93, 0.95, 0.91]
+        natural = [76.0, 76.0, 74.0, 72.0, 74.0, 73.0]
+        self.assertIn(self.labels[select_verified_regional_candidate(identity, detail, self.labels, 0)],
+                      ("identity-beard", "identity-full"), "legacy rule without naturalness")
+        self.assertEqual(select_verified_regional_candidate(identity, detail, self.labels, 0, natural), 0)
+
+    def test_a_regional_transfer_that_is_as_natural_or_clearly_closer_still_wins(self):
+        from tools.ultra_quality import REGIONAL_IDENTITY_GAIN, select_verified_regional_candidate
+        identity = [0.806, 0.806, 0.834, 0.833, 0.832, 0.836]
+        detail = [0.90, 0.90, 0.90, 0.90, 0.90, 0.91]
+        natural = [83.0, 83.0, 83.0, 83.0, 83.0, 83.0]
+        self.assertEqual(self.labels[select_verified_regional_candidate(identity, detail, self.labels, 2, natural)],
+                         "identity-full")
+        # Less natural, but a real identity gain.
+        gain = [0.80, 0.80, 0.80, 0.80 + REGIONAL_IDENTITY_GAIN + 0.001, 0.79, 0.79]
+        pick = select_verified_regional_candidate(gain, [0.9] * 6, self.labels, 0, [80, 80, 80, 70, 70, 70])
+        self.assertEqual(pick, 3)
+
+    def test_unknown_naturalness_needs_an_identity_gain(self):
+        from tools.ultra_quality import select_verified_regional_candidate
+        identity = [0.80, 0.80, 0.80, 0.801, 0.79, 0.79]
+        pick = select_verified_regional_candidate(identity, [0.9, 0.9, 0.9, 0.95, 0.9, 0.9], self.labels, 0,
+                                                  [80, 80, 80, None, None, None])
+        self.assertEqual(pick, 0)
+
+    def test_sufficient_realism_does_not_pick_more_detail_that_looks_edited(self):
+        from tools.ultra_quality import select_sufficient_realism
+        identity = [0.86, 0.86, 0.85]
+        detail = [0.80, 0.85, 0.86]
+        self.assertEqual(select_sufficient_realism(identity, detail, 0, 0.84), 2)
+        self.assertEqual(select_sufficient_realism(identity, detail, 0, 0.84, naturalness_scores=[80, 79, 70]), 1)
+        self.assertEqual(select_sufficient_realism(identity, detail, 0, 0.84, naturalness_scores=[80, 70, 70]), 0)

@@ -167,3 +167,22 @@ test("lower-face measurements are distinguished from identity and malformed evid
   assert.equal(describePortraitEvidence("",""),"");
   assert.match(describeFluxMetrics(-.005,.009,.025), /karışım %2,5/);
 });
+
+
+test("portrait geometry requires a measured mesh and respects pixel aspect ratio", async () => {
+  const {portraitGeometry,describePortraitGeometry}=await import("../src/quality.js");
+  const points=Array.from({length:478},()=>({x:.5,y:.5}));
+  const positions={234:[.25,.5],454:[.75,.5],10:[.5,.2],152:[.5,.8],33:[.3,.4],133:[.4,.4],362:[.6,.4],263:[.7,.4],159:[.35,.39],145:[.35,.41],386:[.65,.39],374:[.65,.41],61:[.4,.65],291:[.6,.65],13:[.5,.64],14:[.5,.66],98:[.45,.55],327:[.55,.55],172:[.3,.7],397:[.7,.7]};
+  for(const [i,[x,y]] of Object.entries(positions))points[i]={x,y};
+  const source=portraitGeometry(points,400,200);
+  assert.equal(source.width,200);
+  assert.equal(source.height,120);
+  assert.ok(Math.abs(source.values.rightEye-.1)<1e-9);
+  const edited=points.map(p=>({...p}));edited[159].y-=.01;
+  const delivered=portraitGeometry(edited,400,200);
+  assert.ok(delivered.values.rightEye>source.values.rightEye);
+  assert.match(describePortraitGeometry({source,delivered}),/sağ göz açıklığı 0,10→0,15/);
+  assert.match(describePortraitGeometry({source,delivered:null}),/ölçülemedi/);
+  assert.equal(portraitGeometry(points.slice(0,100),400,200),null);
+  assert.equal(portraitGeometry(points,20,20),null);
+});

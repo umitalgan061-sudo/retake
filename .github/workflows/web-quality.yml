@@ -98,6 +98,7 @@ jobs:
           node --check src/core.js
           node --check src/nvidia-pipeline.js
           node --check src/head-geometry.js
+          node --check src/face-shape.js
           node --check src/forma-sculpture.js
           node --check src/engine.js
           node --check src/reference-cache.js

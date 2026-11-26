@@ -104,6 +104,7 @@ jobs:
           node --check src/quality.js
           node --check src/real-face.js
           node --check src/depth.js
+          node --check src/diagnostics.js
           node --check src/benchmark.js
           node --check worker/index.js
           node --check tools/deploy-worker.mjs

@@ -86,6 +86,12 @@ Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (
 - Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
 - Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
 
+### Tanı raporu ve süre dökümü; ince bölgeler seçimde (v26)
+
+- **Tanı raporu:** Sonuçtan sonra "Tanı raporu" düğmesi bu sonucun tüm ölçümlerini ve motorun durumunu tek bir metin olarak panoya kopyalar (pano yoksa `.txt` indirir). Rapor yalnız sayılar ve durumlar içerir: görsel, dosya adı, klasör yolu, anahtar veya eşleştirme kodu içermez (yollar ve dosya adları `[yol]`/`[dosya]` olarak silinir; motor durumu beyaz listeden geçer). Sohbete yapıştırınca motor o bilgisayara göre ayarlanabilir.
+- **Süre dökümü:** `X-Retake-Ultra-Timing` (`search=19x72;refine=4x31;realism=2x210;extra=1x65;judge=40;hold=0;total=2210`) her aşamanın sayısını ve ortalama süresini verir; rozet "Süre: 19 tur × 72 sn · 4 ince ayar × 31 sn · …" diye yazar. `X-Retake-Engine-Stats` bu işin geçiş önbelleği isabet/ıskasını ve ArcFace ölçüm sayısı × ortalama süresini verir.
+- **İnce bölgeler seçimde:** Her adayın teslim edilen piksellerindeki göz/kaş/dudak doğallığı (`X-Retake-Fine-Quality`, 0–1) artık Ultra eşitliklerinde kullanılır: kimlik yeterliyse kontur temizliğinden hemen sonra, yeterli değilse yalnız kimlik eşitlik bandı içinde. Kimlik hâlâ önce gelir; 0,03'ten küçük farklar dikkate alınmaz.
+
 ### Kalıcı ArcFace ölçümü (v25)
 
 Her kimlik ölçümü eskiden yeni bir Python süreci açıp FaceFusion'ı içe aktarıyor, YOLO yüz algılayıcısını ve ArcFace ONNX oturumunu (CUDA kurulumu dahil) sıfırdan yüklüyordu. Bir render 5–7 kez ölçüm yaptığı için (havuz seçimi, pekiştirme, karışımlar, son adaylar, ince bölge ve kontur adımları), geçiş önbelleği devreye girdikten sonra turun büyük kısmı aynı iki modeli yüklemekle geçiyordu.

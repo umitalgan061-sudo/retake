@@ -43,7 +43,7 @@ try:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE
+        REALISM_SEED_STRIDE, format_ultra_timing
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -69,7 +69,7 @@ except ImportError:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE
+        REALISM_SEED_STRIDE, format_ultra_timing
     )
 
 MAX_REFERENCES = 25
@@ -1948,6 +1948,9 @@ def process_swap(
                 if accepted_fine:
                     shutil.copyfile(fine_path, final_output)
                     result_similarity = fine_score
+                    fine_report["delivered_quality"] = fine_report.get("quality_after")
+                elif fine_report.get("quality_before") is not None:
+                    fine_report["delivered_quality"] = fine_report.get("quality_before")
                 print(
                     f"[Retake] İnce bölgeler: karar={fine_decision}; "
                     f"oranlar={describe_fine_report(fine_report) or '—'}; "
@@ -2100,6 +2103,11 @@ def process_swap(
             "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Fine-Features": fine_decision,
+            # The delivered pixels' finest-feature naturalness (0..1), for Ultra ties.
+            "X-Retake-Fine-Quality": (
+                f"{fine_report['delivered_quality']:.4f}"
+                if isinstance(fine_report.get("delivered_quality"), (int, float)) else ""
+            ),
             "X-Retake-Fine-Detail": describe_fine_report(fine_report),
             "X-Retake-Catchlights": (
                 f"{fine_report.get('catchlights_restored', 0)}/{len(fine_report.get('catchlights') or {})}"
@@ -2205,6 +2213,32 @@ def judge_pool(
     return pool
 
 
+def engine_stats(pass_cache: Any, cache_start: dict[str, Any] | None,
+                 scorer_start: dict[str, Any] | None) -> str:
+    """This job's pass-cache reuse and ArcFace measurements, e.g.
+    ``cache=84/31;arcface=96x0.42;arcface_starts=2;arcface_failures=0``."""
+    parts = []
+    try:
+        if cache_start is not None and hasattr(pass_cache, "describe"):
+            now = pass_cache.describe()
+            parts.append(f"cache={now['hits'] - cache_start['hits']}/{now['misses'] - cache_start['misses']}")
+    except Exception:
+        pass
+    scorer = IDENTITY_SCORER
+    try:
+        if scorer is not None and scorer_start is not None:
+            calls = scorer.stats["calls"] - scorer_start["calls"]
+            seconds = scorer.stats["seconds"] - scorer_start["seconds"]
+            parts.append(f"arcface={calls}x{(seconds / calls if calls else 0.0):.2f}")
+            parts.append(f"arcface_starts={scorer.stats['starts'] - scorer_start['starts']}")
+            parts.append(f"arcface_failures={scorer.stats['failures'] - scorer_start['failures']}")
+        elif scorer is None:
+            parts.append("arcface=one-shot")
+    except Exception:
+        pass
+    return ";".join(parts)
+
+
 def run_ultra_search(
     facefusion_dir: Path, pixel_boost: str, enhancer_enabled: bool,
     parsed: tuple, progress, caches: dict[str, Any] | None = None,
@@ -2223,6 +2257,13 @@ def run_ultra_search(
     sleeper = sleeper or time.sleep
     minimum = ULTRA_MIN_SECONDS if min_duration_seconds is None else max(0.0, min_duration_seconds)
     started = clock()
+    # Where the time goes (v26): per-phase durations for the timing header.
+    timing: dict[str, list[float]] = {"search": [], "refine": [], "realism": [], "extra": []}
+    judge_seconds = 0.0
+    hold_seconds = 0.0
+    pass_cache = (caches or {}).get("passes")
+    cache_start = pass_cache.describe() if hasattr(pass_cache, "describe") else None
+    scorer_start = dict(IDENTITY_SCORER.stats) if IDENTITY_SCORER is not None else None
     best_result: bytes | None = None
     best_headers: dict[str, str] | None = None
     best_round = 0
@@ -2315,16 +2356,19 @@ def run_ultra_search(
         def report(step: int, cached: bool = False) -> None:
             progress(step + index * len(JOB_STAGES), cached=cached)
 
+        round_started = clock()
         try:
             image, headers = process_swap(
                 facefusion_dir, pixel_boost, enhancer_enabled,
                 with_variation(parsed, variation), report, search_caches
             )
         except Exception as error:
+            timing["search"].append(clock() - round_started)
             errors.append(error)
             print(f"[Ultra] Aday atlandı: {error}", flush=True)
             # The best already verified result remains usable.
             continue
+        timing["search"].append(clock() - round_started)
         identity = score_from_headers(headers)
         if identity is None:
             print('[Ultra] Adayın kimlik ölçümü geçersiz; doğrulanmış tur sayılmadı.', flush=True)
@@ -2377,6 +2421,7 @@ def run_ultra_search(
             refine_attempts += 1
             phase("refine", refine_attempts, depth.refinements)
             spec = (base_variation, params)
+            step_started = clock()
             try:
                 image, headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
@@ -2384,9 +2429,11 @@ def run_ultra_search(
                     lambda *_args, **_kwargs: None, search_caches
                 )
             except Exception as error:
+                timing["refine"].append(clock() - step_started)
                 planner.feedback(params, False)
                 print(f"[Ultra] İnce ayar atlandı: {error}", flush=True)
                 continue
+            timing["refine"].append(clock() - step_started)
             identity = score_from_headers(headers)
             if identity is None:
                 planner.feedback(params, False)
@@ -2426,15 +2473,19 @@ def run_ultra_search(
             realism_finalists += 1
             # Another finalist also gets other diffusion seeds.
             seed = None if position == 0 else REALISM_SEED_BASE + REALISM_SEED_STRIDE * position
+            step_started = clock()
             try:
                 if on_finalist is not None:
                     on_finalist()
                 phase("realism", position + 1, len(specs))
-                upgraded_image, upgraded_headers = process_swap(
-                    facefusion_dir, pixel_boost, enhancer_enabled,
-                    with_refinement(parsed, spec[0], spec[1], realism_seed=seed),
-                    lambda *_args, **_kwargs: None, caches
-                )
+                try:
+                    upgraded_image, upgraded_headers = process_swap(
+                        facefusion_dir, pixel_boost, enhancer_enabled,
+                        with_refinement(parsed, spec[0], spec[1], realism_seed=seed),
+                        lambda *_args, **_kwargs: None, caches
+                    )
+                finally:
+                    timing["realism"].append(clock() - step_started)
                 outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
                 diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
                 upgraded_identity = score_from_headers(upgraded_headers)
@@ -2489,11 +2540,15 @@ def run_ultra_search(
                 if on_finalist is not None:
                     on_finalist()
                 phase("extra", extra_attempts, depth.extra_finalists)
-                candidate_image, candidate_headers = process_swap(
-                    facefusion_dir, pixel_boost, enhancer_enabled,
-                    with_variation(parsed, variation), lambda *_a, **_k: None,
-                    extra_caches
-                )
+                step_started = clock()
+                try:
+                    candidate_image, candidate_headers = process_swap(
+                        facefusion_dir, pixel_boost, enhancer_enabled,
+                        with_variation(parsed, variation), lambda *_a, **_k: None,
+                        extra_caches
+                    )
+                finally:
+                    timing["extra"].append(clock() - step_started)
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
                     continue
@@ -2523,9 +2578,11 @@ def run_ultra_search(
         else:
             if on_judge is not None:
                 on_judge()
+            judge_started = clock()
             try:
                 bounds = parsed[6]["faceBounds"]
                 verdict = judge([face_crop_jpeg(item[0], bounds) for item in pool])
+                judge_seconds = clock() - judge_started
                 pick = judged_winner(verdict, len(pool))
                 if pick is None:
                     outcome = "abstain"
@@ -2547,6 +2604,7 @@ def run_ultra_search(
                 )
             except Exception as error:
                 # The jury is advisory: never lose a verified local result.
+                judge_seconds = clock() - judge_started
                 judge_result = judge_headers("error", len(pool), error=error)
                 print(f"[NVIDIA jüri] Atlandı, yerel seçim korundu: {error}", flush=True)
     finalists = []
@@ -2555,11 +2613,13 @@ def run_ultra_search(
     # finishes them faster, honor the explicit seven-minute minimum without
     # pointlessly running the identical model again. Failed jobs return early.
     remaining = minimum - (clock() - started)
+    hold_started = clock()
     while remaining > 0:
         if on_hold is not None:
             on_hold(remaining)
         sleeper(min(5.0, remaining))
         remaining = minimum - (clock() - started)
+    hold_seconds = clock() - hold_started
     if on_hold is not None:
         on_hold(0.0)
 
@@ -2591,6 +2651,8 @@ def run_ultra_search(
         "X-Retake-Ultra-Search-Budget": str(int(depth.search_seconds)),
         "X-Retake-Ultra-Refinements": f"{refine_wins}/{refine_attempts}",
         "X-Retake-Ultra-Realism-Finalists": str(realism_finalists),
+        "X-Retake-Ultra-Timing": format_ultra_timing(timing, judge_seconds, hold_seconds, clock() - started),
+        "X-Retake-Engine-Stats": engine_stats(pass_cache, cache_start, scorer_start),
     }
     learn()
     print(
@@ -2864,7 +2926,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
             "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined, "
-            "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera"
+            "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera, "
+            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

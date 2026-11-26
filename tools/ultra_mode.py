@@ -57,6 +57,14 @@ def score_from_headers(headers: dict[str, str]) -> float | None:
     return score if math.isfinite(score) and -1.0 <= score <= 1.0 else None
 
 
+def verified_candidate_score(headers):
+    # An explicit failed detail gate is never compatible with a valid
+    # candidate. The absent field is retained for older internal callers.
+    if headers.get("X-Retake-Detail-Gate") not in (None,"passed"):
+        return None
+    return score_from_headers(headers)
+
+
 def detail_from_headers(headers: dict[str, str]) -> float | None:
     try:
         score = float(headers.get("X-Retake-Detail-Score", ""))
@@ -663,3 +671,96 @@ def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_
     if next_params is None:
         return None
     return (winner,next_params),True
+
+
+# Large, independently measured losses should not be traded for an aesthetic
+# vote. These are engineering guard bands, not calibrated identity scores.
+JURY_MAX_QUALITY_LOSS = .12
+JURY_MAX_RIM_INCREASE = .06
+
+def judge_quality_guard(candidate, incumbent):
+    """Check local measurements before allowing an advisory jury switch.
+
+    A missing optional metric is not evidence of an improvement. Old engine
+    reports without those fields remain compatible; compare measured pairs.
+    """
+    # A soft original has nothing to compare: not a detail failure.
+    if candidate.get("X-Retake-Detail-Gate") not in ("passed", "soft-original"):
+        return False, "detail-gate"
+    a,b=score_from_headers(candidate),score_from_headers(incumbent)
+    if a is None or b is None:
+        return False,"identity-unmeasured"
+    if is_identity_sufficient(incumbent):
+        threshold=identity_sufficiency(incumbent)
+        if a < threshold:
+            return False,"identity-floor"
+    else:
+        if a < b-ULTRA_REALISM_TIE_LOSS-1e-9:
+            return False,"identity-loss"
+    # The local winner can be sufficiently sharp overall while only one
+    # region is poor. Require no large drop in measured quality dimensions.
+    for name,measure in (("fine-detail",fine_quality_from_headers),
+                         ("reference-appearance",reference_appearance_from_headers),
+                         ("photo-detail",detail_from_headers)):
+        new,old=measure(candidate),measure(incumbent)
+        if old is not None and new is None:
+            return False,name+"-unmeasured"
+        if new is not None and old is not None and new < old-JURY_MAX_QUALITY_LOSS:
+            return False,name
+    # The jury may not switch to a photo Retake measures as clearly more edited.
+    new_nat, old_nat = naturalness_from_headers(candidate), naturalness_from_headers(incumbent)
+    if new_nat is not None and old_nat is not None and new_nat < old_nat - ULTRA_NATURALNESS_GAIN:
+        return False, "naturalness"
+    new_rim,old_rim=rim_from_headers(candidate),rim_from_headers(incumbent)
+    if old_rim is not None and new_rim is None:
+        return False,"rim-unmeasured"
+    if new_rim is not None and old_rim is not None and new_rim > old_rim+JURY_MAX_RIM_INCREASE:
+        return False,"rim"
+    # Compare individual native detail ratios as distance from the source's
+    # texture, not as a reward for maximum sharpening.
+    for key, parser in (("X-Retake-Detail-Regions",regional_quality_values),
+                        ("X-Retake-Fine-Detail",fine_region_quality_values)):
+        previous=parser(incumbent.get(key,""))
+        proposed=parser(candidate.get(key,""))
+        for region,old in previous.items():
+            new=proposed.get(region)
+            if new is None or new < old-.15:
+                return False,"region-"+region
+    return True,"passed"
+
+
+def _ratio_quality(value):
+    try:
+        ratio=float(value)
+    except (TypeError,ValueError):
+        return None
+    if not math.isfinite(ratio) or not .001<=ratio<=1000:
+        return None
+    return math.exp(-.72*abs(math.log(ratio)))
+
+
+def regional_quality_values(header):
+    allowed={"eyes","nose","mouth","lower_face"}
+    values={}
+    for part in str(header or "").split(","):
+        name,sep,ratio=part.partition(":")
+        if sep and name in allowed:
+            quality=_ratio_quality(ratio)
+            if quality is not None:
+                values[name]=quality
+    return values
+
+
+def fine_region_quality_values(header):
+    # Engine reports before>after, with rejected finishing proposals reset
+    # to the actually delivered ratio.
+    allowed={"eye_r","eye_l","brow_r","brow_l","lips","nose_tip","mouth_inner"}
+    values={}
+    for part in str(header or "").split(","):
+        name,sep,pair=part.partition(":")
+        _,arrow,after=pair.partition(">")
+        if sep and arrow and name in allowed:
+            quality=_ratio_quality(after)
+            if quality is not None:
+                values[name]=quality
+    return values

@@ -151,6 +151,7 @@ export function describeNvidiaJudge(outcome, votes = null, agreement = null, lay
     "switched": "NVIDIA jürisi daha doğal görünen finalisti seçti" + detail,
     "kept": "NVIDIA jürisi yerel seçimi onayladı" + detail,
     "abstain": "NVIDIA jürisi kararsız kaldı; yerel seçim korundu",
+    "local-guard": "NVIDIA önerisi yerel kalite kontrolünü geçemedi; doğrulanmış sonuç korundu",
     "error": "NVIDIA jürisine ulaşılamadı; yerel seçim korundu",
     "single-finalist": "NVIDIA jürisi: kimliği eşit ikinci aday çıkmadı"
   })[outcome] || "";

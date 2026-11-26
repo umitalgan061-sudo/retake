@@ -60,7 +60,7 @@ SHEET_BACKGROUND = 118
 MAX_CLOSEUP_ZOOM = 3.0
 MIN_VOTES = 2
 MIN_AGREEMENT = 2 / 3
-OUTCOMES = ("off", "not-consented", "single-finalist", "kept", "switched", "abstain", "error")
+OUTCOMES = ("off", "not-consented", "single-finalist", "kept", "switched", "abstain", "local-guard", "error")
 
 
 class JudgeError(RuntimeError):
@@ -578,14 +578,15 @@ def request_judgement(config: JudgeConfig, crops: list[bytes], opener=None, time
 
 def judged_winner(verdict: Mapping[str, Any], count: int) -> int | None:
     """Re-apply consensus locally; the server's word alone is not enough."""
-    winner = verdict.get("winner")
-    if (
-        verdict.get("decision") != "winner" or type(winner) is not int or not 0 <= winner < count
-        or not isinstance(verdict.get("votes"), int) or verdict["votes"] < MIN_VOTES
-        or not isinstance(verdict.get("agreement"), (int, float)) or verdict["agreement"] < MIN_AGREEMENT - 1e-9
-    ):
+    try:
+        clean = _normalize_verdict(dict(verdict), count)
+    except (JudgeError, TypeError, ValueError):
         return None
-    return winner
+    if (clean["decision"] != "winner" or clean["winner"] is None
+            or clean["votes"] < MIN_VOTES or clean["agreement"] < MIN_AGREEMENT - 1e-9
+            or clean.get("reason") in ("NOT_ENOUGH_VOTES","SPLIT_VOTE","NARROW_MARGIN")):
+        return None
+    return clean["winner"]
 
 
 def build_judge(env: Mapping[str, str] | None = None, token_path: Path | None = None,
@@ -660,9 +661,14 @@ def judge_headers(outcome: str, finalists: int = 0, verdict: Mapping[str, Any] |
         reason = verdict.get("reason")
         if reason in ("NOT_ENOUGH_VOTES", "SPLIT_VOTE", "NARROW_MARGIN", "CONSENSUS"):
             headers["X-Retake-NVIDIA-Judge-Reason"] = reason
-        headers["X-Retake-NVIDIA-Judge-Votes"] = str(int(verdict.get("votes") or 0))
-        headers["X-Retake-NVIDIA-Judge-Agreement"] = f"{float(verdict.get('agreement') or 0.0):.3f}"
-        headers["X-Retake-NVIDIA-Judge-Models"] = ",".join(verdict.get("models") or [])
+        votes,agreement=verdict.get("votes"),verdict.get("agreement")
+        if type(votes) is int and 0<=votes<=32:
+            headers["X-Retake-NVIDIA-Judge-Votes"]=str(votes)
+        if type(agreement) in (int,float) and math.isfinite(agreement) and 0<=agreement<=1:
+            headers["X-Retake-NVIDIA-Judge-Agreement"]=f"{agreement:.3f}"
+        models=verdict.get("models")
+        if isinstance(models,list):
+            headers["X-Retake-NVIDIA-Judge-Models"]=",".join(dict.fromkeys(m for m in models if isinstance(m,str) and re.fullmatch(r"[A-Za-z0-9._/-]{3,120}",m)))[:484]
         if verdict.get("layout") in (LAYOUT_FACE, LAYOUT_SHEET):
             headers["X-Retake-NVIDIA-Judge-Layout"] = verdict["layout"]
     return headers

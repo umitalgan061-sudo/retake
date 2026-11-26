@@ -483,3 +483,18 @@ class DistinctExtraWorkTest(unittest.TestCase):
         headers={**score(.88),"X-Retake-Identity-Photo-Level":".89","X-Retake-Similarity-Before":".90"}
         self.assertTrue(needs_extra_finalist(headers))
         self.assertFalse(needs_extra_finalist({**headers,"X-Retake-Similarity":".90"}))
+
+
+class ExplicitDetailFailureTest(unittest.TestCase):
+    def test_failed_high_score_cannot_win_or_set_peak_in_grid_or_realism(self):
+        def fake_swap(*args):
+            variant=args[3][6]["variation"]
+            if (args[5] or {}).get("realism") or variant==1:
+                return b"bad",{**score(.98),"X-Retake-Detail-Gate":"failed"}
+            return b"good",{**score(.83),"X-Retake-Detail-Gate":"passed"}
+        with patch.object(srv,"process_swap",fake_swap):
+            photo,headers=srv.run_ultra_search(Path("."),"1024x1024",False,fake_request(),
+                lambda *_a,**_k:None,caches={"realism":{"python":Path("gpu")}},min_duration_seconds=0)
+        self.assertEqual(photo,b"good")
+        self.assertAlmostEqual(float(headers["X-Retake-Ultra-Peak-Identity"]),.83)
+        self.assertEqual(headers["X-Retake-Ultra-Rounds"],"23")

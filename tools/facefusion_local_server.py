@@ -41,7 +41,7 @@ try:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -68,7 +68,7 @@ except ImportError:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -2438,7 +2438,7 @@ def judge_pool(
     eligible = [item for item in finalists if item[0] != best_result
                 and identity_acceptable(item[1], peak_identity)
                 and (not is_identity_sufficient(best_headers) or is_identity_sufficient(item[1]))
-                and item[1].get("X-Retake-Detail-Gate") in DETAIL_GATE_OK]
+                and judge_quality_guard(item[1],best_headers)[0]]
     return diverse_finalists(pool + eligible, JUDGE_MAX_CANDIDATES)
 
 
@@ -2598,7 +2598,7 @@ def run_ultra_search(
             # The best already verified result remains usable.
             continue
         timing["search"].append(clock() - round_started)
-        identity = score_from_headers(headers)
+        identity = verified_candidate_score(headers)
         if identity is None:
             print('[Ultra] Adayın kimlik ölçümü geçersiz; doğrulanmış tur sayılmadı.', flush=True)
             continue
@@ -2663,7 +2663,7 @@ def run_ultra_search(
                 print(f"[Ultra] İnce ayar atlandı: {error}", flush=True)
                 continue
             timing["refine"].append(clock() - step_started)
-            identity = score_from_headers(headers)
+            identity = verified_candidate_score(headers)
             if identity is None:
                 planner.feedback(params, False)
                 continue
@@ -2720,7 +2720,7 @@ def run_ultra_search(
                     timing["realism"].append(clock() - step_started)
                 outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
                 diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
-                upgraded_identity = score_from_headers(upgraded_headers)
+                upgraded_identity = verified_candidate_score(upgraded_headers)
                 if upgraded_identity is not None and upgraded_identity > peak_identity:
                     peak_identity = upgraded_identity
                     strongest = (upgraded_image, upgraded_headers, round_of(spec), spec)
@@ -2834,6 +2834,8 @@ def run_ultra_search(
                     outcome = "abstain"
                 elif pick == 0:
                     outcome = "kept"
+                elif not judge_quality_guard(pool[pick][1],best_headers)[0]:
+                    outcome = "local-guard"
                 else:
                     outcome = "switched"
                     best_result, best_headers, best_round = pool[pick]

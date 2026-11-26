@@ -159,3 +159,35 @@ def reference_evidence_file(original_path, edited_path, bounds, landmarks, real_
 def format_evidence(evidence):
     return ",".join(f"{name}:{a:.2f}>{b:.2f}/{c:.3f}>{d:.3f}"
                     for name,(a,b,c,d) in sorted(evidence.items()))
+
+
+def regional_tie_indices(identity, details, incumbent, sufficient=None, limit=3):
+    """At most three candidates, including incumbent; preserve the peak band."""
+    if not 0<=incumbent<len(identity) or len(identity)!=len(details) or limit<1:
+        return []
+    def valid(value):
+        return isinstance(value,(float,int)) and not isinstance(value,bool) and math.isfinite(value)
+    base=identity[incumbent]; quality=details[incumbent]
+    if not valid(base) or not valid(quality):
+        return []
+    peak=max(value for value in identity if valid(value))
+    threshold=max(base-.002,peak-.003)
+    if valid(sufficient) and base>=sufficient:
+        threshold=max(sufficient,base-.002)
+    eligible=[i for i,(score,detail) in enumerate(zip(identity,details))
+              if i!=incumbent and valid(score) and valid(detail)
+              and score>=threshold and detail>=quality-.015]
+    eligible.sort(key=lambda i:(identity[i],details[i]),reverse=True)
+    return [incumbent]+eligible[:limit-1]
+
+
+def choose_regional_evidence(identity, details, incumbent, scores, sufficient=None):
+    allowed=regional_tie_indices(identity,details,incumbent,sufficient)
+    if not allowed:
+        return incumbent
+    base=scores.get(incumbent)
+    if not isinstance(base,(float,int)) or not math.isfinite(base) or not 0<=base<=1:
+        return incumbent
+    measured=[i for i in allowed if i in scores and isinstance(scores[i],(float,int))
+              and math.isfinite(scores[i]) and 0<=scores[i]<=1 and scores[i]>=base+.075]
+    return max(measured,key=lambda i:(scores[i],identity[i],details[i])) if measured else incumbent

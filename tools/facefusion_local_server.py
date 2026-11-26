@@ -123,10 +123,13 @@ NATURALNESS_TOLERANCE = 8.0
 IDENTITY_REPORT_VERSION = "centroid-v2"
 PAIRING_HEADER = "X-Retake-Token"
 # Identity swappers, measured on real photos with the same 25 references
-# (CPU, full pipeline): HyperSwap 1b vs AlphaFace — garden ArcFace 0.798 vs
-# 0.795, naturalness 81 vs 78; night 0.845 vs 0.839, 83.8 vs 82.3. Ultra
-# alternates them across variants (even: HyperSwap 1b, odd: AlphaFace) so the
-# identity/naturalness rules decide per person; a failed HyperSwap pass
+# (CPU, full pipeline, HyperSwap 1b vs AlphaFace, ArcFace / naturalness):
+#   512 px  garden 0.798/81 vs 0.795/78   night 0.845/84 vs 0.839/82
+#   1024 px garden 0.801/79 vs 0.801/73   night 0.847/86 vs 0.840/86
+#           studio 0.878/80 vs 0.865/87 (HyperSwap warmer, smoother skin)
+# Neither wins every photo, so Ultra alternates them across variants (even:
+# HyperSwap 1b, odd: AlphaFace) and the identity/naturalness rules decide per
+# photo; a failed HyperSwap pass
 # (e.g. the model cannot be downloaded) falls back to AlphaFace.
 # Licenses (FaceFusion catalogue): hyperswap_1b_256 ResearchRAIL,
 # alphaface_256 Non-Commercial — personal use only, see docs.

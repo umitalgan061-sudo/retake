@@ -45,7 +45,7 @@ import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
-import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming } from "./src/diagnostics.js";
+import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision } from "./src/diagnostics.js";
 import { MIN_UPSCALE, describeNativeFinish, finishUpscaledFace } from "./src/grain.js";
 import {
   bestResultIndex,
@@ -345,6 +345,7 @@ async function checkFaceFusionStatus() {
         checked: true,
         configured: true,
         model: health.model || "uniface_256",
+        qualityRevision: validQualityRevision(health.quality_revision),
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
         nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
@@ -358,13 +359,13 @@ async function checkFaceFusionStatus() {
         ultraDepths: health.ultra_depths && typeof health.ultra_depths === "object" ? health.ultra_depths : null,
         finalFaceEditProof: health.final_face_edit_proof === true,
         personalModel: Boolean(health.personal_model),
-        message: health.final_face_edit_proof !== true
+        message: describeQualityCompatibility(health.quality_revision) || (health.final_face_edit_proof !== true
           ? 'Eski motor: son yüz değişimi denetimi için yerel Retake motorunu güncelle. Tarayıcı son görüntüyü yine kontrol eder.'
           : health.personal_model
           ? "Ultra-420 v22 · tam referans yüzü, sakal/çene ve kişisel model adayları hazır."
           : health.realism
             ? "Ultra-420 v22 · tam yüz ve sakal/çene adayları, finalde gerçekçilik açık."
-            : "Ultra-420 v22 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1"
+            : "Ultra-420 v22 · 24 aday, tam yüz ve sakal/çene aktarımı. Gerçekçilik: tools\\install_realism.ps1")
       };
     } catch (error) {
       const detail = error?.message || "Yerel FaceFusion bağlantısı kurulamadı.";
@@ -736,6 +737,7 @@ function selectResult(index) {
     item.regionalEdit ? "Bölgesel RGB farkı (/255): " + item.regionalEdit.split(",").map(part => { const [region,value]=part.split(":"); const name=({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz",moustache:"bıyık",chin:"çene",forehead:"alın",brows:"kaşlar",left_cheek:"sol yanak",right_cheek:"sağ yanak",left_jaw:"sol çene",right_jaw:"sağ çene"})[region]; const delta=Number(value); return name && Number.isFinite(delta) && delta>=0 && delta<=255 ? name+" "+delta.toFixed(1) : ""; }).filter(Boolean).join(", ") : "",
     describePortraitEvidence(item.lowerTexture,item.referenceAppearance),
     describePortraitGeometry(item.portraitGeometry),
+    validQualityRevision(item.diagnostics?.["x-retake-quality-revision"]) ? "kalite sürümü "+item.diagnostics["x-retake-quality-revision"] : "",
     describeSourcePortraitQuality(item.sourcePortraitQuality),
     item.inputPreparation === 'native-contrast' ? 'küçük yüz için yerel kontrast hazırlığı kullanıldı' : '',
     item.neckStatus === "applied" ? "boyun/boğaz ten uyumu: "+item.neckPixels+" piksel" : item.neckStatus && item.neckStatus !== "off" ? "boyun korundu: "+(({ "no-mesh":"yüz işaretleri yetersiz","pose-uncertain":"poz belirsiz","skin-uncertain":"ten alanı belirsiz","neck-not-visible":"boyun görünmüyor","already-balanced":"ek düzeltme gerekli değil","quality-rejected":"kalite kontrolü","error":"işlem hatası","unreadable":"görüntü okunamadı"})[item.neckStatus] || "uygun aday yok") : "",
@@ -2714,7 +2716,7 @@ async function copyDiagnostics() {
     if (response.ok) health = await response.json();
   } catch { /* the engine may be off: the result's own headers still help */ }
   const report = buildDiagnosticReport({
-    headers: item.diagnostics, health, depth: item.diagnostics["x-retake-ultra-depth"] || ""
+    headers: item.diagnostics, health, depth: item.diagnostics["x-retake-ultra-depth"] || "", appVersion: WEB_QUALITY_REVISION
   });
   try {
     await navigator.clipboard.writeText(report);

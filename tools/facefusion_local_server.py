@@ -2536,6 +2536,9 @@ def run_ultra_search(
                 outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
                 diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
                 upgraded_identity = score_from_headers(upgraded_headers)
+                if upgraded_identity is not None and upgraded_identity > peak_identity:
+                    peak_identity = upgraded_identity
+                    strongest = (upgraded_image, upgraded_headers, round_of(spec), spec)
                 if collect_finalists and upgraded_identity is not None:
                     finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, round_of(spec)), max(peak_identity, upgraded_identity))
                 if (upgraded_identity is not None
@@ -2550,6 +2553,7 @@ def run_ultra_search(
                         flux_outcome = "finalist-not-selected" if outcome == "accepted" else outcome
                         flux_diagnostics = diagnostics
                     print(f"[Ultra] Finalist {position + 1} difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+                keep_identity_anchor()
             except Exception as error:
                 # Realism is optional: preserve a previously verified result.
                 if flux_outcome == "not-attempted":
@@ -2600,6 +2604,9 @@ def run_ultra_search(
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
                     continue
                 observations.append((variation, candidate_headers))
+                if candidate_score > peak_identity:
+                    peak_identity = candidate_score
+                    strongest = (candidate_image, candidate_headers, round_of((variation,None)), (variation,None))
                 if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
@@ -2613,6 +2620,7 @@ def run_ultra_search(
                     if flux_outcome == "accepted":
                         flux_outcome = "finalist-not-selected"
                     flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                keep_identity_anchor()
                 if collect_finalists:
                     finalists = retain_judge_finalists(finalists, (candidate_image, candidate_headers, ULTRA_VARIATIONS.index(variation) + 1), peak_identity)
             except Exception as error:

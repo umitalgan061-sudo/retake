@@ -186,3 +186,18 @@ test("portrait geometry requires a measured mesh and respects pixel aspect ratio
   assert.equal(portraitGeometry(points.slice(0,100),400,200),null);
   assert.equal(portraitGeometry(points,20,20),null);
 });
+
+
+test("native input evidence does not mistake a larger smooth image for texture", async () => {
+  const {sourcePortraitQuality,describeSourcePortraitQuality}=await import("../src/quality.js");
+  const size=64, flat=new Uint8ClampedArray(size*size*4).fill(120);
+  const bounds={x:0,y:0,width:64,height:64};
+  const a=sourcePortraitQuality(flat,size,size,bounds);
+  assert.ok(a.edgeEnergy<1e-9);
+  assert.equal(a.clippedFraction,0);
+  assert.match(describeSourcePortraitQuality(a),/gerçek giriş ayrıntısı sınırlı/);
+  const striped=flat.slice();
+  for(let y=0;y<size;y++)for(let x=0;x<size;x++)if(x%2===0)striped.fill(80,(y*size+x)*4,(y*size+x)*4+3);
+  assert.ok(sourcePortraitQuality(striped,size,size,bounds).edgeEnergy>a.edgeEnergy);
+  assert.equal(sourcePortraitQuality(flat,size,size,{...bounds,width:3}),null);
+});

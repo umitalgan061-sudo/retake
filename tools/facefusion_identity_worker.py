@@ -180,6 +180,11 @@ def serve(facefusion_dir: Path, models=None, stdin=None, stdout=None) -> int:
     Only the engine that started this process writes to its stdin; paths are
     the engine's own temporary files.
     """
+    if stdin is None and stdout is None:
+        # The engine reads and writes UTF-8 whatever the Windows code page.
+        for stream in (sys.stdin, sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
 

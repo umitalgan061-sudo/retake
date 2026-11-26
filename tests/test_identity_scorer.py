@@ -1,6 +1,7 @@
 """Persistent ArcFace scorer (v25): one model load per job, safe fallbacks."""
 from __future__ import annotations
 
+import contextlib
 import io
 import json
 import subprocess
@@ -213,7 +214,8 @@ class EngineIntegrationTest(unittest.TestCase):
             events.append(args[5])
             return next(answers)
 
-        with patch.object(srv, "run_facefusion", fake_run):
+        # Captured: a cp1252 CI console cannot print the engine's Turkish log.
+        with patch.object(srv, "run_facefusion", fake_run), contextlib.redirect_stdout(io.StringIO()):
             used = srv.run_with_memory_fallback(Path("ff"), Path("t"), [Path("s")], Path("o"), "m", "1024x1024")
         self.assertEqual(used, "1024x1024", "the same quality setting after freeing memory")
         self.assertEqual(events, ["1024x1024", "closed", "1024x1024"])

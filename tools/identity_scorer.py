@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import queue
 import subprocess
 import sys
@@ -43,6 +44,14 @@ def _pump(stream, lines: "queue.Queue[str | None]") -> None:
         pass
     finally:
         lines.put(None)  # end of stream: the worker exited
+
+
+def _log(message: str) -> None:
+    # A console that cannot show Turkish letters must not break a swap.
+    try:
+        print(message, flush=True)
+    except UnicodeEncodeError:
+        print(message.encode("ascii", "replace").decode("ascii"), flush=True)
 
 
 def _drain(stream, tail: deque) -> None:
@@ -131,10 +140,13 @@ class PersistentIdentityScorer:
             raise FileNotFoundError(f"ArcFace çalışanı bulunamadı: {self.worker}")
         self._stderr = deque(maxlen=STDERR_TAIL_LINES)
         command = [self.python, str(self.worker), "--facefusion-dir", str(self.facefusion_dir), "--serve"]
+        options = dict(self._popen_options)
+        # Both ends of the pipes speak UTF-8, whatever the Windows code page.
+        options.setdefault("env", {**os.environ, "PYTHONIOENCODING": "utf-8"})
         process = self._popen(
             command, cwd=str(self.facefusion_dir), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1,
-            **self._popen_options
+            **options
         )
         lines: "queue.Queue[str | None]" = queue.Queue()
         threading.Thread(target=_pump, args=(process.stdout, lines), daemon=True).start()
@@ -183,10 +195,9 @@ class PersistentIdentityScorer:
                 self._kill()
                 if self.failures >= MAX_FAILURES:
                     self.disabled = True
-                print(
+                _log(
                     f"[ArcFace] Kalıcı ölçüm sunucusu kullanılamadı ({self.last_error}); tek seferlik ölçüme dönülüyor"
-                    + ("; bu oturumda kapatıldı." if self.disabled else "."),
-                    flush=True
+                    + ("; bu oturumda kapatıldı." if self.disabled else ".")
                 )
                 return None
 

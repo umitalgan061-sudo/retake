@@ -125,3 +125,11 @@ test("identity pixel scope is distinguished from browser export", async () => {
   assert.match(summarizeQualityEvidence({"x-retake-identity-pixel-scope":"visible-engine-crop"}), /tarayıcı ölçeklemesi öncesi/);
   assert.equal(summarizeQualityEvidence({"x-retake-identity-pixel-scope":"unverified"}),"");
 });
+
+
+test("ArcFace reuse diagnostics show actual counters and reject malformed values", async () => {
+  const {describeIdentityScoreCache}=await import("../src/diagnostics.js");
+  assert.match(describeIdentityScoreCache("hits:40,measured:70,failed:2"),/40 tekrar ölçümü önlendi/);
+  assert.equal(describeIdentityScoreCache("hits:NaN,measured:70,failed:2"),"");
+  assert.match(buildDiagnosticReport({headers:{"x-retake-identity-score-cache":"hits:40,measured:70,failed:2"}}),/70 benzersiz ölçüm isteği/);
+});

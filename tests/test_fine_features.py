@@ -180,6 +180,8 @@ class FineFeatureTest(unittest.TestCase):
         np.testing.assert_array_equal(refined[:, :, 3], alpha)
         np.testing.assert_array_equal(refined[:, :200, :3], soft[:, :200])
         self.assertEqual(report["features"]["eye_l"]["action"], "restore")
+        self.assertNotIn("eye_r", report["features"])
+        self.assertEqual(report["catchlights"]["eye_r"], "unmeasured")
 
     def test_missing_or_broken_mesh_is_a_no_op(self):
         for mesh in (None, [[0, 0]] * 10, [[float("nan"), 0]] * 478, [[5000, 5000]] * 478):

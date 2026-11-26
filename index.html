@@ -177,6 +177,15 @@
               <button id="shareButton" class="download-button share-button" type="button" hidden disabled><svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg> Paylaş</button>
               <button id="diagnosticsButton" class="download-button share-button" type="button" hidden disabled title="Bu sonucun ölçümlerini kopyala (görsel, dosya adı veya yol içermez)"><svg viewBox="0 0 24 24"><path d="M9 9h10v12H9zM5 15V3h10"/></svg> Tanı raporu</button>
             </div>
+            <details class="profile-details">
+              <summary><span>Yerel kalite kıyaslaması</span></summary>
+              <p id="baselineStatus" class="disabled-note" aria-live="polite">Sonuç üretildikten sonra ölçümleri bu tarayıcıda saklayabilirsin.</p>
+              <div class="export-row">
+                <button id="baselineSave" class="download-button" type="button" disabled>Ölçüt olarak kaydet / değiştir</button>
+                <button id="baselineClear" class="download-button" type="button" disabled>Ölçütü sil</button>
+              </div>
+              <p class="disabled-note">Tek ölçüt saklanır; görsel, dosya adı veya yüz gömme vektörü kaydedilmez. Aynı fotoğraf, referanslar ve ayarlarla tekrar dene. Ölçümler cihazda kalır; tanı raporunu kopyalarsan yalnız sayısal kıyas paylaşılır.</p>
+            </details>
             <p id="disabledNote" class="disabled-note">Ultra Mod her seferinde birden fazla adayı karşılaştırır ve en iyi tek sonucu gösterir.</p>
           </section>
 

@@ -88,3 +88,39 @@ class OutputTransportTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SmallFaceInputTest(unittest.TestCase):
+    def test_preparation_preserves_source_and_outside_region(self):
+        import tempfile
+        from pathlib import Path
+        from tools.retake_output_transport import prepare_small_face_inference
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            image=np.full((120,140,3),130,np.uint8)
+            for x in range(30,100):
+                image[20:100,x]=int(130+12*np.sin(x*1.4))
+            path=root/"input.png"
+            cv2.imwrite(str(path),image)
+            original=path.read_bytes()
+            bounds=dict(x=30,y=20,width=70,height=80)
+            output,status=prepare_small_face_inference(path,bounds,7,root)
+            self.assertEqual(status,"native-contrast")
+            self.assertEqual(path.read_bytes(),original)
+            result=cv2.imread(str(output))
+            self.assertEqual(result.shape,image.shape)
+            mask=np.zeros(image.shape[:2],bool);mask[20:100,30:100]=True
+            self.assertTrue(np.array_equal(result[~mask],image[~mask]))
+            self.assertGreater(np.count_nonzero(result!=image),20)
+            self.assertLessEqual(np.max(np.abs(result.astype(int)-image.astype(int))),10)
+            self.assertEqual(prepare_small_face_inference(path,bounds,0,root),(path,"original"))
+
+    def test_flat_and_invalid_small_faces_do_not_invent_detail(self):
+        import tempfile
+        from pathlib import Path
+        from tools.retake_output_transport import prepare_small_face_inference
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp);path=root/"flat.png"
+            cv2.imwrite(str(path),np.full((100,100,3),120,np.uint8))
+            self.assertEqual(prepare_small_face_inference(path,dict(x=10,y=10,width=70,height=70),7,root),(path,"insufficient-evidence"))
+            self.assertEqual(prepare_small_face_inference(path,dict(x=-10,y=10,width=70,height=70),7,root),(path,"invalid-bounds"))

@@ -21,12 +21,14 @@ try:
         candidate_fit, match_broad_light
     )
     from .retake_appearance import LOWER_FACE, LIPS
+    from .throat_transfer import throat_enabled, transfer_throat
 except ImportError:
     from retake_detail import (
         INNER_MOUTH, _changed_mask, _prepare_candidate,
         candidate_fit, match_broad_light
     )
     from retake_appearance import LOWER_FACE, LIPS
+    from throat_transfer import throat_enabled, transfer_throat
 
 # Include the upper-lip moustache without reaching the nostrils or lower nose.
 MOUSTACHE = (98, 2, 327, 425, 291, 0, 61, 205)
@@ -77,6 +79,7 @@ def choose_and_transfer_lower_face(
     moustache_scale: float = 1.0,
     jaw_scale: float = 1.0,
     alternate: bool = False,
+    throat: bool = True,
 ) -> tuple[np.ndarray, int, list[dict[str, float]]]:
     """Return an additional lower-face candidate using real photo structure.
 
@@ -136,7 +139,17 @@ def choose_and_transfer_lower_face(
     # the existing lip-exclusion and face-coverage masks still enforced.
     amount = zoned_transfer_amount(weight, points, face_width, strength, moustache_scale, jaw_scale)
     merged = swapped.astype(np.float32) * (1.0 - amount[:, :, None]) + warped * amount[:, :, None]
-    return np.clip(np.rint(merged), 0, 255).astype(np.uint8), selected, fits
+    result = np.clip(np.rint(merged), 0, 255).astype(np.uint8)
+    # The mesh ends at the jaw line: carry the same reference's under-chin
+    # beard and throat skin as well (throat_transfer.py; any doubt keeps it).
+    if throat and throat_enabled():
+        try:
+            result, info = transfer_throat(result, target, candidates[selected], points, face_width,
+                                           strength=min(1.0, strength))
+            print(f"[Retake] Çene altı ve boğaz referanstan aktarıldı ({info['pixels']} piksel).", flush=True)
+        except ValueError as error:
+            print(f"[Retake] Boğaz aktarımı atlandı: {error}", flush=True)
+    return result, selected, fits
 
 
 def zoned_transfer_amount(weight, points, face_width, strength, moustache_scale=1., jaw_scale=1.):

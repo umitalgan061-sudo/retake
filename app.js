@@ -1881,7 +1881,7 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
     }, profile.jawContour, { strength: 1.0, maxShift: 0.10 })
     : null;
   const jawWarp = shapePlan
-    ? (shapePlan.controls.length ? { controls: shapePlan.controls, anchors: shapePlan.anchors } : null)
+    ? (shapePlan.controls.length ? { controls: shapePlan.controls, anchors: shapePlan.anchors, exact: true } : null)
     : flatPlan;
   const shapeSummary = shapePlan ? describeShapePlan(shapePlan) : (flatPlan ? describeShapePlan({ method: "2d" }) : "");
   // Always prepare pose-matched real-reference crops for the lower-face-only

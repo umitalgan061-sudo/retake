@@ -176,7 +176,7 @@ def texture_only_candidate(original, generated, bounds, strength):
     yy,xx=np.mgrid[y0:y1,x0:x1]
     nx,ny=(xx-x)/fw,(yy-y)/fh
     mask=np.zeros(a.shape,np.float32)
-    for cx,cy,rx,ry in ((.50,.17,.23,.095),(.24,.54,.085,.105),(.76,.54,.085,.105)):
+    for cx,cy,rx,ry in TEXTURE_ZONES:
         radius=((nx-cx)/rx)**2+((ny-cy)/ry)**2
         zone=np.clip((1-radius)*2,0,1).astype(np.float32)
         mask=np.maximum(mask,zone*zone*(3-2*zone))
@@ -186,3 +186,47 @@ def texture_only_candidate(original, generated, bounds, strength):
     corrected=np.clip(np.rint(base[:,:,:3].astype(np.float32)+residual[:,:,None]),0,255).astype(np.uint8)
     output[y0:y1,x0:x1,:3]=corrected
     return output
+
+
+TEXTURE_ZONES=((.50,.17,.23,.095),(.24,.54,.085,.105),(.76,.54,.085,.105))
+
+
+def interior_texture_gain(original_path, base_path, candidate_path, bounds):
+    """Native source-relative high-frequency fidelity, not a realism score.
+
+    Require at least two measurable regions and no substantial region loss.
+    A flat or unavailable original never supplies a positive gain.
+    """
+    import cv2
+    import numpy as np
+    source=cv2.imread(str(original_path),cv2.IMREAD_COLOR)
+    base=cv2.imread(str(base_path),cv2.IMREAD_UNCHANGED)
+    candidate=cv2.imread(str(candidate_path),cv2.IMREAD_UNCHANGED)
+    if source is None or base is None or candidate is None or base.shape!=candidate.shape or base.shape!=(*source.shape[:2],4):
+        return None
+    x,y,fw,fh=(float(bounds[k]) for k in ("x","y","width","height"))
+    if not np.isfinite([x,y,fw,fh]).all() or min(fw,fh)<48:
+        return None
+    h,w=source.shape[:2]
+    x0,y0=max(0,int(x)),max(0,int(y))
+    x1,y1=min(w,int(np.ceil(x+fw))),min(h,int(np.ceil(y+fh)))
+    if min(x1-x0,y1-y0)<48: return None
+    src=source[y0:y1,x0:x1]
+    b=base[y0:y1,x0:x1]
+    c=candidate[y0:y1,x0:x1]
+    yy,xx=np.mgrid[y0:y1,x0:x1]
+    nx,ny=(xx-x)/fw,(yy-y)/fh
+    def band(image):
+        luma=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY).astype(np.float32)
+        return luma-cv2.GaussianBlur(luma,(0,0),1.25)
+    bands=[band(src),band(np.where(b[:,:,3:4]>0,b[:,:,:3],src)),band(np.where(c[:,:,3:4]>0,c[:,:,:3],src))]
+    gains=[]
+    for cx,cy,rx,ry in TEXTURE_ZONES:
+        mask=(((nx-cx)/rx)**2+((ny-cy)/ry)**2<.5)&(b[:,:,3]>180)&(c[:,:,3]>180)
+        if np.count_nonzero(mask)<32: continue
+        e=[float(np.sqrt(np.mean(v[mask]**2))) for v in bands]
+        if e[0]<1.25: continue
+        quality=lambda value: float(np.exp(-abs(np.log((value+.25)/(e[0]+.25)))))
+        gains.append(quality(e[2])-quality(e[1]))
+    if len(gains)<2 or min(gains)<-.04: return None
+    return float(np.mean(gains))

@@ -182,3 +182,23 @@ class NativeRegionalEditTest(unittest.TestCase):
             cv2.imwrite(str(root/"a.png"),np.zeros((50,50,3),np.uint8))
             self.assertEqual(regional_edit_statistics(root/"a.png",root/"a.png",
                 {"x":0,"y":0,"width":float("nan"),"height":40}),{})
+
+
+class DeliveredQualityEvidenceTest(unittest.TestCase):
+    def test_hidden_rgb_neither_fakes_detail_nor_counts_as_edit(self):
+        import tempfile
+        from pathlib import Path
+        from tools.ultra_quality import check_photo_detail,regional_edit_statistics
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            rng=np.random.default_rng(123)
+            source=rng.integers(60,190,(120,120,3),dtype=np.uint8)
+            hidden=np.dstack((np.zeros_like(source),np.zeros(source.shape[:2],np.uint8)))
+            a,b=root/"source.png",root/"hidden.png"
+            cv2.imwrite(str(a),source)
+            cv2.imwrite(str(b),hidden)
+            bounds={"x":10,"y":10,"width":100,"height":100}
+            quality,ratios=check_photo_detail(a,b,bounds)
+            self.assertEqual(quality,1.0)
+            self.assertTrue(all(v==1.0 for v in ratios.values()))
+            self.assertTrue(all(v==0 for v in regional_edit_statistics(a,b,bounds).values()))

@@ -204,3 +204,28 @@ class FineFeatureTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FineDeliveryGuardTest(unittest.TestCase):
+    def test_independent_eye_regression_cannot_hide_in_average_gain(self):
+        from tools.fine_features import fine_regions_preserved,accept_fine_refinement
+        report={"status":"applied","quality_before":.60,"quality_after":.85,
+                "catchlights_restored":1,
+                "features":{"eye_r":{"before":.95,"after":.4},"eye_l":{"before":.4,"after":.95}}}
+        self.assertFalse(fine_regions_preserved(report))
+        self.assertEqual(accept_fine_refinement(report,.84,.84,True),(False,"region-regression"))
+        report["features"]["eye_r"]["after"]=.92
+        self.assertTrue(accept_fine_refinement(report,.84,.84,True)[0])
+
+    def test_rejected_finish_reports_no_restored_lights_or_changed_ratios(self):
+        from tools.fine_features import delivered_fine_report
+        proposal={"features":{"eye_r":{"before":.5,"after":.9,"action":"restore"}},
+                  "catchlights":{"eye_r":"restored","eye_l":"present"},
+                  "sclera":{"eye_r":"corrected"},"catchlights_restored":1,"sclera_corrected":1}
+        actual=delivered_fine_report(proposal,False)
+        self.assertEqual(actual["features"]["eye_r"]["after"],.5)
+        self.assertEqual(actual["catchlights_restored"],0)
+        self.assertEqual(actual["catchlights"]["eye_r"],"not-applied")
+        self.assertEqual(actual["sclera_corrected"],0)
+        self.assertEqual(proposal["features"]["eye_r"]["after"],.9)
+        self.assertIs(delivered_fine_report(proposal,True),proposal)

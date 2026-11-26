@@ -283,6 +283,7 @@ export function describeFineFeatures(decision, detail = "", catchlights = "", sc
   if (decision === "unchanged") return "göz, kaş ve dudak ayrıntısı fotoğrafla uyumlu";
   if (decision === "identity-loss") return "ince bölge iyileştirmesi kimliği korumadığı için uygulanmadı";
   if (decision === "detail-gate") return "ince bölge adayı ayrıntı kontrolünü geçemedi";
+  if (decision === "region-regression") return "göz/dudak ayrıntısı kaybı nedeniyle ince düzeltme uygulanmadı";
   if (decision === "no-gain") return "ince bölge düzeltmesi ölçülebilir kazanç sağlamadı; sonuç korundu";
   return "";
 }
@@ -358,4 +359,14 @@ export function describeSourcePortraitQuality(value) {
     "giriş kenar enerjisi "+value.edgeEnergy.toFixed(1).replace(".",","),
     "çok koyu/açık piksel %"+(100*value.clippedFraction).toFixed(1).replace(".",","),
     Math.min(value.width,value.height)<96?"küçük yüz: gerçek giriş ayrıntısı sınırlı":""].filter(Boolean).join(" · ");
+}
+
+
+export function describeNeckEvidence(value) {
+  const match=/^lab:(\d+(?:\.\d+)?),luma:(-?\d+(?:\.\d+)?)$/.exec(String(value || ""));
+  if(!match)return "";
+  const [lab,luma]=match.slice(1).map(Number);
+  if(!Number.isFinite(lab)||!Number.isFinite(luma)||lab>50||Math.abs(luma)>30)return "";
+  return "boyun renk düzeltmesi (Lab kanal birimi) "+lab.toFixed(2).replace(".",",")+
+    " · boyun açıklık farkı "+luma.toFixed(2).replace(".",",");
 }

@@ -406,3 +406,14 @@ class LateIdentityPeakTest(unittest.TestCase):
                 lambda *_a,**_k:None,caches={"realism":{"python":Path("gpu")}},min_duration_seconds=0)
         self.assertEqual(photo,b"clean")
         self.assertAlmostEqual(float(headers["X-Retake-Ultra-Peak-Identity"]),.88)
+
+
+class FinishingIdentityFloorTest(unittest.TestCase):
+    def test_finish_steps_cannot_accumulate_loss_or_drop_below_reference_floor(self):
+        from tools.ultra_mode import finishing_identity_floor
+        self.assertAlmostEqual(finishing_identity_floor(.832,None),.828)
+        self.assertAlmostEqual(finishing_identity_floor(.871,.89),.87)
+        self.assertAlmostEqual(finishing_identity_floor(.88,.89),.876)
+        floor=finishing_identity_floor(.832,.89)
+        self.assertGreaterEqual(.829,floor)
+        self.assertLess(.826,floor)

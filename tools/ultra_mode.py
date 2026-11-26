@@ -628,3 +628,9 @@ def reference_appearance_preference(candidate, best):
     if new is None or old is None or abs(new-old) <= .075:
         return None
     return new > old
+
+
+def finishing_identity_floor(anchor, reference_level):
+    """One loss allowance for the whole finishing pipeline."""
+    level=sufficiency_from_level(reference_level)
+    return max(anchor-.004,level) if level is not None and anchor>=level else anchor-.004

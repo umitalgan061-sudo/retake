@@ -153,3 +153,94 @@ export function summarizeQualityEvidence(headers) {
     rows.push("seçilen adayda FLUX kullanıldı");
   return rows.length?"Kalite özeti (kosinüs ölçeği, benzerlik yüzdesi değil): "+rows.join(" · "):"";
 }
+
+
+// Explicit, single local comparison baseline. No image, filename, embedding,
+// token or fingerprint is copied to diagnostics or sent to the engine.
+export const QUALITY_BASELINE_KEY = "retake-quality-baseline-v1";
+const HEX=/^[a-f0-9]{64}$/;
+const COMPARISON_FIELDS = Object.freeze({
+  similarity:["x-retake-similarity",-1,1,100,"kimlik kosinüs puanı"],
+  peak:["x-retake-ultra-peak-identity",-1,1,100,"arama zirvesi"],
+  detail:["x-retake-detail-score",0,1,100,"ayrıntı uyumu"],
+  fine:["x-retake-fine-quality",0,1,100,"ince ayrıntı uyumu"],
+  appearance:["x-retake-reference-appearance",0,1,100,"alt yüz doku uyumu"],
+  rim:["x-retake-rim-fraction",0,1,100,"kontur farkı"],
+});
+const toHex=bytes=>Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,"0")).join("");
+async function hashBuffer(buffer) { return toHex(await globalThis.crypto.subtle.digest("SHA-256",buffer)); }
+
+export async function comparisonContext({target,referenceKey,faceIndex,depth,judge,full,benchmark,prepared,metadata}) {
+  if(!globalThis.crypto?.subtle || !target?.arrayBuffer || !HEX.test(referenceKey||"") ||
+     !Number.isInteger(faceIndex)||faceIndex<0 || benchmark) return null;
+  try {
+    const targetHash=await hashBuffer(await target.arrayBuffer());
+    const input=await hashBuffer(new TextEncoder().encode(JSON.stringify([targetHash,referenceKey,faceIndex,depth,Boolean(judge),Boolean(full)])));
+    const digests=[];
+    for(const blob of prepared||[]) {
+      if(!blob?.arrayBuffer) return null;
+      digests.push(await hashBuffer(await blob.arrayBuffer()));
+    }
+    const preparedHash=await hashBuffer(new TextEncoder().encode(JSON.stringify([digests,metadata])));
+    return {input,prepared:preparedHash};
+  } catch { return null; }
+}
+
+function measuredNumber(value,min,max) {
+  if(value===null||value===undefined||String(value).trim()==="")return null;
+  const n=Number(value);
+  return Number.isFinite(n)&&n>=min&&n<=max?n:null;
+}
+
+export function createQualityBaseline(context,headers,now=Date.now()) {
+  if(!HEX.test(context?.input||"")||!HEX.test(context?.prepared||"")||headers?.["x-retake-detail-gate"]!=="passed")return null;
+  const metrics={};
+  for(const [name,[key,min,max]] of Object.entries(COMPARISON_FIELDS)) {
+    const value=measuredNumber(headers[key],min,max);
+    if(value!==null)metrics[name]=value;
+  }
+  if(metrics.similarity===undefined)return null;
+  const seconds=parseUltraTiming(headers["x-retake-ultra-timing"]).total?.seconds;
+  if(Number.isFinite(seconds)&&seconds>=0&&seconds<=86400)metrics.seconds=seconds;
+  return {version:1,input:context.input,prepared:context.prepared,
+    revision:validQualityRevision(headers["x-retake-quality-revision"]),metrics,
+    createdAt:Number.isFinite(now)?now:Date.now()};
+}
+
+export function readQualityBaseline(storage) {
+  try {
+    const raw=storage?.getItem(QUALITY_BASELINE_KEY);
+    if(!raw||raw.length>4096)return null;
+    const record=JSON.parse(raw);
+    if(record?.version!==1||!HEX.test(record.input||"")||!HEX.test(record.prepared||"")||!Number.isFinite(record.createdAt))return null;
+    const metrics={};
+    for(const [name,[,min,max]] of Object.entries(COMPARISON_FIELDS)){
+      const n=record.metrics?.[name];
+      if(typeof n==="number"&&measuredNumber(n,min,max)!==null)metrics[name]=n;
+    }
+    if(metrics.similarity===undefined)return null;
+    const seconds=record.metrics?.seconds;
+    if(typeof seconds==="number"&&measuredNumber(seconds,0,86400)!==null)metrics.seconds=seconds;
+    return {version:1,input:record.input,prepared:record.prepared,revision:validQualityRevision(record.revision),
+      metrics,createdAt:record.createdAt};
+  } catch { return null; }
+}
+
+export function compareQualityBaseline(baseline,current) {
+  if(!baseline||!current)return "";
+  if(baseline.input!==current.input)return "Kıyas yapılamadı: giriş, referans seti, seçilen yüz veya Ultra ayarı farklı.";
+  const lines=[];
+  if(baseline.prepared!==current.prepared)lines.push("Hazırlanan motor girdileri farklı; değişiklik tüm işlem hattına ait olabilir.");
+  if(baseline.revision!==current.revision)lines.push("Kalite sürümü değişti; ölçümler aynı ölçekteyse yorumlanmalı.");
+  if(!baseline.revision||!current.revision)lines.push("En az bir kalite sürümü doğrulanamadı.");
+  for(const [name,[,,,scale,label]] of Object.entries(COMPARISON_FIELDS)) {
+    const a=baseline.metrics[name],b=current.metrics[name];
+    if(!Number.isFinite(a)||!Number.isFinite(b))continue;
+    const delta=(b-a)*scale;
+    lines.push(label+" "+(a*scale).toFixed(2).replace(".",",")+" → "+(b*scale).toFixed(2).replace(".",",")+
+      " ("+(delta>0?"+":"")+delta.toFixed(2).replace(".",",")+")");
+  }
+  if(Number.isFinite(baseline.metrics.seconds)&&Number.isFinite(current.metrics.seconds))
+    lines.push("süre "+baseline.metrics.seconds+" → "+current.metrics.seconds+" sn");
+  return "Yerel ölçüm kıyası (görsel kalite veya kimlik garantisi değil): "+lines.join(" · ");
+}

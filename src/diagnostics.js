@@ -9,7 +9,7 @@ const HEALTH_KEYS = Object.freeze([
   "realism", "personal_model", "cuda", "ultra_learning", "self_test_benchmark",
   "neck_harmonization", "last_job_cleanup", "quality_revision", "regional_edit_evidence",
   "lower_face_texture_evidence", "native_input_recovery", "reference_appearance_tiebreak",
-  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard"
+  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard", "visible_identity_verification"
 ]);
 const SECRET_NAME = /token|secret|key|pairing|auth|cookie|password/i;
 const MAX_VALUE = 300;
@@ -149,6 +149,7 @@ export function summarizeQualityEvidence(headers) {
   if(final!==null&&goal!==null)
     rows.push("arama hedefinden fark "+points(final-goal)+" puan");
   if(headers["x-retake-detail-gate"]==="passed")rows.push("motor ayrıntı kontrolü geçti");
+  if(headers["x-retake-identity-pixel-scope"]==="visible-engine-crop")rows.push("kimlik doğrulaması görünür motor kırpımında yapıldı (tarayıcı ölçeklemesi öncesi)");
   if(headers["x-retake-nim-editor"]==="retake-local/flux2-klein-4b"&&headers["x-retake-flux-status"]==="accepted")
     rows.push("seçilen adayda FLUX kullanıldı");
   return rows.length?"Kalite özeti (kosinüs ölçeği, benzerlik yüzdesi değil): "+rows.join(" · "):"";

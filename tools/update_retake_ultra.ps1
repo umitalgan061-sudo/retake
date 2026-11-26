@@ -12,11 +12,16 @@
   .\tools\update_retake_ultra.ps1
 .EXAMPLE
   .\tools\update_retake_ultra.ps1 -SkipDeploy
+.EXAMPLE
+  .\tools\update_retake_ultra.ps1 -SkipPull -SkipDeploy -Force
+  (-Force stops the managed engine even while it is processing a photo.)
 #>
 param(
     [switch]$SkipPull,
     [switch]$SkipDeploy,
-    [switch]$EnablePairing
+    [switch]$EnablePairing,
+    [switch]$Force,
+    [int]$WaitSeconds = 150
 )
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
@@ -30,9 +35,38 @@ if ($managedTask -and $managedTask.State -eq "Running") {
     $headers = @{}
     $tokenFile = Join-Path $HOME ".retake\pairing-token"
     if (Test-Path $tokenFile) { $headers["X-Retake-Token"] = (Get-Content $tokenFile -Raw).Trim() }
-    try { $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $headers -TimeoutSec 3 } catch { $health = $null }
-    if (-not $health -or $health.background_mode -ne $true -or $health.busy -ne $false) {
-        throw "Managed engine is busy or still waiting for the manual motor. Finish the photo/close the old manual window before updating."
+    # A just-restarted engine needs a while (CUDA, models) before /health
+    # answers: wait for it instead of failing at once.
+    $deadline = (Get-Date).AddSeconds([Math]::Max(0, $WaitSeconds))
+    $health = $null
+    $announced = ""
+    while ($true) {
+        try { $health = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $headers -TimeoutSec 5 } catch { $health = $null }
+        if ($health -and $health.background_mode -eq $true -and $health.busy -eq $false) { break }
+        if ($Force -and $health -and $health.background_mode -eq $true) { break }
+        if ((Get-Date) -gt $deadline) { break }
+        $state = if (-not $health) { "starting" } elseif ($health.busy) { "busy" } else { "manual" }
+        if ($state -ne $announced) {
+            switch ($state) {
+                "starting" { Write-Host "Motor henuz yanit vermiyor (yeni baslatildiysa modeller yukleniyor); en cok $WaitSeconds sn bekleniyor..." -ForegroundColor Yellow }
+                "busy" { Write-Host "Motor su an bir fotografi isliyor; bitmesi bekleniyor..." -ForegroundColor Yellow }
+                default { Write-Host "Elle acilmis bir motor penceresi calisiyor gibi gorunuyor; bekleniyor..." -ForegroundColor Yellow }
+            }
+            $announced = $state
+        }
+        Start-Sleep -Seconds 5
+    }
+    if (-not $health) {
+        throw "Motor $WaitSeconds sn icinde yanit vermedi. Durum icin: .\tools\install_retake_autostart.ps1 -Action Status  (motor penceresindeki son satirlari da kontrol edin)"
+    }
+    if ($health.background_mode -ne $true) {
+        throw "Elle acilmis bir Retake motoru penceresi calisiyor. O pencereyi kapatip bu komutu tekrar calistirin."
+    }
+    if ($health.busy -ne $false -and -not $Force) {
+        throw "Motor hala bir fotografi isliyor. Bitince tekrar calistirin; isi yarida kesmek icin -Force ekleyin."
+    }
+    if ($health.busy -ne $false) {
+        Write-Warning "-Force: islenen fotograf yarida kesiliyor."
     }
     Stop-ScheduledTask -TaskName $managedTask.TaskName
     $managedStopped = $true

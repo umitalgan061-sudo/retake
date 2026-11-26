@@ -31,6 +31,14 @@ if (Get-Command Get-ScheduledTask -ErrorAction SilentlyContinue) {
     $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
     $managedTask = Get-ScheduledTask -TaskName ("Retake Local Engine-" + $sid) -ErrorAction SilentlyContinue
 }
+if ($managedTask) {
+    # A registered task may still point at an older worktree. Do not stop
+    # it or publish a newer frontend while claiming that engine was updated.
+    $taskRoots = @($managedTask.Actions | ForEach-Object { $_.WorkingDirectory } | Where-Object { $_ })
+    if ($taskRoots.Count -ne 1 -or [System.IO.Path]::GetFullPath($taskRoots[0]).TrimEnd("\") -ne $Root.TrimEnd("\")) {
+        throw "Retake startup task points to a different worktree. Update the registered worktree or reinstall the task from this directory; no restart or publish was performed."
+    }
+}
 if ($managedTask -and $managedTask.State -eq "Running") {
     $headers = @{}
     $tokenFile = Join-Path $HOME ".retake\pairing-token"
@@ -102,7 +110,27 @@ try {
         # Do not start a competing manual server; the registered task keeps its options.
         Start-ScheduledTask -TaskName $managedTask.TaskName
         $managedStopped = $false
-        Write-Host "Managed Retake engine restarted. Check: .\tools\install_retake_autostart.ps1 -Action Status" -ForegroundColor Green
+        $expectedLine = Select-String -LiteralPath (Join-Path $PSScriptRoot "facefusion_local_server.py") -Pattern '^QUALITY_PIPELINE_REVISION = "([^"]+)"$' | Select-Object -First 1
+        if ($expectedLine) {
+            $expected = $expectedLine.Matches[0].Groups[1].Value
+            $verifyHeaders = @{}
+            $pairingPath = Join-Path $HOME ".retake\pairing-token"
+            if (Test-Path $pairingPath) { $verifyHeaders["X-Retake-Token"] = (Get-Content $pairingPath -Raw).Trim() }
+            $verifyUntil = (Get-Date).AddSeconds([Math]::Max(0, $WaitSeconds))
+            $verified = $false
+            do {
+                try {
+                    $current = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $verifyHeaders -TimeoutSec 5
+                    if ($current.ok -eq $true -and $current.background_mode -eq $true -and $current.quality_revision -eq $expected) { $verified = $true; break }
+                } catch { }
+                if ((Get-Date) -ge $verifyUntil) { break }
+                Start-Sleep -Seconds 3
+            } while ($true)
+            if (-not $verified) { throw "Managed engine restart requested, but quality revision $expected was not verified. Run .\tools\install_retake_autostart.ps1 -Action Status." }
+            Write-Host "Managed Retake engine verified: $expected" -ForegroundColor Green
+        } else {
+            Write-Warning "Engine restart requested; quality revision could not be verified."
+        }
         return
     }
 

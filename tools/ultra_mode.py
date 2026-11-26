@@ -50,6 +50,14 @@ def score_from_headers(headers: dict[str, str]) -> float | None:
     return score if math.isfinite(score) and -1.0 <= score <= 1.0 else None
 
 
+def verified_candidate_score(headers):
+    # An explicit failed detail gate is never compatible with a valid
+    # candidate. The absent field is retained for older internal callers.
+    if headers.get("X-Retake-Detail-Gate") not in (None,"passed"):
+        return None
+    return score_from_headers(headers)
+
+
 def detail_from_headers(headers: dict[str, str]) -> float | None:
     try:
         score = float(headers.get("X-Retake-Detail-Score", ""))

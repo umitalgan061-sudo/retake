@@ -61,6 +61,11 @@ import {
   describeUltraSchedule,
   describeUltraDepth,
   describeFineFeatures,
+  describePortraitEvidence,
+  portraitGeometry,
+  describePortraitGeometry,
+  sourcePortraitQuality,
+  describeSourcePortraitQuality,
   describeSimilarity,
   describeNaturalness,
   parseNaturalness,
@@ -724,6 +729,9 @@ function selectResult(index) {
     item.detailGate.startsWith("failed:") ? "uyarı: bölgesel ayrıntı zayıf (" + ({eyes:"gözler",nose:"burun",mouth:"ağız",lower_face:"çene"}[item.detailGate.slice(7).split("-")[0]] || "yüz") + ")" : "",
     item.detailRegions ? "Orijinale göre doku enerjisi: " + Object.entries({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz"}).map(([region,name]) => { const part=item.detailRegions.split(",").find(value=>value.startsWith(region+":")); const ratio=part ? Number(part.split(":")[1]) : NaN; return name+" "+(Number.isFinite(ratio) && ratio>=0 ? ratio.toFixed(2)+"×" : "ölçülemedi"); }).join(", ") : "",
     item.regionalEdit ? "Bölgesel RGB farkı (/255): " + item.regionalEdit.split(",").map(part => { const [region,value]=part.split(":"); const name=({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz",moustache:"bıyık",chin:"çene",forehead:"alın",brows:"kaşlar",left_cheek:"sol yanak",right_cheek:"sağ yanak",left_jaw:"sol çene",right_jaw:"sağ çene"})[region]; const delta=Number(value); return name && Number.isFinite(delta) && delta>=0 && delta<=255 ? name+" "+delta.toFixed(1) : ""; }).filter(Boolean).join(", ") : "",
+    describePortraitEvidence(item.lowerTexture,item.referenceAppearance),
+    describePortraitGeometry(item.portraitGeometry),
+    describeSourcePortraitQuality(item.sourcePortraitQuality),
     item.neckStatus === "applied" ? "boyun/boğaz ten uyumu: "+item.neckPixels+" piksel" : item.neckStatus && item.neckStatus !== "off" ? "boyun korundu: "+(({ "no-mesh":"yüz işaretleri yetersiz","pose-uncertain":"poz belirsiz","skin-uncertain":"ten alanı belirsiz","neck-not-visible":"boyun görünmüyor","already-balanced":"ek düzeltme gerekli değil","quality-rejected":"kalite kontrolü","error":"işlem hatası","unreadable":"görüntü okunamadı"})[item.neckStatus] || "uygun aday yok") : "",
     item.photoBalance ? "orijinal fotoğraf dokusu dengelendi" : "",
     item.before === null ? "orijinal kimlik ölçülemedi" : "",
@@ -759,6 +767,8 @@ function addResult(blob, label, scores = {}) {
     fineFeatures: scores.fineFeatures || "",
     ultraTiming: scores.ultraTiming || "",
     nativeFinish: scores.nativeFinish && typeof scores.nativeFinish === "object" ? scores.nativeFinish : null,
+    portraitGeometry: scores.portraitGeometry ?? null,
+    sourcePortraitQuality: scores.sourcePortraitQuality ?? null,
     diagnostics: scores.diagnostics && typeof scores.diagnostics === "object" ? scores.diagnostics : null,
     fineDetail: scores.fineDetail || "",
     catchlights: scores.catchlights || "",
@@ -781,6 +791,8 @@ function addResult(blob, label, scores = {}) {
     detailGate: scores.detailGate || "",
     detailRegions: scores.detailRegions || "",
     regionalEdit: scores.regionalEdit || "",
+    lowerTexture: scores.lowerTexture || "",
+    referenceAppearance: scores.referenceAppearance ?? null,
     neckStatus: scores.neckStatus || "",
     neckPixels: scores.neckPixels ?? null,
     photoBalance: scores.photoBalance === true,
@@ -2171,7 +2183,20 @@ function applyGeneratedFacePatch(generatedTargetImage, crop, preblended = false,
   const faceEdit=measureFaceEdit(sourceCrop.data,blended,crop.width,crop.height,crop.face);
   if(!faceEdit.meaningful)throw new Error('Son görüntüde yüz içi değişim yetersiz; düzenlenmemiş fotoğraf başarılı sonuç olarak gösterilmedi.');
   fullContext.putImageData(output, 0, 0);
-  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit, nativeFinish}));
+  // Re-detect the actual delivered face locally. A landmark failure is not
+  // fabricated as unchanged geometry and never discards a valid engine result.
+  let geometry = null;
+  const selectedFace = state.target?.faces?.[state.selectedFaceIndex];
+  const sourceGeometry = portraitGeometry(selectedFace?.mesh,imageWidth,imageHeight);
+  if (sourceGeometry) {
+    geometry = {source:sourceGeometry,delivered:null};
+    try {
+      const detected = refineFaceInRegion(fullCanvas,selectedFace,imageWidth,imageHeight);
+      geometry.delivered = portraitGeometry(detected?.mesh,imageWidth,imageHeight);
+    } catch (error) { console.info("Son geometri ölçümü kullanılamadı.",error); }
+  }
+  const inputQuality = sourcePortraitQuality(sourceCrop.data,crop.width,crop.height,crop.face);
+  return canvasToBlob(fullCanvas).then(blob => ({blob, faceEdit, nativeFinish, portraitGeometry:geometry, sourcePortraitQuality:inputQuality}));
 }
 
 const stones = { hero: null, wait: null, timer: null };
@@ -2424,6 +2449,8 @@ async function runFaceFusionEdit(options = {}) {
       detailGate: response.headers.get("X-Retake-Detail-Gate") || "",
       detailRegions: response.headers.get("X-Retake-Detail-Regions") || "",
       regionalEdit: response.headers.get("X-Retake-Regional-Edit") || "",
+      lowerTexture: response.headers.get("X-Retake-Lower-Texture") || "",
+      referenceAppearance: response.headers.get("X-Retake-Reference-Appearance"),
       neckStatus: response.headers.get("X-Retake-Neck-Status") || "",
       neckPixels: Number.parseInt(response.headers.get("X-Retake-Neck-Pixels") || "",10),
       photoBalance: response.headers.get("X-Retake-Photo-Balance") === "on",
@@ -2487,7 +2514,11 @@ async function runFaceFusionEdit(options = {}) {
       scores.diagnostics["browser-native-finish"] =
         `scale=${finish.scale};sharpen=${finish.sharpen};grain=${finish.resultGrain}>${finish.sourceGrain};added=${finish.addedGrain}`;
     }
-    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish});
+    if (scores.diagnostics) {
+      if (delivered.portraitGeometry) scores.diagnostics['browser-portrait-geometry'] = describePortraitGeometry(delivered.portraitGeometry);
+      if (delivered.sourcePortraitQuality) scores.diagnostics['browser-source-quality'] = describeSourcePortraitQuality(delivered.sourcePortraitQuality);
+    }
+    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = [
       describeSimilarity(scores.similarity, scores.before, scores.referenceMedian),

@@ -35,7 +35,7 @@ export function describeSimilarity(after, before, referenceMedian = null) {
   const score = similarityScore(after);
   if (score === null) return "";
   const rawBefore = parseSimilarity(before);
-  const previous = rawBefore === null ? null : rawBefore <= 0.005 ? (rawBefore * 100).toFixed(2).replace(".", ",") + " (kosinüs)" : similarityScore(rawBefore);
+  const previous = rawBefore === null ? null : rawBefore <= 0.005 ? rawBefore.toFixed(4).replace(".", ",") + " (kosinüs)" : similarityScore(rawBefore);
   const comparison = referenceComparison(after, referenceMedian);
   // Scores shown as integers hide genuine small changes: 0.825–0.834
   // all display as 83. Show one decimal, never claim a calibrated percent.
@@ -180,7 +180,7 @@ export function describeFluxMetrics(identityDelta, detailDelta, strength) {
   return [
     i!==null && Math.abs(i)<=2 ? "FLUX kimlik farkı "+fmt(i) : "",
     d!==null && Math.abs(d)<=1 ? "doku puanı farkı "+fmt(d) : "",
-    s!==null && s>0 && s<=.5 ? "karışım %"+Math.round(s*100) : ""
+    s!==null && s>0 && s<=.5 ? "karışım %"+(s*100).toFixed(1).replace(/\.0$/,"").replace(".",",") : ""
   ].filter(Boolean).join(" · ");
 }
 export function describeJudgeError(code) {
@@ -285,4 +285,77 @@ export function describeFineFeatures(decision, detail = "", catchlights = "", sc
   if (decision === "detail-gate") return "ince bölge adayı ayrıntı kontrolünü geçemedi";
   if (decision === "no-gain") return "ince bölge düzeltmesi ölçülebilir kazanç sağlamadı; sonuç korundu";
   return "";
+}
+
+
+export function describePortraitEvidence(value, appearance) {
+  const labels={moustache:"bıyık",chin:"çene",jaw_l:"sol çene",jaw_r:"sağ çene",lower_face:"alt yüz"};
+  const seen=new Set();
+  const rows=String(value || "").split(",").map(part=>{
+    const match=/^([a-z_]+):(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)$/.exec(part);
+    if(!match || !Object.hasOwn(labels,match[1]) || seen.has(match[1])) return "";
+    const [a,b,e1,e2]=match.slice(2).map(Number);
+    if(![a,b,e1,e2].every(Number.isFinite)||a>255||b>255||e1>1||e2>1) return "";
+    seen.add(match[1]);
+    return labels[match[1]]+" "+a.toFixed(2).replace(".",",")+"→"+b.toFixed(2).replace(".",",");
+  }).filter(Boolean);
+  const score=readFinite(appearance);
+  return [rows.length?"Alt yüz mutlak doku enerjisi (önce→sonra): "+rows.join(", "):"",
+    score!==null && score>=0 && score<=1?"referans alt yüz görünüm uyumu "+score.toFixed(2).replace(".",",")+" / 1 (doku/kontrast)":""].filter(Boolean).join(" · ");
+}
+
+
+// Geometry is re-detected on the delivered photograph, never copied from
+// the source mesh. Ratios describe expression/shape, not biometric identity.
+export function portraitGeometry(mesh,width,height) {
+  if (!Array.isArray(mesh)||mesh.length!==478||!Number.isFinite(width)||!Number.isFinite(height)||Math.min(width,height)<=0) return null;
+  const points=mesh.map(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)?[p.x*width,p.y*height]:null);
+  const distance=(a,b)=>points[a]&&points[b]?Math.hypot(points[a][0]-points[b][0],points[a][1]-points[b][1]):NaN;
+  const faceWidth=distance(234,454),faceHeight=distance(10,152),eyeR=distance(33,133),eyeL=distance(362,263),mouth=distance(61,291);
+  if (![faceWidth,faceHeight,eyeR,eyeL,mouth].every(Number.isFinite)||faceWidth<32||faceHeight<32||Math.min(eyeR,eyeL,mouth)<4) return null;
+  const values={rightEye:distance(159,145)/eyeR,leftEye:distance(386,374)/eyeL,
+    mouthOpen:distance(13,14)/mouth,mouthWidth:mouth/faceWidth,noseWidth:distance(98,327)/faceWidth,
+    jawWidth:distance(172,397)/faceWidth,faceRatio:faceWidth/faceHeight};
+  return Object.values(values).every(v=>Number.isFinite(v)&&v>=0&&v<3)?{width:Math.round(faceWidth),height:Math.round(faceHeight),values}:null;
+}
+
+export function describePortraitGeometry(report) {
+  if (!report?.source) return "";
+  const s=report.source, d=report.delivered;
+  const size=Number.isFinite(s.width)&&Number.isFinite(s.height)?"giriş yüz alanı "+s.width+"×"+s.height+" px":"";
+  if (!d) return [size,"son geometri ölçülemedi"].filter(Boolean).join(" · ");
+  const labels={rightEye:"sağ göz açıklığı",leftEye:"sol göz açıklığı",mouthOpen:"ağız açıklığı",mouthWidth:"ağız genişliği",noseWidth:"burun genişliği",jawWidth:"çene genişliği",faceRatio:"yüz oranı"};
+  const rows=Object.entries(labels).map(([key,label])=>{
+    const a=s.values?.[key],b=d.values?.[key];
+    if(!Number.isFinite(a)||!Number.isFinite(b))return "";
+    return label+" "+a.toFixed(2).replace(".",",")+"→"+b.toFixed(2).replace(".",",");
+  }).filter(Boolean);
+  return [size,rows.length?"Giriş→çıktı geometri oranları: "+rows.join(", "):""].filter(Boolean).join(" · ");
+}
+
+
+// Native input evidence: no synthetic upscale is counted as real detail.
+export function sourcePortraitQuality(rgba,width,height,bounds) {
+  if (!rgba||rgba.length!==width*height*4||!Number.isInteger(width)||!Number.isInteger(height)||
+      !bounds||![bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)||Math.min(bounds.width,bounds.height)<16) return null;
+  const x0=Math.max(1,Math.ceil(bounds.x+bounds.width*.15)),x1=Math.min(width-1,Math.floor(bounds.x+bounds.width*.85));
+  const y0=Math.max(1,Math.ceil(bounds.y+bounds.height*.15)),y1=Math.min(height-1,Math.floor(bounds.y+bounds.height*.90));
+  if(x1-x0<8||y1-y0<8)return null;
+  const stride=Math.max(1,Math.floor(Math.max(x1-x0,y1-y0)/300));
+  const luma=i=>.2126*rgba[i]+.7152*rgba[i+1]+.0722*rgba[i+2];
+  let count=0,squared=0,dark=0,bright=0;
+  for(let y=y0;y<y1;y+=stride)for(let x=x0;x<x1;x+=stride){
+    const i=(y*width+x)*4, v=luma(i);
+    const high=4*v-luma(i-4)-luma(i+4)-luma(i-width*4)-luma(i+width*4);
+    squared+=high*high; dark+=v<20?1:0;bright+=v>245?1:0;count++;
+  }
+  return count?{width:Math.round(bounds.width),height:Math.round(bounds.height),edgeEnergy:Math.sqrt(squared/count),clippedFraction:(dark+bright)/count}:null;
+}
+
+export function describeSourcePortraitQuality(value) {
+  if(!value||![value.width,value.height,value.edgeEnergy,value.clippedFraction].every(Number.isFinite))return "";
+  return ["yerel giriş yüzü "+value.width+"×"+value.height+" px",
+    "giriş kenar enerjisi "+value.edgeEnergy.toFixed(1).replace(".",","),
+    "çok koyu/açık piksel %"+(100*value.clippedFraction).toFixed(1).replace(".",","),
+    Math.min(value.width,value.height)<96?"küçük yüz: gerçek giriş ayrıntısı sınırlı":""].filter(Boolean).join(" · ");
 }

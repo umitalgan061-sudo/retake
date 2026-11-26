@@ -35,6 +35,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
+    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from .fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -43,7 +44,7 @@ try:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE, format_ultra_timing
+        REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -61,6 +62,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
+    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -69,7 +71,7 @@ except ImportError:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE, format_ultra_timing
+        REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 
 MAX_REFERENCES = 25
@@ -915,6 +917,13 @@ def photo_naturalness_score(composite, target, face_bounds: dict[str, float]) ->
         return None
 
 
+def naturalness_keeps(candidate: float | None, current: float | None, slack: float = 1.5) -> bool:
+    """A candidate does not look more edited than the current one (unknown: no)."""
+    if candidate is None or current is None:
+        return False
+    return candidate >= current - slack
+
+
 def final_naturalness(target_path: Path, final_path: Path, face_bounds: dict[str, float]) -> dict[str, Any]:
     """Naturalness report of the finished crop (RGBA matte over the target)."""
     import cv2
@@ -1176,7 +1185,10 @@ def apply_real_face(result, target, real_face: dict[str, Any], face_width: float
                 # The rescue path can try a gentle real-beard transfer
                 # over the stronger identity-only base, rather than losing
                 # global facial identity to an all-or-nothing transplant.
-                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0))))
+                strength=0.94 * min(1.0, max(0.05, float(real_face.get("strength", 1.0)))),
+                moustache_scale=real_face.get("moustacheScale",1.),
+                jaw_scale=real_face.get("jawScale",1.),
+                alternate=real_face.get("alternateLower",False)
             )
         else:
             transplanted, chosen, fits = choose_and_transplant(
@@ -1597,6 +1609,13 @@ def process_swap(
             {**metadata["realFace"], "images": metadata["realReferenceBytes"]}
             if metadata.get("realFace") and metadata.get("realReferenceBytes") else None
         )
+        if real_face:
+            # Different lower-face hypotheses across existing rounds, not
+            # extra expensive full-face model calls.
+            if variation in (3,11,19):
+                real_face.update(moustacheScale=1.25,jawScale=.8,alternateLower=True)
+            elif variation in (7,15,21,23):
+                real_face.update(moustacheScale=.8,jawScale=1.25,alternateLower=True)
         user_shading = caches.get("shading")
         beard = person_beard(appearance_path, metadata.get("targetLandmarks"))
         blends: list[tuple[Path, float]] = []
@@ -1883,6 +1902,23 @@ def process_swap(
             sufficiency_from_level(identity_report.get("photo_level_similarity")),
             naturalness_scores=candidate_naturalness
         )
+        # Compare regional appearance for only a few already measured close
+        # candidates. No extra GPU passes and no preference for missing data.
+        if real_face:
+            level = sufficiency_from_level(identity_report.get('photo_level_similarity'))
+            indices = regional_tie_indices(candidate_scores,candidate_detail_scores,chosen_index,level)
+            # Reference evidence may not bring back a transfer that looks edited.
+            indices = [index for index in indices if index == chosen_index or naturalness_keeps(
+                candidate_naturalness[index], candidate_naturalness[chosen_index])]
+            if len(indices)>1:
+                evidence_scores = {}
+                for index in indices:
+                    try:
+                        _, value = reference_evidence_file(target_path,rescue_candidates[index][1],metadata['faceBounds'],metadata.get('targetLandmarks'),real_face)
+                        evidence_scores[index] = value
+                    except (ValueError,TypeError,OSError,cv2.error):
+                        continue
+                chosen_index = choose_regional_evidence(candidate_scores,candidate_detail_scores,chosen_index,evidence_scores,level)
         print("Aday gerçekliği: " + ", ".join(
             f"{label}={'—' if score is None else f'{score:.3f}'}/{'—' if nat is None else f'{nat:.0f}'}"
             for (label, _), score, nat in zip(rescue_candidates, candidate_scores, candidate_naturalness)
@@ -2169,6 +2205,10 @@ def process_swap(
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         region_edits = regional_edit_statistics(target_path, final_output, metadata["faceBounds"])
+        try:
+            portrait_evidence, reference_appearance = reference_evidence_file(target_path, final_output, metadata['faceBounds'], metadata.get('targetLandmarks'), real_face)
+        except (ValueError, TypeError, OSError, cv2.error):
+            portrait_evidence, reference_appearance = {}, None
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
         detail_gate_status = reason if accepted else "failed:" + reason
         if not accepted:
@@ -2210,6 +2250,8 @@ def process_swap(
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
             "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
+            "X-Retake-Lower-Texture": format_evidence(portrait_evidence),
+            "X-Retake-Reference-Appearance": "" if reference_appearance is None else f"{reference_appearance:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Fine-Features": fine_decision,
             # The delivered pixels' finest-feature naturalness (0..1), for Ultra ties.
@@ -2285,6 +2327,30 @@ JUDGE_FINALIST_BUFFER = 6
 DETAIL_GATE_OK = ("passed", "soft-original")
 
 
+def diverse_finalists(rows, limit):
+    """Keep the top local candidate plus verified appearance/fine-detail peaks.
+
+    Only measured, already-eligible candidates reach this function. Missing
+    metrics never create a winner and duplicate image bytes never take a slot.
+    """
+    selected = []
+    if limit <= 0:
+        return selected
+    def add(row):
+        if len(selected) < limit and not any(row[0] == prev[0] for prev in selected):
+            selected.append(row)
+    if rows:
+        add(rows[0])
+    for measure in (reference_appearance_from_headers, fine_quality_from_headers, score_from_headers):
+        measured = [(measure(row[1]), row) for row in rows]
+        measured = [(value,row) for value,row in measured if value is not None]
+        if len(measured) >= 2 and max(value for value,_ in measured)-min(value for value,_ in measured) > .001:
+            add(max(measured, key=lambda item:item[0])[1])
+    for row in rows:
+        add(row)
+    return selected
+
+
 def retain_judge_finalists(
     finalists: list[tuple[bytes, dict[str, str], int]],
     candidate: tuple[bytes, dict[str, str], int],
@@ -2300,13 +2366,7 @@ def retain_judge_finalists(
         sufficient = is_identity_sufficient(item[1])
         return (sufficient, realism_order(item[1]) if sufficient else (score_from_headers(item[1]) or -1.0,), item[2] == candidate[2])
     kept.sort(key=rank, reverse=True)
-    distinct = []
-    for item in kept:
-        if not any(item[0] == prior[0] for prior in distinct):
-            distinct.append(item)
-        if len(distinct) >= JUDGE_FINALIST_BUFFER:
-            break
-    return distinct
+    return diverse_finalists(kept, JUDGE_FINALIST_BUFFER)
 
 
 def judge_pool(
@@ -2315,16 +2375,11 @@ def judge_pool(
 ) -> list[tuple[bytes, dict[str, str], int]]:
     """Local winner first, then the strongest distinct near-ties (max 4)."""
     pool = [(best_result, best_headers, best_round)]
-    for item in finalists:
-        score = score_from_headers(item[1])
-        if (
-            len(pool) >= JUDGE_MAX_CANDIDATES or any(item[0] == prior[0] for prior in pool)
-            or not identity_acceptable(item[1], peak_identity)
-            or item[1].get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK
-        ):
-            continue
-        pool.append(item)
-    return pool
+    eligible = [item for item in finalists if item[0] != best_result
+                and identity_acceptable(item[1], peak_identity)
+                and (not is_identity_sufficient(best_headers) or is_identity_sufficient(item[1]))
+                and item[1].get("X-Retake-Detail-Gate") in DETAIL_GATE_OK]
+    return diverse_finalists(pool + eligible, JUDGE_MAX_CANDIDATES)
 
 
 def engine_stats(pass_cache: Any, cache_start: dict[str, Any] | None,
@@ -3035,7 +3090,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, "
@@ -3113,6 +3168,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "self_test_benchmark": True,
             "neck_harmonization": True,
             "regional_edit_evidence": True,
+            "lower_face_texture_evidence": True,
+            "reference_appearance_tiebreak": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
             "nvidia_judge_transport": judge_transport()[0],

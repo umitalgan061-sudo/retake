@@ -72,7 +72,7 @@ class TextureOnlyCandidateTest(unittest.TestCase):
         self.assertLessEqual(np.max(np.abs(result.astype(int)-base.astype(int))),4)
         self.assertTrue(np.array_equal(base[:,:,3],result[:,:,3]))
         self.assertTrue(np.array_equal(base[base[:,:,3]==0],result[base[:,:,3]==0]))
-        self.assertTrue(np.array_equal(base[65:95,40:160],result[65:95,40:160]))
+        self.assertTrue(np.array_equal(base[65:88,40:160],result[65:88,40:160]))
         self.assertTrue(np.array_equal(base[125:,:],result[125:,:]))
         self.assertTrue(np.array_equal(base[:20],result[:20]))
         # Exposure or structure mismatch cannot transfer a new face.

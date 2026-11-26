@@ -117,3 +117,28 @@ def prepare_small_face_inference(model_path: Path, bounds: dict, variation: int,
     if not cv2.imwrite(str(path),output):
         return model_path,"write-failed"
     return path,"native-contrast"
+
+
+def prepare_visible_identity_probe(target_path: Path, candidate_path: Path, temp_dir: Path) -> Path:
+    """ArcFace must see the delivered color, not RGB hidden by alpha.
+
+    Opaque model renders already carry their own visible RGB. For preblended
+    BGRA candidates, restore untouched target pixels and score an opaque,
+    content-addressed PNG local to this job. The name changes with pixels so
+    FaceFusion's static image cache cannot return a stale overwritten image.
+    """
+    import hashlib
+    candidate=cv2.imread(str(candidate_path),cv2.IMREAD_UNCHANGED)
+    if candidate is None:
+        raise ValueError("Kimlik adayı okunamadı.")
+    if candidate.ndim==3 and candidate.shape[2]==3:
+        return candidate_path
+    target=cv2.imread(str(target_path),cv2.IMREAD_COLOR)
+    visible=binary_preblended_rgba(target,candidate)[:,:,:3]
+    ok,encoded=cv2.imencode(".png",visible)
+    if not ok: raise OSError("Kimlik doğrulama görüntüsü yazılamadı.")
+    payload=encoded.tobytes()
+    path=temp_dir/("visible-identity-"+hashlib.sha256(payload).hexdigest()+".png")
+    if not path.is_file():
+        path.write_bytes(payload)
+    return path

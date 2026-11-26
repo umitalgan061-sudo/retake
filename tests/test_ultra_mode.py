@@ -392,3 +392,17 @@ class FluxRetryBudgetTest(unittest.TestCase):
         for identity,detail in (("-.01","-.11"),("-.076",".05"),("nan","-.11"),("-.076","")):
             self.assertFalse(defer_flux_retry("identity-loss",{"X-Retake-FLUX-Identity-Delta":identity,"X-Retake-FLUX-Detail-Delta":detail}))
         self.assertFalse(defer_flux_retry("accepted",{"X-Retake-FLUX-Identity-Delta":"-.076","X-Retake-FLUX-Detail-Delta":"-.11"}))
+
+
+class LateIdentityPeakTest(unittest.TestCase):
+    def test_realism_peak_is_reported_even_if_sufficient_cleaner_photo_wins(self):
+        level={"X-Retake-Identity-Photo-Level":".86","X-Retake-Detail-Gate":"passed"}
+        def fake_swap(*args):
+            if (args[5] or {}).get("realism"):
+                return b"new", {**score(.88,realism=True),**level,"X-Retake-Rim-Fraction":".4"}
+            return b"clean", {**score(.85),**level,"X-Retake-Rim-Fraction":".01"}
+        with patch.object(srv,"process_swap",fake_swap):
+            photo,headers=srv.run_ultra_search(Path("."),"1024x1024",False,fake_request(),
+                lambda *_a,**_k:None,caches={"realism":{"python":Path("gpu")}},min_duration_seconds=0)
+        self.assertEqual(photo,b"clean")
+        self.assertAlmostEqual(float(headers["X-Retake-Ultra-Peak-Identity"]),.88)

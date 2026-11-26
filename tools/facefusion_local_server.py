@@ -32,7 +32,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
     from .ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from .retake_output_transport import prepare_inference_target, encode_preblended_result
+    from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
     from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -59,7 +59,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
     from ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from retake_output_transport import prepare_inference_target, encode_preblended_result
+    from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
     from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -1419,6 +1419,7 @@ def process_swap(
         final_output = temp_dir / "retake-final.png"
         preferred_boost = pixel_boost
         variation = metadata["variation"]
+        inference_target, input_preparation = prepare_small_face_inference(inference_target,metadata["faceBounds"],variation,temp_dir)
         # Ultra refinement may step the winner's continuous settings; only
         # the engine sets this key (client metadata is whitelisted).
         refined_params = normalize_refinement(metadata.get("variationParams"))
@@ -2250,6 +2251,7 @@ def process_swap(
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
             "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
+            "X-Retake-Input-Preparation": input_preparation,
             "X-Retake-Lower-Texture": format_evidence(portrait_evidence),
             "X-Retake-Reference-Appearance": "" if reference_appearance is None else f"{reference_appearance:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
@@ -2658,6 +2660,9 @@ def run_ultra_search(
                 outcome = upgraded_headers.get("X-Retake-FLUX-Status", flux_outcome)
                 diagnostics = {key: value for key, value in upgraded_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
                 upgraded_identity = score_from_headers(upgraded_headers)
+                if upgraded_identity is not None and upgraded_identity > peak_identity:
+                    peak_identity = upgraded_identity
+                    strongest = (upgraded_image, upgraded_headers, round_of(spec), spec)
                 if collect_finalists and upgraded_identity is not None:
                     finalists = retain_judge_finalists(finalists, (upgraded_image, upgraded_headers, round_of(spec)), max(peak_identity, upgraded_identity))
                 if (upgraded_identity is not None
@@ -2672,6 +2677,7 @@ def run_ultra_search(
                         flux_outcome = "finalist-not-selected" if outcome == "accepted" else outcome
                         flux_diagnostics = diagnostics
                     print(f"[Ultra] Finalist {position + 1} difüzyon adayı elendi; güçlü kimlik sonucu korundu.", flush=True)
+                keep_identity_anchor()
             except Exception as error:
                 # Realism is optional: preserve a previously verified result.
                 if flux_outcome == "not-attempted":
@@ -2722,6 +2728,9 @@ def run_ultra_search(
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
                     continue
                 observations.append((variation, candidate_headers))
+                if candidate_score > peak_identity:
+                    peak_identity = candidate_score
+                    strongest = (candidate_image, candidate_headers, round_of((variation,None)), (variation,None))
                 if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
@@ -2735,6 +2744,7 @@ def run_ultra_search(
                     if flux_outcome == "accepted":
                         flux_outcome = "finalist-not-selected"
                     flux_diagnostics = {key: value for key, value in candidate_headers.items() if key.startswith("X-Retake-FLUX-") and key != "X-Retake-FLUX-Status"}
+                keep_identity_anchor()
                 if collect_finalists:
                     finalists = retain_judge_finalists(finalists, (candidate_image, candidate_headers, ULTRA_VARIATIONS.index(variation) + 1), peak_identity)
             except Exception as error:
@@ -3090,7 +3100,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, "
@@ -3169,6 +3179,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "neck_harmonization": True,
             "regional_edit_evidence": True,
             "lower_face_texture_evidence": True,
+            "native_input_recovery": True,
             "reference_appearance_tiebreak": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),

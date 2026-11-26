@@ -555,6 +555,18 @@ async function detectFaces(image) {
     }
   }
   if (!confirmationRan) faces.forEach((face) => { face.confirmed = true; });
+  // Refine even previously detected small faces once at a tighter crop.
+  // Retain the original mesh unless the new detection overlaps strongly.
+  for (let i=0;i<faces.length;i++) {
+    const face=faces[i];
+    if (!face.confirmed || Math.min(face.width*sourceWidth,face.height*sourceHeight)>=160) continue;
+    try {
+      const improved=refineFaceInRegion(image,face,sourceWidth,sourceHeight);
+      if (improved?.mesh?.length===478 && rectIoU(face,improved)>.55 && portraitGeometry(improved.mesh,sourceWidth,sourceHeight)) {
+        faces[i]={...improved,confirmed:true};
+      }
+    } catch (error) { console.info("Küçük yüz için ikinci mesh taraması atlandı.",error); }
+  }
   return orderDetectedFaces(faces);
 }
 
@@ -732,6 +744,7 @@ function selectResult(index) {
     describePortraitEvidence(item.lowerTexture,item.referenceAppearance),
     describePortraitGeometry(item.portraitGeometry),
     describeSourcePortraitQuality(item.sourcePortraitQuality),
+    item.inputPreparation === 'native-contrast' ? 'küçük yüz için yerel kontrast hazırlığı kullanıldı' : '',
     item.neckStatus === "applied" ? "boyun/boğaz ten uyumu: "+item.neckPixels+" piksel" : item.neckStatus && item.neckStatus !== "off" ? "boyun korundu: "+(({ "no-mesh":"yüz işaretleri yetersiz","pose-uncertain":"poz belirsiz","skin-uncertain":"ten alanı belirsiz","neck-not-visible":"boyun görünmüyor","already-balanced":"ek düzeltme gerekli değil","quality-rejected":"kalite kontrolü","error":"işlem hatası","unreadable":"görüntü okunamadı"})[item.neckStatus] || "uygun aday yok") : "",
     item.photoBalance ? "orijinal fotoğraf dokusu dengelendi" : "",
     item.before === null ? "orijinal kimlik ölçülemedi" : "",
@@ -791,6 +804,7 @@ function addResult(blob, label, scores = {}) {
     detailGate: scores.detailGate || "",
     detailRegions: scores.detailRegions || "",
     regionalEdit: scores.regionalEdit || "",
+    inputPreparation: scores.inputPreparation || "",
     lowerTexture: scores.lowerTexture || "",
     referenceAppearance: scores.referenceAppearance ?? null,
     neckStatus: scores.neckStatus || "",
@@ -2449,6 +2463,7 @@ async function runFaceFusionEdit(options = {}) {
       detailGate: response.headers.get("X-Retake-Detail-Gate") || "",
       detailRegions: response.headers.get("X-Retake-Detail-Regions") || "",
       regionalEdit: response.headers.get("X-Retake-Regional-Edit") || "",
+      inputPreparation: response.headers.get("X-Retake-Input-Preparation") || "",
       lowerTexture: response.headers.get("X-Retake-Lower-Texture") || "",
       referenceAppearance: response.headers.get("X-Retake-Reference-Appearance"),
       neckStatus: response.headers.get("X-Retake-Neck-Status") || "",

@@ -626,3 +626,40 @@ def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_
     if next_params is None:
         return None
     return (winner,next_params),True
+
+
+# Large, independently measured losses should not be traded for an aesthetic
+# vote. These are engineering guard bands, not calibrated identity scores.
+JURY_MAX_QUALITY_LOSS = .12
+JURY_MAX_RIM_INCREASE = .06
+
+def judge_quality_guard(candidate, incumbent):
+    """Check local measurements before allowing an advisory jury switch.
+
+    A missing optional metric is not evidence of an improvement. Old engine
+    reports without those fields remain compatible; compare measured pairs.
+    """
+    if candidate.get("X-Retake-Detail-Gate") != "passed":
+        return False, "detail-gate"
+    a,b=score_from_headers(candidate),score_from_headers(incumbent)
+    if a is None or b is None:
+        return False,"identity-unmeasured"
+    if is_identity_sufficient(incumbent):
+        threshold=identity_sufficiency(incumbent)
+        if a < threshold:
+            return False,"identity-floor"
+    else:
+        if a < b-ULTRA_REALISM_TIE_LOSS-1e-9:
+            return False,"identity-loss"
+    # The local winner can be sufficiently sharp overall while only one
+    # region is poor. Require no large drop in measured quality dimensions.
+    for name,measure in (("fine-detail",fine_quality_from_headers),
+                         ("reference-appearance",reference_appearance_from_headers),
+                         ("photo-detail",detail_from_headers)):
+        new,old=measure(candidate),measure(incumbent)
+        if new is not None and old is not None and new < old-JURY_MAX_QUALITY_LOSS:
+            return False,name
+    new_rim,old_rim=rim_from_headers(candidate),rim_from_headers(incumbent)
+    if new_rim is not None and old_rim is not None and new_rim > old_rim+JURY_MAX_RIM_INCREASE:
+        return False,"rim"
+    return True,"passed"

@@ -33,7 +33,7 @@ ComfyUI'nin gömülü Python ortamına FaceFusion kurma; iki ortam birbirinden a
 
 Hibrit profil iki ayrı geçiş kullanır:
 
-- Kimlik geçişi: alphaface_256. 25 kaynak yüzün embedding ortalamasını kullanır. Referanslar kalite/açı ağırlıklarıyla kaynak listesinde tekrarlanır; her kabul edilen fotoğraf en az bir oy alır.
+- Kimlik geçişi: hyperswap_1b_256 (varsayılan ve Ultra'nın çift varyantları), alphaface_256 (tek varyantlar ve HyperSwap kullanılamazsa yedek). 25 kaynak yüzün embedding ortalamasını kullanır. Referanslar kalite/açı ağırlıklarıyla kaynak listesinde tekrarlanır; her kabul edilen fotoğraf en az bir oy alır.
 - Görünüm geçişi: uniface_256. 25 fotoğrafın hizalanmış ve ağırlıklı piksel ortalamasını kaynak yüz olarak kullanır. Bu geçiş alt yüz, bıyık ve sakal görünümünü desteklemek için kullanılır.
 - Pixel boost ilk denemesi 1024x1024'tür. CUDA bellek hatasında sırasıyla 768x768, ardından 512x512 denenir. Bu yüz crop inference ölçeğidir; fotoğrafın çıktı çözünürlüğünü büyütmez.
 - Face swapper weight: selected from four bounded values between 0.92 and 1.0.
@@ -50,7 +50,7 @@ Hibrit profil iki ayrı geçiş kullanır:
 - Practically unchanged output is rejected rather than reported as a successful face swap.
 - Optional GFPGAN 1.4 can be enabled as a separate last stage at 25% blend; it is disabled by default because it can change facial-hair and identity detail.
 
-Lisanslar model bazında değerlendirilmelidir. FaceFusion kataloğunda alphaface_256 Non-Commercial, uniface_256 ise Unknown lisans durumuyla listelenir. Ticari kullanım hakkı olduğunu varsayma; model ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
+Lisanslar model bazında değerlendirilmelidir. FaceFusion kataloğunda hyperswap_1b_256 ResearchRAIL, alphaface_256 Non-Commercial, uniface_256 ise Unknown lisans durumuyla listelenir. Ticari kullanım hakkı olduğunu varsayma; model ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 
 ## 3. Yerel servisi çalıştır
 
@@ -74,7 +74,7 @@ Sağlık kontrolü:
 
     http://127.0.0.1:8765/health
 
-Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_ultra_v16, identity_model=alphaface_256, identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
+Beklenen değerler: ok=true, cuda=true, model=retake_hybrid_25_reference_ultra_v16, identity_model=hyperswap_1b_256, identity_models=[hyperswap_1b_256, alphaface_256], identity_verifier=arcface_w600k_r50, appearance_model=uniface_256. face_enhancer_enabled GFPGAN'ın açık olup olmadığını gösterir.
 
 ## 4. Retake'i çalıştır
 

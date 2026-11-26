@@ -122,7 +122,22 @@ NATURALNESS_TOLERANCE = 8.0
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
 IDENTITY_REPORT_VERSION = "centroid-v2"
 PAIRING_HEADER = "X-Retake-Token"
-IDENTITY_MODEL = "alphaface_256"
+# Identity swappers, measured on real photos with the same 25 references
+# (CPU, full pipeline): HyperSwap 1b vs AlphaFace — garden ArcFace 0.798 vs
+# 0.795, naturalness 81 vs 78; night 0.845 vs 0.839, 83.8 vs 82.3. Ultra
+# alternates them across variants (even: HyperSwap 1b, odd: AlphaFace) so the
+# identity/naturalness rules decide per person; a failed HyperSwap pass
+# (e.g. the model cannot be downloaded) falls back to AlphaFace.
+# Licenses (FaceFusion catalogue): hyperswap_1b_256 ResearchRAIL,
+# alphaface_256 Non-Commercial — personal use only, see docs.
+IDENTITY_MODEL = "hyperswap_1b_256"
+IDENTITY_FALLBACK_MODEL = "alphaface_256"
+IDENTITY_MODELS = (IDENTITY_MODEL, IDENTITY_FALLBACK_MODEL)
+
+
+def identity_model_for(variation: int) -> str:
+    """Even variants (incl. the default 0) use HyperSwap 1b, odd ones AlphaFace."""
+    return IDENTITY_MODELS[int(variation) % len(IDENTITY_MODELS)]
 # A second identity pass over the first one's result. On the user's photos
 # ArcFace similarity to the references went 0.803 (AlphaFace) -> 0.832
 # (AlphaFace + InSwapper); AlphaFace twice gave 0.816. It is kept only when
@@ -1454,8 +1469,9 @@ def process_swap(
             f"görünüm profili={len(reference_paths)} hizalanmış fotoğraf.",
             flush=True
         )
+        identity_model = identity_model_for(variation)
         print(
-            f"1/2 kimlik geçişi: {IDENTITY_MODEL}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
+            f"1/2 kimlik geçişi: {identity_model}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
             f"hedef=1 fotoğraf; tercih edilen pixel boost={preferred_boost}.",
             flush=True
         )
@@ -1485,7 +1501,15 @@ def process_swap(
                 pass_cache.put(key, output.read_bytes(), used)
             return used
 
-        identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
+        try:
+            identity_boost = cached_pass(1, weighted_identity_paths, identity_output, identity_model)
+        except Exception as error:
+            if identity_model == IDENTITY_FALLBACK_MODEL:
+                raise
+            # A missing/undownloadable HyperSwap model must not cost the job.
+            print(f"{identity_model} kullanılamadı ({error}); {IDENTITY_FALLBACK_MODEL} ile devam ediliyor.", flush=True)
+            identity_model = IDENTITY_FALLBACK_MODEL
+            identity_boost = cached_pass(1, weighted_identity_paths, identity_output, identity_model)
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
         centroid = identity_report.get("centroid")
@@ -1500,7 +1524,7 @@ def process_swap(
                 source_subset = [reference_paths[i] for i in pool]
                 alternative_output = temp_dir / f"retake-identity-{name}.png"
                 try:
-                    boost = cached_pass(1, source_subset, alternative_output, IDENTITY_MODEL)
+                    boost = cached_pass(1, source_subset, alternative_output, identity_model)
                     candidates.append((name, alternative_output, source_subset, boost))
                 except Exception as error:
                     # The original full-25 pass remains usable if an optional
@@ -2299,6 +2323,7 @@ def process_swap(
             "X-Retake-Reinforce-Guard": reinforce_guard,
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
+            "X-Retake-Identity-Model": identity_model,
             "X-Retake-Texture-Source": chosen_texture,
             "X-Retake-Compositing": "preblended",
             "X-Retake-Alpha-Transport": "binary",
@@ -3112,7 +3137,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
-            "X-Retake-Naturalness, X-Retake-Naturalness-Checks, "
+            "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
@@ -3196,6 +3221,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,
+            "identity_models": list(IDENTITY_MODELS),
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",
             "appearance_model": APPEARANCE_MODEL,

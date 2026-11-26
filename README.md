@@ -4,7 +4,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 ## Mevcut web motoru
 
-- Yerel FaceFusion `3.9.2` ile iki geçişli hibrit motor: kimlik için `alphaface_256`, görünüm/sakal için `uniface_256`.
+- Yerel FaceFusion `3.9.2` ile iki geçişli hibrit motor: kimlik için `hyperswap_1b_256` (Ultra'da `alphaface_256` ile dönüşümlü, kullanılamazsa yedek), görünüm/sakal için `uniface_256`.
 - 25 fotoğrafın tamamı ortak göz koordinatına hizalanır ve netlik, açı, yüz alanı, ışık ölçütlerine göre ağırlık alır. 478 noktalı FaceLandmarker başarısız olursa BlazeFace'in altı anahtar noktalı yedek hizalaması kullanılır; yedek hizalamaların ağırlığı en fazla 2'dir.
 - Pixel boost ilk denemesi `1024x1024`; CUDA bellek hatasında `768x768`, ardından `512x512` denenir. Bu yüz crop inference ölçeğidir, native çıktı büyütme değildir.
 - FaceFusion ArcFace ONNX ile 25 crop için medoid/medyan tutarlılık taraması yapılır; güçlü aykırı referansların kimlik oyu 1'e düşürülür.
@@ -277,7 +277,7 @@ Eski adres https://retake06.web.app (`hafize-23465` projesi, `.firebaserc` için
 
 Yüz profili ve çıkarım yerel bilgisayarda yapılır; kırpılmış profil görselleri ve ağırlıklar tarayıcının IndexedDB alanında cihazda saklanır. Ancak 25 orijinal referans JPEG'i public GitHub deposunda ve Firebase Hosting alanında bulunabilir; eski Git commit'lerinde de kalmış olabilir. Yerel profil önbelleği bu kaynak fotoğrafları public olmaktan çıkarmaz. Bunları gizli kabul etme. Fotoğrafları public depodan çıkarmak ve Git geçmişini temizlemek ayrı bir güvenlik çalışmasıdır; yalnızca yeni commit'ten silmek geçmiş kopyaları ortadan kaldırmaz.
 
-Model ağırlıklarının lisansları farklıdır. FaceFusion kataloğunda `alphaface_256` Non-Commercial, `uniface_256` ise Unknown olarak listelenir. Ticari kullanım hakkı olduğunu varsayma; iki modelin ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
+Model ağırlıklarının lisansları farklıdır. FaceFusion kataloğunda `hyperswap_1b_256` ResearchRAIL, `alphaface_256` Non-Commercial, `uniface_256` ise Unknown olarak listelenir. Ticari kullanım hakkı olduğunu varsayma; iki modelin ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 
 ## Testler
 

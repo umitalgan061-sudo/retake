@@ -721,6 +721,7 @@ function selectResult(index) {
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
     describeNaturalness(item.naturalness),
+    item.identityModel ? "kimlik modeli: " + ({ hyperswap_1b_256: "HyperSwap 1b", alphaface_256: "AlphaFace" }[item.identityModel] || item.identityModel) : "",
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     describeAdaptiveQuality(item.similarity, item.before, item.identityAspiration, item.finalistAttempts),
     describeFluxStatus(item.fluxStatus),
@@ -824,7 +825,8 @@ function addResult(blob, label, scores = {}) {
     realism: scores.realism === true,
     texture: scores.texture || "average",
     referenceMedian: scores.referenceMedian ?? null,
-    naturalness: scores.naturalness ?? null
+    naturalness: scores.naturalness ?? null,
+    identityModel: scores.identityModel || ""
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -2502,7 +2504,9 @@ async function runFaceFusionEdit(options = {}) {
       realismFinalists: Number.parseInt(response.headers.get("X-Retake-Ultra-Realism-Finalists") || "", 10),
       naturalness: parseNaturalness(
         response.headers.get("X-Retake-Naturalness"), response.headers.get("X-Retake-Naturalness-Checks")
-      )
+      ),
+      identityModel: /^[a-z0-9_]{3,40}$/.test(response.headers.get("X-Retake-Identity-Model") || "")
+        ? response.headers.get("X-Retake-Identity-Model") : ""
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),

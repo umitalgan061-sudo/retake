@@ -449,11 +449,11 @@ class CachedPipelineTest(unittest.TestCase):
         first, second = [], []
         self.run_swap(0, first)
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual([model for model, _ in self.facefusion_calls], ["alphaface_256", "inswapper_128", "uniface_256"])
+        self.assertEqual([model for model, _ in self.facefusion_calls], ["hyperswap_1b_256", "inswapper_128", "uniface_256"])
         # Stage 5 (photographic realism) is not installed here and is skipped.
         self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False), (6, False)])
 
-        self.run_swap(1, second)  # same swapper weight, different head fit
+        self.run_swap(2, second)  # same identity model and swapper weight, different head fit
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
         self.assertEqual(len(self.facefusion_calls), 3, "all FaceFusion passes reused")
         self.assertEqual(second, [(0, True), (1, True), (2, True), (3, True), (4, False), (6, False)])
@@ -604,8 +604,8 @@ class CachedPipelineTest(unittest.TestCase):
         }
         headers = self.run_swap(0, [])
         self.assertEqual(headers["X-Retake-Identity-Source"], "consensus")
-        self.assertIn(("alphaface_256", 25), self.source_sizes)
-        self.assertIn(("alphaface_256", 12), self.source_sizes)
+        self.assertIn(("hyperswap_1b_256", 25), self.source_sizes)
+        self.assertIn(("hyperswap_1b_256", 12), self.source_sizes)
         self.assertEqual(headers["X-Retake-Compositing"], "preblended")
 
     def test_real_reference_texture_can_win_over_a_blurred_mean(self):
@@ -765,8 +765,29 @@ class CachedPipelineTest(unittest.TestCase):
         self.run_swap(0, [])
         self.run_swap(3, [])
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual([model for model, _ in self.facefusion_calls].count("alphaface_256"), 2)
+        models = [model for model, _ in self.facefusion_calls]
+        # Variant 0 uses HyperSwap 1b, the odd variant 3 AlphaFace (srv.identity_model_for).
+        self.assertEqual((models.count("hyperswap_1b_256"), models.count("alphaface_256")), (1, 1))
         self.assertEqual(self.facefusion_calls[-1][1], 0.95)
+
+    def test_ultra_variants_alternate_identity_models(self):
+        self.assertEqual([srv.identity_model_for(v) for v in range(4)],
+                         ["hyperswap_1b_256", "alphaface_256", "hyperswap_1b_256", "alphaface_256"])
+        headers = self.run_swap(1, [])
+        self.assertEqual(headers["X-Retake-Identity-Model"], "alphaface_256")
+
+    def test_a_failed_hyperswap_pass_falls_back_to_alphaface(self):
+        real = self.fake_facefusion
+
+        def flaky(facefusion_dir, target, sources, output, model, *rest):
+            if model == "hyperswap_1b_256":
+                raise RuntimeError("model download failed")
+            return real(facefusion_dir, target, sources, output, model, *rest)
+
+        with patch.object(self, "fake_facefusion", flaky):
+            headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Model"], "alphaface_256")
+        self.assertIsNotNone(srv.score_from_headers(headers))
 
 
 class RemainingTimeTest(unittest.TestCase):

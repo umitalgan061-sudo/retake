@@ -108,3 +108,13 @@ class PortraitEvidenceTest(unittest.TestCase):
             for v in evidence.values():
                 self.assertAlmostEqual(v[0],v[1])
                 self.assertAlmostEqual(v[2],v[3])
+
+
+    def test_within_round_reference_preference_never_downgrades_identity_or_detail(self):
+        from tools.portrait_evidence import regional_tie_indices, choose_regional_evidence
+        ids=[.832,.831,.80,.832]
+        details=[.90,.90,.99,.80]
+        self.assertEqual(regional_tie_indices(ids,details,0),[0,1])
+        self.assertEqual(choose_regional_evidence(ids,details,0,{0:.5,1:.9,2:1.,3:1.}),1)
+        self.assertEqual(choose_regional_evidence(ids,details,0,{1:.9}),0)
+        self.assertEqual(choose_regional_evidence(ids,details,0,{0:.5,1:.53}),0)

@@ -52,3 +52,21 @@ test("the report lists measurements and a whitelisted engine summary", () => {
   assert.match(report, /identity_scorer: \{"enabled":true,"calls":12,"last_error":"\[yol\] missing"\}/);
   assert.doesNotMatch(report, /facefusion_dir|never|AI\\\\facefusion/);
 });
+
+
+test("result revision is not silently replaced by a newer connected motor", async () => {
+  const {EXPECTED_QUALITY_REVISION,describeQualityCompatibility}=await import("../src/diagnostics.js");
+  const old="portrait-quality-20261125-r2";
+  assert.equal(describeQualityCompatibility(EXPECTED_QUALITY_REVISION),"");
+  assert.equal(describeQualityCompatibility("portrait-quality-20261126-r10"),"");
+  assert.match(describeQualityCompatibility(old),/eski kalite paketi/);
+  assert.match(describeQualityCompatibility(undefined),/doğrulanamadı/);
+  const report=buildDiagnosticReport({headers:{"x-retake-quality-revision":old,"x-retake-token":"private"},
+    health:{quality_revision:EXPECTED_QUALITY_REVISION,flux_texture_alternatives:true}});
+  assert.match(report,/Sonucu üreten kalite sürümü: portrait-quality-20261125-r2/);
+  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261126-r7/);
+  assert.match(report,/güncel motor durumu bu sonucun kanıtı değildir/);
+  assert.match(report,/flux_texture_alternatives: true/);
+  assert.doesNotMatch(report,/private|x-retake-token/);
+  assert.match(buildDiagnosticReport({health:{quality_revision:EXPECTED_QUALITY_REVISION}}),/Sonucu üreten kalite sürümü: doğrulanamadı/);
+});

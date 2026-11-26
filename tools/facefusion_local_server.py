@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .nim_photo_edit import configured_editors, candidate_from_editor
+    from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
     from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -47,7 +47,7 @@ try:
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 except ImportError:
-    from nim_photo_edit import configured_editors, candidate_from_editor
+    from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
     from ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -1897,6 +1897,7 @@ def process_swap(
         flux_detail_delta = None
         flux_strength = None
         flux_blend_mode = ''
+        flux_skin_gain = None
         if nim_editors and centroid:
             indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
@@ -1915,19 +1916,29 @@ def process_swap(
                         alternatives.extend((path.with_name(f"{path.stem}-texture-{round(strength*100)}{path.suffix}"), strength, "texture") for strength in (.25,.50))
                         flux_status = "quality-rejected"
                     measured = []
+                    base_pixels = cv2.imread(str(final_output),cv2.IMREAD_UNCHANGED)
+                    seen_payloads = set()
                     for candidate, strength, blend_mode in alternatives:
                         if not candidate.is_file():
                             continue
+                        candidate_pixels = cv2.imread(str(candidate),cv2.IMREAD_UNCHANGED)
+                        if candidate_pixels is None or (base_pixels is not None and np.array_equal(candidate_pixels,base_pixels)):
+                            continue
+                        fingerprint = hashlib.sha256(candidate_pixels.tobytes()).digest()
+                        if fingerprint in seen_payloads:
+                            continue
+                        seen_payloads.add(fingerprint)
                         acceptable, reason = check_render_file(final_output, candidate, metadata["faceBounds"])
                         if not acceptable or not check_detail_gate(target_path, candidate, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, candidate, metadata["faceBounds"])["meaningful"]:
                             continue
                         detail, _ = check_photo_detail(target_path, candidate, metadata["faceBounds"])
-                        measured.append((candidate, strength, detail, blend_mode))
+                        skin_gain = interior_texture_gain(target_path,final_output,candidate,metadata["faceBounds"]) if blend_mode == "texture" else None
+                        measured.append((candidate, strength, detail, blend_mode, skin_gain))
                     if not measured:
                         print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
                         continue
                     values = score_identity(facefusion_dir, centroid, [row[0] for row in measured])
-                    for (candidate, strength, detail, blend_mode), value in zip(measured, values):
+                    for (candidate, strength, detail, blend_mode, skin_gain), value in zip(measured, values):
                         if value is None:
                             continue
                         delta = value - result_similarity
@@ -1935,11 +1946,13 @@ def process_swap(
                         if model == flux_model and (flux_delta is None or delta > flux_delta):
                             flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
                             flux_blend_mode = blend_mode
-                            flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS else "detail-gain-insufficient"
+                            flux_skin_gain = skin_gain
+                            flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS or value < finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) else "detail-gain-insufficient"
                         if value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) and delta >= -ULTRA_REALISM_TIE_LOSS and (
                             delta > .001 or (detail_delta is not None and detail_delta > .06)
+                            or (skin_gain is not None and skin_gain > .05 and detail_delta is not None and detail_delta >= -.01)
                         ):
-                            nim_candidates.append((value, detail or 0., model, candidate, strength, delta, detail_delta, blend_mode))
+                            nim_candidates.append((value, detail or 0., model, candidate, strength, delta, detail_delta, blend_mode, skin_gain))
                     if model == flux_model and flux_delta is None:
                         flux_status = "identity-unmeasured"
                 except Exception as error:
@@ -1947,12 +1960,13 @@ def process_swap(
                         flux_status = "worker-error"
                     print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
             if nim_candidates:
-                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = max(nim_candidates, key=lambda row: (row[0], row[1]))
                 shutil.copyfile(path, final_output)
                 if nim_used == flux_model:
                     flux_status = "accepted"
                     flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
                     flux_blend_mode = blend_mode
+                    flux_skin_gain = skin_gain
                 elif any(row[2] == flux_model for row in nim_candidates):
                     flux_status = "candidate-not-selected"
                 print(f"[NIM] Ölçümlerle kabul edilen yerel aday: {nim_used}", flush=True)
@@ -2141,6 +2155,7 @@ def process_swap(
             'X-Retake-FLUX-Detail-Delta': '' if flux_detail_delta is None else f"{flux_detail_delta:.5f}",
             'X-Retake-FLUX-Strength': '' if flux_strength is None else f"{flux_strength:.3f}",
             'X-Retake-FLUX-Blend-Mode': flux_blend_mode,
+            'X-Retake-FLUX-Skin-Gain': '' if flux_skin_gain is None else f'{flux_skin_gain:.4f}',
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
             'X-Retake-Detail-Gate': 'passed',
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
@@ -2994,7 +3009,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
-            "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, "
+            "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, X-Retake-FLUX-Skin-Gain, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "

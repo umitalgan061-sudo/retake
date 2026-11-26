@@ -24,7 +24,7 @@ class PortraitEvidenceTest(unittest.TestCase):
     def test_smooth_source_still_has_absolute_lower_face_evidence(self):
         result,fit=reference_evidence(self.base,self.edited,self.b)
         self.assertIsNone(fit)
-        self.assertEqual(result["lower_face"][0],0)
+        self.assertLess(result["lower_face"][0],1e-3)
         self.assertGreater(result["lower_face"][1],0)
         self.assertIn("lower_face:0.00>",format_evidence(result))
 

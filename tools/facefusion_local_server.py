@@ -27,7 +27,7 @@ try:
         judge_status, judged_winner
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
-    from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest, IdentityScoreCache
     from .identity_scorer import PersistentIdentityScorer
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
@@ -54,7 +54,7 @@ except ImportError:
         judge_status, judged_winner
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
-    from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest, IdentityScoreCache
     from identity_scorer import PersistentIdentityScorer
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
@@ -1424,6 +1424,12 @@ def process_swap(
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
         centroid = identity_report.get("centroid")
+        score_cache = caches.get("identity_scores")
+
+        def measure_identity(paths):
+            measure = lambda probes: score_identity(facefusion_dir,centroid,probes)
+            return score_cache.score(centroid,paths,measure) if score_cache is not None else measure(paths)
+
         identity_source_paths = weighted_identity_paths
         identity_source = identity_output
         identity_pool = "all-25"
@@ -1442,9 +1448,7 @@ def process_swap(
                     # candidate runs out of VRAM or fails face detection.
                     print(f"Ek {name} kimlik adayı atlandı: {error}", flush=True)
             if len(candidates) > 1:
-                candidate_scores = score_identity(
-                    facefusion_dir, centroid, [path for _, path, _, _ in candidates]
-                )
+                candidate_scores = measure_identity([path for _, path, _, _ in candidates])
                 best_index = choose_identity_pool(candidate_scores, variation)
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
                 print(
@@ -1464,7 +1468,7 @@ def process_swap(
             reinforced_output = temp_dir / "retake-identity-reinforced.png"
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
-                single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
+                single, double = measure_identity([identity_source, reinforced_output])
                 wanted, why = reinforcement_wanted(
                     single, double, sufficiency_from_level(identity_report.get("photo_level_similarity"))
                 )
@@ -1771,7 +1775,7 @@ def process_swap(
                 except (ValueError,OSError,cv2.error):
                     continue
             if prepared:
-                for idx,value in zip(indices,score_identity(facefusion_dir,centroid,prepared)):
+                for idx,value in zip(indices,measure_identity(prepared)):
                     values[idx]=value
             return values
 
@@ -2392,7 +2396,11 @@ def run_ultra_search(
     timing: dict[str, list[float]] = {"search": [], "refine": [], "realism": [], "extra": []}
     judge_seconds = 0.0
     hold_seconds = 0.0
-    pass_cache = (caches or {}).get("passes")
+    # All variants share only a job-local exact-image score cache. Neither
+    # failed scores nor data from previous jobs are retained.
+    score_cache = IdentityScoreCache()
+    caches = {**(caches or {}), "identity_scores": score_cache}
+    pass_cache = caches.get("passes")
     cache_start = pass_cache.describe() if hasattr(pass_cache, "describe") else None
     scorer_start = dict(IDENTITY_SCORER.stats) if IDENTITY_SCORER is not None else None
     best_result: bytes | None = None
@@ -2809,6 +2817,7 @@ def run_ultra_search(
         "X-Retake-Ultra-Realism-Finalists": str(realism_finalists),
         "X-Retake-Ultra-Timing": format_ultra_timing(timing, judge_seconds, hold_seconds, clock() - started),
         "X-Retake-Engine-Stats": engine_stats(pass_cache, cache_start, scorer_start),
+        "X-Retake-Identity-Score-Cache": f"hits:{score_cache.hits},measured:{score_cache.measured},failed:{score_cache.failed}",
     }
     learn()
     print(
@@ -3083,7 +3092,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
             "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined, "
             "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera, "
-            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats, X-Retake-NVIDIA-Judge-Layout"
+            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats, X-Retake-Identity-Score-Cache, X-Retake-NVIDIA-Judge-Layout"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -3144,6 +3153,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "model": HYBRID_PROFILE_VERSION,
             "quality_revision": QUALITY_PIPELINE_REVISION,
             "visible_identity_verification": True,
+            "job_local_identity_score_cache": True,
             "finishing_identity_guard": True,
             "flux_texture_alternatives": True,
             "distinct_extra_search": True,

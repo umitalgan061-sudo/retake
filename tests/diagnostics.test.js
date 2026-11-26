@@ -70,3 +70,12 @@ test("result revision is not silently replaced by a newer connected motor", asyn
   assert.doesNotMatch(report,/private|x-retake-token/);
   assert.match(buildDiagnosticReport({health:{quality_revision:EXPECTED_QUALITY_REVISION}}),/Sonucu üreten kalite sürümü: doğrulanamadı/);
 });
+
+
+test("diagnostic quality gaps use only verified numerical headers", async () => {
+  const {summarizeQualityEvidence}=await import("../src/diagnostics.js");
+  const report=summarizeQualityEvidence({"x-retake-similarity":".832","x-retake-ultra-peak-identity":".835","x-retake-identity-aspiration":".87","x-retake-detail-gate":"passed"});
+  assert.match(report,/arama zirvesinden fark 0,30 puan/);
+  assert.match(report,/arama hedefinden fark -3,80 puan/);
+  assert.equal(summarizeQualityEvidence({"x-retake-similarity":"","x-retake-ultra-peak-identity":"nan"}),"");
+});

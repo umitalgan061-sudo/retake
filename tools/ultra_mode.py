@@ -666,4 +666,51 @@ def judge_quality_guard(candidate, incumbent):
         return False,"rim-unmeasured"
     if new_rim is not None and old_rim is not None and new_rim > old_rim+JURY_MAX_RIM_INCREASE:
         return False,"rim"
+    # Compare individual native detail ratios as distance from the source's
+    # texture, not as a reward for maximum sharpening.
+    for key, parser in (("X-Retake-Detail-Regions",regional_quality_values),
+                        ("X-Retake-Fine-Detail",fine_region_quality_values)):
+        previous=parser(incumbent.get(key,""))
+        proposed=parser(candidate.get(key,""))
+        for region,old in previous.items():
+            new=proposed.get(region)
+            if new is None or new < old-.15:
+                return False,"region-"+region
     return True,"passed"
+
+
+def _ratio_quality(value):
+    try:
+        ratio=float(value)
+    except (TypeError,ValueError):
+        return None
+    if not math.isfinite(ratio) or not .001<=ratio<=1000:
+        return None
+    return math.exp(-.72*abs(math.log(ratio)))
+
+
+def regional_quality_values(header):
+    allowed={"eyes","nose","mouth","lower_face"}
+    values={}
+    for part in str(header or "").split(","):
+        name,sep,ratio=part.partition(":")
+        if sep and name in allowed:
+            quality=_ratio_quality(ratio)
+            if quality is not None:
+                values[name]=quality
+    return values
+
+
+def fine_region_quality_values(header):
+    # Engine reports before>after, with rejected finishing proposals reset
+    # to the actually delivered ratio.
+    allowed={"eye_r","eye_l","brow_r","brow_l","lips","nose_tip","mouth_inner"}
+    values={}
+    for part in str(header or "").split(","):
+        name,sep,pair=part.partition(":")
+        _,arrow,after=pair.partition(">")
+        if sep and arrow and name in allowed:
+            quality=_ratio_quality(after)
+            if quality is not None:
+                values[name]=quality
+    return values

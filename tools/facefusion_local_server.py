@@ -129,7 +129,7 @@ APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 # Keep the transport model identifier stable for older web clients. Track
 # quality-pipeline changes separately for deployment and calibration checks.
-QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r8"
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r9"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the

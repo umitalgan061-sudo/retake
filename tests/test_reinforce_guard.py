@@ -8,7 +8,9 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from tools.ultra_quality import check_reinforcement_detail, reinforcement_detail_decision
+from tools.ultra_quality import (
+    check_reinforcement_detail, fuse_reinforcement_detail, reinforcement_detail_decision, reinforcement_split_sigma
+)
 
 
 def textured(size=(1000, 800), seed=3):
@@ -25,6 +27,41 @@ def render_at(image, bounds, model_px):
     small = cv2.resize(face, (model_px, max(1, round(model_px * h / w))), interpolation=cv2.INTER_AREA)
     out[y:y + h, x:x + w] = cv2.resize(small, (w, h), interpolation=cv2.INTER_CUBIC)
     return out
+
+
+class DetailFusionTest(unittest.TestCase):
+    def test_fusion_keeps_the_reinforced_structure_and_the_single_pass_detail(self):
+        bounds = {"x": 170, "y": 200, "width": 460, "height": 600}
+        base = textured()
+        single = render_at(base, bounds, 256)
+        reinforced = render_at(base, bounds, 128)
+        x, y, w, h = 170, 200, 460, 600
+        # The reinforcement also moves identity: a broad (low-frequency) change.
+        shift = np.zeros(base.shape, np.float32)
+        cv2.ellipse(shift, (x + w // 2, y + h // 2), (w // 3, h // 3), 0, 0, 360, (12, 6, -8), -1)
+        shift = cv2.GaussianBlur(shift, (0, 0), 25)
+        reinforced = np.clip(reinforced.astype(np.float32) + shift, 0, 255).astype(np.uint8)
+        with tempfile.TemporaryDirectory() as folder:
+            a, b, c = (Path(folder) / name for name in ("single.png", "reinforced.png", "fused.png"))
+            cv2.imwrite(str(a), single)
+            cv2.imwrite(str(b), reinforced)
+            sigma = fuse_reinforcement_detail(a, b, c, bounds)
+            fused = cv2.imread(str(c))
+            self.assertFalse(check_reinforcement_detail(a, b, bounds)[0])
+            self.assertTrue(check_reinforcement_detail(a, c, bounds)[0])
+        self.assertAlmostEqual(sigma, reinforcement_split_sigma(460))
+        broad = lambda image: cv2.GaussianBlur(image.astype(np.float32), (0, 0), 12)
+        face = (slice(y + 100, y + h - 100), slice(x + 100, x + w - 100))
+        self.assertLess(np.abs(broad(fused) - broad(reinforced))[face].mean(), 1.0)
+        self.assertGreater(np.abs(broad(single) - broad(reinforced))[face].mean(), 3.0)
+        # Pixels neither swapper touched are unchanged.
+        self.assertTrue(np.array_equal(fused[:150, :150], single[:150, :150]))
+
+    def test_split_sigma_follows_the_face_size_within_bounds(self):
+        self.assertEqual(reinforcement_split_sigma(128), 1.0)
+        self.assertAlmostEqual(reinforcement_split_sigma(460), 0.5 * 460 / 128)
+        self.assertEqual(reinforcement_split_sigma(5000), 4.0)
+        self.assertEqual(reinforcement_split_sigma(float("nan")), 1.0)
 
 
 class ReinforceGuardTest(unittest.TestCase):

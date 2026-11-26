@@ -325,6 +325,7 @@ class CachedPipelineTest(unittest.TestCase):
     render_scores: list = []
 
     reinforce_scores = (0.70, 0.60)
+    fused_score = 0.77
 
     blend_scores = None
     candidate_scores = None
@@ -335,6 +336,8 @@ class CachedPipelineTest(unittest.TestCase):
             # The optional post-render cleanup uses a second score probe.
             # Keep the preceding full-rescue probe available to existing tests.
             return [self.candidate_scores.get(names[0], 0.74) if self.candidate_scores else 0.74]
+        if names == ["retake-identity-reinforced-detail.png"]:
+            return [self.fused_score]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)
@@ -462,6 +465,22 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(self.reinforce_probes, ["retake-identity-alpha.png", "retake-identity-reinforced.png"])
         self.reinforce_scores = (0.70, 0.66)
         self.assertEqual(self.run_swap(2, [])["X-Retake-Identity-Reinforced"], "off")
+
+    def test_a_blurring_reinforcement_keeps_its_identity_through_detail_fusion(self):
+        self.reinforce_scores = (0.70, 0.78)
+
+        def guard(single, candidate, bounds):
+            if candidate.name == "retake-identity-reinforced.png":
+                return False, "eyes-blur", {"eyes": 0.80}
+            return True, "passed", {"eyes": 0.95}
+
+        with patch.object(srv, "check_reinforcement_detail", guard):
+            headers = self.run_swap(0, [])
+            self.assertEqual(headers["X-Retake-Identity-Reinforced"], "on")
+            self.assertEqual(headers["X-Retake-Reinforce-Guard"], "detail-fused")
+            self.fused_score = 0.703          # no real identity gain: not used
+            headers = self.run_swap(2, [])
+            self.assertEqual(headers["X-Retake-Identity-Reinforced"], "off")
 
     def test_softer_variant_is_not_reinforced(self):
         headers = self.run_swap(3, [])

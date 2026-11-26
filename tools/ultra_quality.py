@@ -328,6 +328,47 @@ def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold,
     return best if detail_scores[best] >= detail_scores[chosen] + minimum_detail_gain else chosen
 
 
+# The 128 px reinforcement carries identity in its coarse structure and loses
+# only the finest detail when upscaled onto a large face. Its low frequencies
+# plus the 256 px pass's own fine band keep both (classic frequency split).
+REINFORCE_RENDER_EDGE = 128.0
+REINFORCE_SPLIT_SCALE = 0.5      # sigma = scale * face width / 128 px
+REINFORCE_SPLIT_RANGE = (1.0, 4.0)
+
+
+def reinforcement_split_sigma(face_width: float) -> float:
+    low, high = REINFORCE_SPLIT_RANGE
+    if not math.isfinite(face_width) or face_width <= 0:
+        return low
+    return float(min(high, max(low, REINFORCE_SPLIT_SCALE * face_width / REINFORCE_RENDER_EDGE)))
+
+
+def fuse_reinforcement_detail(single_path: Path, reinforced_path: Path, output_path: Path,
+                              bounds: dict[str, Any]) -> float:
+    """Write reinforced low frequencies + single-pass fine detail; returns sigma.
+
+    Both are whole swapper outputs of the same untouched target, so pixels
+    the swappers left alone stay identical (same in both, same in the sum).
+    """
+    single = cv2.imread(str(single_path), cv2.IMREAD_UNCHANGED)
+    reinforced = cv2.imread(str(reinforced_path), cv2.IMREAD_UNCHANGED)
+    if single is None or reinforced is None or single.shape != reinforced.shape:
+        raise ValueError("Pekiştirme ayrıntı birleşimi için görüntüler okunamadı.")
+    try:
+        width = float(bounds["width"])
+    except (KeyError, TypeError, ValueError):
+        width = float(single.shape[1]) / 3
+    sigma = reinforcement_split_sigma(width)
+    s = single.astype(np.float32)
+    r = reinforced.astype(np.float32)
+    fused = cv2.GaussianBlur(r, (0, 0), sigma) + (s - cv2.GaussianBlur(s, (0, 0), sigma))
+    if fused.ndim == 3 and fused.shape[2] == 4:
+        fused[:, :, 3] = r[:, :, 3]
+    if not cv2.imwrite(str(output_path), np.clip(np.rint(fused), 0, 255).astype(np.uint8)):
+        raise OSError("Pekiştirme ayrıntı birleşimi yazılamadı.")
+    return sigma
+
+
 def reinforcement_wanted(single, double, threshold, minimum_gain=0.008):
     """128 px InSwapper reinforcement only when identity is still short of the
     person's photo level and ArcFace actually rises."""

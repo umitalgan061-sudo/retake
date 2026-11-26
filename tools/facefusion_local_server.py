@@ -31,7 +31,7 @@ try:
     from .identity_scorer import PersistentIdentityScorer
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
+    from .ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
@@ -57,7 +57,7 @@ except ImportError:
     from identity_scorer import PersistentIdentityScorer
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
+    from ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
@@ -1534,6 +1534,29 @@ def process_swap(
                             f"Kimlik pekiştirme reddedildi: 128 px sonuç ayrıntı kaybettiriyor ({reinforce_guard}; oranlar={reinforce_ratios}).",
                             flush=True
                         )
+                        # Keep the identity, not the blur: 128 px coarse
+                        # structure + the 256 px pass's own fine detail,
+                        # verified like the plain reinforcement.
+                        fused_output = temp_dir / "retake-identity-reinforced-detail.png"
+                        sigma = fuse_reinforcement_detail(identity_source, reinforced_output, fused_output, metadata["faceBounds"])
+                        fused_score = score_identity(facefusion_dir, centroid, [fused_output])[0]
+                        fused_wanted, _ = reinforcement_wanted(
+                            single, fused_score, sufficiency_from_level(identity_report.get("photo_level_similarity"))
+                        )
+                        fused_keeps, fused_guard, fused_ratios = check_reinforcement_detail(
+                            identity_source, fused_output, metadata["faceBounds"]
+                        )
+                        print(
+                            f"Kimlik pekiştirme ayrıntı birleşimi (sigma {sigma:.1f}): benzerlik "
+                            + ("—" if fused_score is None else f"{fused_score:.3f}")
+                            + f", ayrıntı {fused_guard} {fused_ratios}.",
+                            flush=True
+                        )
+                        if fused_wanted and fused_keeps:
+                            identity_source = fused_output
+                            reinforced = True
+                            double = fused_score
+                            reinforce_guard = "detail-fused"
                 else:
                     # Already at the person's photo level, or no real gain.
                     reinforce_guard = why

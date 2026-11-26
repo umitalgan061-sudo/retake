@@ -124,3 +124,40 @@ class SmallFaceInputTest(unittest.TestCase):
             cv2.imwrite(str(path),np.full((100,100,3),120,np.uint8))
             self.assertEqual(prepare_small_face_inference(path,dict(x=10,y=10,width=70,height=70),7,root),(path,"insufficient-evidence"))
             self.assertEqual(prepare_small_face_inference(path,dict(x=-10,y=10,width=70,height=70),7,root),(path,"invalid-bounds"))
+
+
+class VisibleIdentityProbeTest(unittest.TestCase):
+    def test_probe_matches_transport_and_never_scores_hidden_rgb(self):
+        from tools.retake_output_transport import prepare_visible_identity_probe
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            target=np.full((81,101,3),120,np.uint8)
+            composite=np.full((81,101,4),255,np.uint8)
+            composite[:,:,3]=0
+            composite[20:60,30:70,:3]=[100,130,160]
+            composite[20:60,30:70,3]=1
+            a,b=root/"target.png",root/"candidate.png"
+            cv2.imwrite(str(a),target);cv2.imwrite(str(b),composite)
+            path=prepare_visible_identity_probe(a,b,root)
+            wire=cv2.imdecode(np.frombuffer(encode_preblended_result(a,b),np.uint8),cv2.IMREAD_UNCHANGED)
+            np.testing.assert_array_equal(cv2.imread(str(path)),wire[:,:,:3])
+            self.assertEqual(prepare_visible_identity_probe(a,b,root),path)
+            composite[0,0,:3]=0
+            cv2.imwrite(str(b),composite)
+            self.assertEqual(prepare_visible_identity_probe(a,b,root),path)
+            composite[30,40,:3]=[101,130,160]
+            cv2.imwrite(str(b),composite)
+            new_path=prepare_visible_identity_probe(a,b,root)
+            self.assertNotEqual(new_path,path)
+            np.testing.assert_array_equal(cv2.imread(str(path))[30,40],[100,130,160])
+            self.assertEqual(prepare_visible_identity_probe(a,a,root),a)
+
+    def test_mismatched_alpha_probe_fails_closed(self):
+        from tools.retake_output_transport import prepare_visible_identity_probe
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            a,b=root/"target.png",root/"candidate.png"
+            cv2.imwrite(str(a),np.zeros((80,80,3),np.uint8))
+            cv2.imwrite(str(b),np.zeros((81,81,4),np.uint8))
+            with self.assertRaises(ValueError):
+                prepare_visible_identity_probe(a,b,root)

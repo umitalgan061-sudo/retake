@@ -149,13 +149,17 @@ def prefer_sufficient_candidate(candidate: dict[str, str], best: dict[str, str])
             return True
         if old_rim + ULTRA_RIM_GAIN < new_rim:
             return False
-    # 3. More of the real photo's eye/nose/mouth detail.
+    # 3. Eyes, brows and lips measurably closer to the photo (v26).
+    fine = fine_preference(candidate, best)
+    if fine is not None:
+        return fine
+    # 4. More of the real photo's eye/nose/mouth detail.
     new_detail, old_detail = detail_from_headers(candidate), detail_from_headers(best)
     if new_detail is not None and old_detail is not None and abs(new_detail - old_detail) > ULTRA_DETAIL_GAIN / 2:
         return new_detail > old_detail
     if _photo_detail(candidate) != _photo_detail(best):
         return _photo_detail(candidate) > _photo_detail(best)
-    # 4. Only then identity, as a tie-breaker.
+    # 5. Only then identity, as a tie-breaker.
     return (score_from_headers(candidate) or -1.0) > (score_from_headers(best) or -1.0) + ULTRA_SCORE_EPS
 
 
@@ -193,6 +197,13 @@ def prefer_ultra_candidate(
             return True
         if old_rim + ULTRA_RIM_GAIN < new_rim:
             return False
+
+    # Inside the identity tie band: more natural finest features first.
+    fine = fine_preference(candidate, best)
+    if fine is True and new >= old - ULTRA_REALISM_TIE_LOSS:
+        return True
+    if fine is False and new <= old + ULTRA_SCORE_EPS:
+        return False
 
     new_detail = detail_from_headers(candidate)
     old_detail = detail_from_headers(best)
@@ -486,3 +497,45 @@ def finalist_specs(records: list, best_spec: tuple, peak_identity: float, count:
             specs.append(spec)
         remaining = [item for item in remaining if item[0] != spec]
     return specs
+
+
+# --- Job diagnostics (v26) -------------------------------------------------
+# One header that says where the time went, so a long job can be tuned from
+# a copied report instead of a console log. Format (seconds, rounded):
+#   search=19x72;refine=4x31;realism=2x210;extra=1x65;judge=40;hold=0;total=2210
+TIMING_PHASES = ("search", "refine", "realism", "extra")
+
+
+def format_ultra_timing(phases: dict[str, list[float]], judge_seconds: float,
+                        hold_seconds: float, total_seconds: float) -> str:
+    parts = []
+    for name in TIMING_PHASES:
+        durations = [value for value in phases.get(name, []) if math.isfinite(value) and value >= 0]
+        if durations or name == "search":
+            mean = sum(durations) / len(durations) if durations else 0.0
+            parts.append(f"{name}={len(durations)}x{round(mean)}")
+    for name, value in (("judge", judge_seconds), ("hold", hold_seconds), ("total", total_seconds)):
+        parts.append(f"{name}={round(max(0.0, value)) if math.isfinite(value) else 0}")
+    return ";".join(parts)
+
+
+# Finest features in selection: once identity is equal (or sufficient), the
+# candidate whose eyes, brows and lips are measurably closer to the photo's
+# own detail is the more natural one. Box-region detail stays the next rule.
+ULTRA_FINE_GAIN = 0.03
+
+
+def fine_quality_from_headers(headers: dict[str, str]) -> float | None:
+    try:
+        value = float(headers.get("X-Retake-Fine-Quality", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+
+
+def fine_preference(candidate: dict[str, str], best: dict[str, str]) -> bool | None:
+    """True/False when the finest features clearly differ, else None."""
+    new, old = fine_quality_from_headers(candidate), fine_quality_from_headers(best)
+    if new is None or old is None or abs(new - old) <= ULTRA_FINE_GAIN:
+        return None
+    return new > old

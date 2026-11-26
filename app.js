@@ -45,6 +45,7 @@ import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
+import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming } from "./src/diagnostics.js";
 import {
   bestResultIndex,
   measureFaceEdit,
@@ -132,6 +133,7 @@ const elements = {
   benchmarkSummaryNote: $("#benchmarkSummaryNote"),
   nvidiaJudgeToggle: $("#nvidiaJudgeToggle"),
   downloadButton: $("#downloadButton"),
+  diagnosticsButton: $("#diagnosticsButton"),
   resultImage: $("#resultImage"),
   resultView: $("#resultView"),
   originalImage: $("#originalImage"),
@@ -279,6 +281,11 @@ function updateSwapAvailability() {
   updateBenchmarkAvailability(referenceCount);
   elements.downloadButton.disabled = !state.result || state.isSwapping;
   elements.shareButton.disabled = !state.result || state.isSwapping;
+  if (elements.diagnosticsButton) {
+    const hasReport = Boolean(state.result?.diagnostics && Object.keys(state.result.diagnostics).length);
+    elements.diagnosticsButton.hidden = !hasReport;
+    elements.diagnosticsButton.disabled = !hasReport || state.isSwapping;
+  }
   const copy = elements.swapButton.querySelector(".button-copy");
   if (copy) copy.textContent = state.result ? "Yeniden oluştur" : "Yüzümü uygula";
   const tag = elements.swapButton.querySelector(".button-state");
@@ -696,6 +703,7 @@ function selectResult(index) {
     describeUltraSchedule(item.ultraSchedule, item.calibrationSamples),
     describeUltraDepth(item.ultraDepth, item.ultraRefinements, item.realismFinalists),
     describeFineFeatures(item.fineFeatures, item.fineDetail, item.catchlights, item.sclera),
+    describeUltraTiming(item.ultraTiming),
     item.nvidiaJudge === 'error' ? describeJudgeError(item.nvidiaJudgeError) : '',
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
@@ -737,6 +745,8 @@ function addResult(blob, label, scores = {}) {
     calibrationSamples: Number.isInteger(scores.calibrationSamples) ? scores.calibrationSamples : null,
     ultraDepth: scores.ultraDepth || "",
     fineFeatures: scores.fineFeatures || "",
+    ultraTiming: scores.ultraTiming || "",
+    diagnostics: scores.diagnostics && typeof scores.diagnostics === "object" ? scores.diagnostics : null,
     fineDetail: scores.fineDetail || "",
     catchlights: scores.catchlights || "",
     sclera: scores.sclera || "",
@@ -2406,6 +2416,9 @@ async function runFaceFusionEdit(options = {}) {
       calibrationSamples: Number.parseInt(response.headers.get("X-Retake-Calibration-Samples") || "", 10),
       ultraDepth: response.headers.get("X-Retake-Ultra-Depth") || "",
       fineFeatures: response.headers.get("X-Retake-Fine-Features") || "",
+      ultraTiming: response.headers.get("X-Retake-Ultra-Timing") || "",
+      // Measurements only (no image, name or path) for the copied report.
+      diagnostics: collectDiagnosticHeaders(response.headers),
       fineDetail: response.headers.get("X-Retake-Fine-Detail") || "",
       catchlights: response.headers.get("X-Retake-Catchlights") || "",
       sclera: response.headers.get("X-Retake-Sclera") || "",
@@ -2612,6 +2625,35 @@ function downloadBenchmarkReport() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+// One text with this result's measurements and the engine's state, to paste
+// into a chat. Clipboard first; a .txt download when the clipboard refuses.
+async function copyDiagnostics() {
+  const item = state.result;
+  if (!item?.diagnostics) return;
+  let health = null;
+  try {
+    const response = await engineFetch("/health", { headers: { Accept: "application/json" }, signal: AbortSignal.timeout?.(4000) });
+    if (response.ok) health = await response.json();
+  } catch { /* the engine may be off: the result's own headers still help */ }
+  const report = buildDiagnosticReport({
+    headers: item.diagnostics, health, depth: item.diagnostics["x-retake-ultra-depth"] || ""
+  });
+  try {
+    await navigator.clipboard.writeText(report);
+    showToast("Tanı raporu kopyalandı — sohbete yapıştırabilirsin (görsel içermez).");
+  } catch {
+    const url = URL.createObjectURL(new Blob([report], { type: "text/plain;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "retake-tani-raporu.txt";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    showToast("Pano kullanılamadı; tanı raporu .txt olarak indirildi.");
+  }
+}
+
 async function downloadResult() {
   if (!state.result || !state.target) return;
   try {
@@ -2693,6 +2735,7 @@ function initializeEngineSettings() {
   restoreNvidiaJudgePreference();
   restoreQualityDepthPreference();
   elements.shareButton.addEventListener("click", shareResult);
+  elements.diagnosticsButton?.addEventListener("click", copyDiagnostics);
   elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
   // When the app comes back to the foreground (phone unlocked, tab restored)
   // re-check the engine instead of showing a stale status.

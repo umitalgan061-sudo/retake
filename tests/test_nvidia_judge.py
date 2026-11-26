@@ -415,3 +415,36 @@ class ReviewSheetTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             nj.request_judgement(nj.JudgeConfig(nj.DEFAULT_URL, TOKEN), [nj.face_crop_jpeg(synthetic_png(1), BOUNDS)] * 2,
                                  opener=RecordingOpener({}), layout="poster")
+
+
+class JuryLocalQualityGuardTest(unittest.TestCase):
+    def setUp(self):
+        self.best={"X-Retake-Similarity":".832","X-Retake-Detail-Gate":"passed",
+                   "X-Retake-Fine-Quality":".90","X-Retake-Reference-Appearance":".85",
+                   "X-Retake-Detail-Score":".88","X-Retake-Rim-Fraction":".03",
+                   "X-Retake-Detail-Regions":"eyes:1.01,mouth:1.03,lower_face:1.0",
+                   "X-Retake-Fine-Detail":"eye_r:0.95>1.01,eye_l:1.0>1.0,lips:1.0>1.0"}
+
+    def test_jury_cannot_override_substantial_local_loss_or_missing_evidence(self):
+        from tools.ultra_mode import judge_quality_guard
+        for key,bad in (("X-Retake-Fine-Quality",".65"),("X-Retake-Reference-Appearance",".6"),
+                        ("X-Retake-Detail-Score",".7"),("X-Retake-Rim-Fraction",".15"),
+                        ("X-Retake-Fine-Quality","nan"),("X-Retake-Detail-Regions","eyes:1.01,mouth:1.03"),
+                        ("X-Retake-Fine-Detail","eye_r:1.0>0.65,eye_l:1.0>1.0,lips:1.0>1.0")):
+            candidate={**self.best,"X-Retake-Similarity":".831",key:bad}
+            self.assertFalse(judge_quality_guard(candidate,self.best)[0],key)
+            self.assertEqual(len(srv.judge_pool(b"best",self.best,1,[(b"bad",candidate,2)],.832)),1)
+        safe={**self.best,"X-Retake-Similarity":".831","X-Retake-Rim-Fraction":".02"}
+        self.assertEqual(judge_quality_guard(safe,self.best),(True,"passed"))
+        self.assertEqual(len(srv.judge_pool(b"best",self.best,1,[(b"safe",safe,2)],.832)),2)
+
+    def test_malformed_or_contradictory_consensus_never_changes_winner(self):
+        good={"decision":"winner","winner":1,"votes":2,"agreement":1.0,"reason":"CONSENSUS"}
+        self.assertEqual(nj.judged_winner(good,2),1)
+        for changes in ({"agreement":float("nan")},{"agreement":1.2},{"agreement":True},
+                        {"votes":True},{"votes":33},{"reason":"SPLIT_VOTE"},{"reason":"NARROW_MARGIN"}):
+            self.assertIsNone(nj.judged_winner({**good,**changes},2),changes)
+        headers=nj.judge_headers("local-guard",2,{**good,"agreement":float("nan"),"models":["good/model","bad\r\nHeader"]})
+        self.assertEqual(headers["X-Retake-NVIDIA-Judge"],"local-guard")
+        self.assertNotIn("X-Retake-NVIDIA-Judge-Agreement",headers)
+        self.assertEqual(headers["X-Retake-NVIDIA-Judge-Models"],"good/model")

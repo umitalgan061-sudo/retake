@@ -201,3 +201,13 @@ test("native input evidence does not mistake a larger smooth image for texture",
   assert.ok(sourcePortraitQuality(striped,size,size,bounds).edgeEnergy>a.edgeEnergy);
   assert.equal(sourcePortraitQuality(flat,size,size,{...bounds,width:3}),null);
 });
+
+
+test("neck evidence reports measured correction and rejects malformed values", async () => {
+  const {describeNeckEvidence,describeFineFeatures}=await import("../src/quality.js");
+  assert.match(describeNeckEvidence("lab:3.25,luma:-1.20"),/3,25/);
+  assert.match(describeNeckEvidence("lab:3.25,luma:-1.20"),/-1,20/);
+  assert.equal(describeNeckEvidence("lab:Infinity,luma:2"),"");
+  assert.equal(describeNeckEvidence("lab:3,luma:90"),"");
+  assert.match(describeFineFeatures("region-regression"),/göz\/dudak ayrıntısı kaybı/);
+});

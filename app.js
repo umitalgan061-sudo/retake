@@ -45,7 +45,7 @@ import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
-import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision } from "./src/diagnostics.js";
+import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision, comparisonContext, createQualityBaseline, readQualityBaseline, compareQualityBaseline, QUALITY_BASELINE_KEY } from "./src/diagnostics.js";
 import { MIN_UPSCALE, describeNativeFinish, finishUpscaledFace } from "./src/grain.js";
 import {
   bestResultIndex,
@@ -141,6 +141,9 @@ const elements = {
   nvidiaJudgeToggle: $("#nvidiaJudgeToggle"),
   downloadButton: $("#downloadButton"),
   diagnosticsButton: $("#diagnosticsButton"),
+  baselineSave: $("#baselineSave"),
+  baselineClear: $("#baselineClear"),
+  baselineStatus: $("#baselineStatus"),
   resultImage: $("#resultImage"),
   resultView: $("#resultView"),
   originalImage: $("#originalImage"),
@@ -293,6 +296,7 @@ function updateSwapAvailability() {
     elements.diagnosticsButton.hidden = !hasReport;
     elements.diagnosticsButton.disabled = !hasReport || state.isSwapping;
   }
+  updateQualityBaseline();
   const copy = elements.swapButton.querySelector(".button-copy");
   if (copy) copy.textContent = state.result ? "Yeniden oluştur" : "Yüzümü uygula";
   const tag = elements.swapButton.querySelector(".button-state");
@@ -779,6 +783,7 @@ function addResult(blob, label, scores = {}) {
     portraitGeometry: scores.portraitGeometry ?? null,
     sourcePortraitQuality: scores.sourcePortraitQuality ?? null,
     diagnostics: scores.diagnostics && typeof scores.diagnostics === "object" ? scores.diagnostics : null,
+    qualityComparison: scores.qualityComparison || null,
     fineDetail: scores.fineDetail || "",
     catchlights: scores.catchlights || "",
     sclera: scores.sclera || "",
@@ -2415,6 +2420,12 @@ async function runFaceFusionEdit(options = {}) {
       };
     }
     form.append("metadata", JSON.stringify(metadata));
+    // Hash only locally, before the request. Never include these keys in the
+    // form or exported diagnostics. A failed hash simply disables comparison.
+    const compareContext = await comparisonContext({target:targetSnapshot.file,
+      referenceKey:state.referenceSetKey, faceIndex:state.selectedFaceIndex,
+      depth:qualityDepth, judge:useNvidiaJudge, full:isRealFaceEnabled(), benchmark,
+      prepared:[targetBlob,appearanceProfileBlob,...referenceBlobs,...(realFace?.candidates||[]).map(c=>c.blob)],metadata});
 
     setRuntimeStatus("Yerel yüz düzenleme · sonuç hazırlanıyor");
 
@@ -2529,7 +2540,8 @@ async function runFaceFusionEdit(options = {}) {
       if (delivered.portraitGeometry) scores.diagnostics['browser-portrait-geometry'] = describePortraitGeometry(delivered.portraitGeometry);
       if (delivered.sourcePortraitQuality) scores.diagnostics['browser-source-quality'] = describeSourcePortraitQuality(delivered.sourcePortraitQuality);
     }
-    addResult(delivered.blob, ultraLabel, {...scores,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
+    const qualityComparison = createQualityBaseline(compareContext,scores.diagnostics);
+    addResult(delivered.blob, ultraLabel, {...scores,qualityComparison,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
     showToast(
@@ -2718,11 +2730,13 @@ async function copyDiagnostics() {
   const report = buildDiagnosticReport({
     headers: item.diagnostics, health, depth: item.diagnostics["x-retake-ultra-depth"] || "", appVersion: WEB_QUALITY_REVISION
   });
+  const comparison=compareQualityBaseline(getQualityBaseline(),item.qualityComparison);
+  const reportWithComparison=comparison?report+"\n\n"+comparison:report;
   try {
-    await navigator.clipboard.writeText(report);
+    await navigator.clipboard.writeText(reportWithComparison);
     showToast("Tanı raporu kopyalandı — sohbete yapıştırabilirsin (görsel içermez).");
   } catch {
-    const url = URL.createObjectURL(new Blob([report], { type: "text/plain;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([reportWithComparison], { type: "text/plain;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = "retake-tani-raporu.txt";
@@ -2816,6 +2830,8 @@ function initializeEngineSettings() {
   restoreQualityDepthPreference();
   elements.shareButton.addEventListener("click", shareResult);
   elements.diagnosticsButton?.addEventListener("click", copyDiagnostics);
+  elements.baselineSave?.addEventListener("click", saveQualityBaseline);
+  elements.baselineClear?.addEventListener("click", clearQualityBaseline);
   elements.shareButton.hidden = typeof navigator.share !== "function" || typeof navigator.canShare !== "function";
   // When the app comes back to the foreground (phone unlocked, tab restored)
   // re-check the engine instead of showing a stale status.
@@ -3074,3 +3090,36 @@ async function initializeApp() {
 }
 
 initializeApp();
+
+function getQualityBaseline() {
+  try { return readQualityBaseline(window.localStorage); } catch { return null; }
+}
+
+function updateQualityBaseline() {
+  if (!elements.baselineSave || !elements.baselineClear || !elements.baselineStatus) return;
+  const baseline=getQualityBaseline(), current=state.result?.qualityComparison;
+  elements.baselineSave.disabled=!current||state.isSwapping;
+  elements.baselineClear.disabled=!baseline||state.isSwapping;
+  elements.baselineStatus.textContent=baseline
+    ? (current?compareQualityBaseline(baseline,current):"Yerel ölçüm kaydı var; aynı fotoğraf ve ayarlarla yeni sonuç üret.")
+    : "İstersen bu sonucu yerel kıyas ölçütü olarak kaydet. Görsel kaydedilmez.";
+}
+
+function saveQualityBaseline() {
+  const current=state.result?.qualityComparison;
+  if(!current||state.isSwapping)return;
+  try {
+    window.localStorage.setItem(QUALITY_BASELINE_KEY,JSON.stringify(current));
+    showToast("Bu sonucun ölçümleri bu tarayıcıya kıyas ölçütü olarak kaydedildi.");
+  } catch { showToast("Tarayıcı yerel ölçüm kaydına izin vermedi."); }
+  updateQualityBaseline();
+}
+
+function clearQualityBaseline() {
+  if(state.isSwapping)return;
+  try {
+    window.localStorage.removeItem(QUALITY_BASELINE_KEY);
+    showToast("Yerel kıyas ölçütü silindi.");
+  } catch { showToast("Yerel kıyas ölçütü silinemedi."); }
+  updateQualityBaseline();
+}

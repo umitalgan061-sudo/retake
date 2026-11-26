@@ -359,6 +359,12 @@ def _refine_region(target: np.ndarray, result: np.ndarray, points: np.ndarray,
     colour = result[:, :, :3].astype(np.float32)
     # Never touch what the matte hides: there the result must stay the photo.
     weight = result[:, :, 3].astype(np.float32) / 255.0 if result.shape[2] == 4 else np.ones(shape, np.float32)
+    # Hidden RGB may be stale or undefined in a preblended transport PNG.
+    # Measure and filter the visible composite instead, while preserving
+    # every original hidden byte when returning the candidate.
+    hidden_colour = colour
+    if result.shape[2] == 4:
+        colour = np.where(weight[:,:,None]>0,colour,target_f)
     target_luma, result_luma = _luma(target_f), _luma(colour)
 
     try:
@@ -376,12 +382,18 @@ def _refine_region(target: np.ndarray, result: np.ndarray, points: np.ndarray,
         if float((mask > 0.5).sum()) < MIN_FEATURE_PIXELS:
             continue
         shift = estimate_shift(target_luma, result_luma, box, MAX_SHIFT_RATIO * face_width)
-        masks[name] = (mask, _translate(mask, *shift) * weight)
+        shifted = _translate(mask, *shift)
+        visible = shifted * weight
+        # An eye or lip mostly outside the authorized edit matte cannot
+        # supply a reliable regional ratio or correction target.
+        if float(visible.sum()) < .65 * float(shifted.sum()) or float((visible>.5).sum()) < MIN_FEATURE_PIXELS:
+            continue
+        masks[name] = (mask, visible)
         shifts[name] = shift
 
     before = _measure(target_luma, result_luma, masks)
     if not before:
-        return colour, {"status": "unmeasured", "reason": "no-detail"}
+        return hidden_colour, {"status": "unmeasured", "reason": "no-detail"}
 
     gain_fine = np.zeros(shape, np.float32)
     gain_mid = np.zeros(shape, np.float32)
@@ -425,7 +437,9 @@ def _refine_region(target: np.ndarray, result: np.ndarray, points: np.ndarray,
     refined = np.clip(np.rint(refined), 0, 255)
     after = _measure(target_luma, _luma(refined), masks)
     quality_before = sum(_quality(item["fine"]) for item in before.values()) / len(before)
-    quality_after = sum(_quality(after[name]["fine"]) for name in before if name in after) / max(1, len(after))
+    if set(after) != set(before):
+        return hidden_colour, {"status":"unmeasured","reason":"region-coverage-changed"}
+    quality_after = sum(_quality(after[name]["fine"]) for name in before) / len(before)
     restored = sum(1 for outcome in catchlights.values() if outcome == "restored")
     toned = sum(1 for outcome in sclera.values() if outcome == "corrected")
     changed = restored > 0 or toned > 0 or any(action != "keep" for action in actions.values())
@@ -448,6 +462,7 @@ def _refine_region(target: np.ndarray, result: np.ndarray, points: np.ndarray,
         "sclera": sclera,
         "sclera_corrected": toned,
     }
+    refined = np.where(weight[:,:,None]>0,refined,hidden_colour)
     return refined.astype(np.uint8), report
 
 

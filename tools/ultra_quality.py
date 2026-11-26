@@ -148,12 +148,24 @@ def regional_photo_detail(
     return round(sum(qualities) / len(qualities), 5), ratios
 
 
+def read_delivered_pair(original_path, result_path):
+    """Mirror the binary preblended transport: hidden RGB is not delivered."""
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    result = cv2.imread(str(result_path), cv2.IMREAD_UNCHANGED)
+    if original is None or result is None or result.shape[:2] != original.shape[:2]:
+        return original, None
+    if result.ndim == 3 and result.shape[2] == 4:
+        result = np.where(result[:,:,3:4]>0,result[:,:,:3],original)
+    elif result.ndim == 2:
+        result = cv2.cvtColor(result,cv2.COLOR_GRAY2BGR)
+    return original,result
+
+
 def check_photo_detail(
     original_path: Path, result_path: Path,
     bounds: dict[str, Any],
 ) -> tuple[float | None, dict[str, float]]:
-    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
-    result = cv2.imread(str(result_path), cv2.IMREAD_COLOR)
+    original, result = read_delivered_pair(original_path,result_path)
     return regional_photo_detail(original, result, bounds)
 
 
@@ -262,8 +274,7 @@ def regional_edit_statistics(original_path, edited_path, bounds):
     and small beards may have insufficient high-frequency baseline energy
     but still allow a valid measurement of the delivered pixel difference.
     """
-    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
-    edited = cv2.imread(str(edited_path), cv2.IMREAD_COLOR)
+    original, edited = read_delivered_pair(original_path,edited_path)
     if original is None or edited is None or original.shape != edited.shape:
         return {}
     height, width = original.shape[:2]

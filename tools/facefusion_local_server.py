@@ -257,6 +257,7 @@ def image_extension(content_type: str, payload: bytes) -> str:
 
 
 MAX_JAW_CONTROLS = 32
+JAW_EXACT_MAX_SCALE = 1.0
 MAX_JAW_ANCHORS = 16
 
 
@@ -292,7 +293,12 @@ def _validate_jaw_warp(value: Any, size: dict[str, int], bounds: dict[str, float
         if math.hypot(end[0] - start[0], end[1] - start[1]) > limit:
             raise ValueError("Çene hattı kaydırması izin verilen sınırı aşıyor.")
         checked.append({"from": start, "to": end})
-    return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors]}
+    exact = value.get("exact", False)
+    if not isinstance(exact, bool):
+        raise ValueError("Çene hattı 'exact' alanı doğru/yanlış olmalı.")
+    # exact: the browser's pose-free 3D plan already targets the person's own
+    # contour, so the engine must not exaggerate it (see JAW_EXACT_MAX_SCALE).
+    return {"controls": checked, "anchors": [_point(anchor, size, margin) for anchor in anchors], "exact": exact}
 
 
 MAX_REAL_FACE_CANDIDATES = 3
@@ -1464,6 +1470,11 @@ def process_swap(
             min(1.75, max(0.0, head_fit_strength) * (1.40 if jaw_focused else 1.0))
             if jaw_warp else 0.0
         )
+        # The larger factors compensated the pose-sensitive 2D plan. A 3D plan
+        # (jawWarp.exact) already reaches the person's own contour at 1.0;
+        # beyond it the jaw would become an exaggeration, not the person.
+        if jaw_warp and jaw_warp.get("exact"):
+            jaw_scale = min(jaw_scale, JAW_EXACT_MAX_SCALE)
         # The jaw warp already reshapes the lower face; the global head fit then
         # adds three quarters of its proportion change, so length is not counted twice.
         if jaw_scale > 0:

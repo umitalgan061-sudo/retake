@@ -778,6 +778,31 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(focused["X-Retake-Jaw-Focused"], "on")
         self.assertEqual(ordinary["X-Retake-Jaw-Focused"], "off")
 
+    def test_exact_3d_jaw_plan_is_never_exaggerated(self):
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
+        scales = []
+        real = srv.reshape_jawline
+
+        def record(path, warp, width, scale):
+            scales.append(round(scale, 4))
+            return real(path, warp, width, scale)
+
+        with patch.object(srv, "reshape_jawline", record):
+            self.run_swap(2, [], jaw_warp=jaw)
+            focused = list(scales)
+            scales.clear()
+            self.run_swap(2, [], jaw_warp={**jaw, "exact": True})
+        self.assertTrue(any(scale > 1.0 for scale in focused), focused)
+        self.assertTrue(scales and all(scale <= srv.JAW_EXACT_MAX_SCALE for scale in scales), scales)
+
+    def test_jaw_exact_flag_is_validated(self):
+        size, bounds = {"width": 391, "height": 512}, {"width": 200.0}
+        jaw = {"controls": [{"from": [195, 370], "to": [195, 385]}], "anchors": [[195, 200]]}
+        self.assertFalse(srv._validate_jaw_warp(jaw, size, bounds)["exact"])
+        self.assertTrue(srv._validate_jaw_warp({**jaw, "exact": True}, size, bounds)["exact"])
+        with self.assertRaises(ValueError):
+            srv._validate_jaw_warp({**jaw, "exact": "yes"}, size, bounds)
+
     def test_softer_variant_reruns_the_gpu_passes_but_not_arcface(self):
         self.run_swap(0, [])
         self.run_swap(3, [])

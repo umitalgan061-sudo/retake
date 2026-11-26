@@ -32,7 +32,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe
+    from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -59,7 +59,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe
+    from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -1755,6 +1755,8 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 continue
         rescue_candidates.extend(recovery_candidates)
+        visible_probes = {}
+
         def score_visible(paths):
             # Preserve positional correspondence even if an optional candidate
             # cannot be decoded. Invalid image data is never a verified score.
@@ -1762,8 +1764,10 @@ def process_swap(
             values=[None]*len(paths)
             for idx,path in enumerate(paths):
                 try:
-                    prepared.append(prepare_visible_identity_probe(target_path,path,temp_dir))
+                    probe = prepare_visible_identity_probe(target_path,path,temp_dir)
+                    prepared.append(probe)
                     indices.append(idx)
+                    visible_probes[path] = probe
                 except (ValueError,OSError,cv2.error):
                     continue
             if prepared:
@@ -1869,6 +1873,7 @@ def process_swap(
                 flush=True
             )
             shutil.copyfile(rescue_candidates[chosen_index][1], final_output)
+        verified_probe = visible_probes.get(rescue_candidates[chosen_index][1])
         result_similarity = best_score
         used_realism = False
         render_scores = scores[len(rescue_candidates):-1]
@@ -1906,6 +1911,7 @@ def process_swap(
                     shutil.copyfile(merged_render,final_output)
                     print(f"Fotoğraf gerçekçiliği doğrulandı: {result_similarity:.3f} → {merged_score:.3f}.",flush=True)
                     result_similarity=merged_score
+                    verified_probe=visible_probes.get(merged_render)
                     used_realism=True
                 else:
                     print("[Retake] Birleştirilmiş gerçekçilik adayı doğrulanamadı; önceki sonuç korundu.",flush=True)
@@ -1993,6 +1999,7 @@ def process_swap(
             if nim_candidates:
                 result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = max(nim_candidates, key=lambda row: (row[0], row[1]))
                 shutil.copyfile(path, final_output)
+                verified_probe=visible_probes.get(path)
                 if nim_used == flux_model:
                     flux_status = "accepted"
                     flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
@@ -2031,6 +2038,7 @@ def process_swap(
                 if accepted_fine:
                     shutil.copyfile(fine_path, final_output)
                     result_similarity = fine_score
+                    verified_probe=visible_probes.get(fine_path)
                     fine_report["delivered_quality"] = fine_report.get("quality_after")
                 elif fine_report.get("quality_before") is not None:
                     fine_report["delivered_quality"] = fine_report.get("quality_before")
@@ -2074,6 +2082,7 @@ def process_swap(
                 if corrected_score is not None and corrected_score >= max(result_similarity - 0.004,finish_floor) and check_detail_gate(target_path, rim_candidate, metadata["faceBounds"])[0]:
                     shutil.copyfile(rim_candidate, final_output)
                     result_similarity = corrected_score
+                    verified_probe=visible_probes.get(rim_candidate)
                     rim_cleaned = True
                     print(
                         f"[Retake] Koyu yüz konturu temizlendi "
@@ -2100,6 +2109,7 @@ def process_swap(
                         neck_evidence = neck_delivery_evidence(target_path,final_output,neck_path,metadata["faceBounds"])
                         shutil.copyfile(neck_path, final_output)
                         result_similarity = neck_score
+                        verified_probe=visible_probes.get(neck_path)
                     else:
                         neck_status, neck_pixels = 'quality-rejected', 0
             except Exception as error:
@@ -2123,11 +2133,15 @@ def process_swap(
         except (TypeError, ValueError, KeyError, OSError) as error:
             print(f"[Ultra] Yüz konturu ölçümü doğrulanamadı: {error}", flush=True)
 
-        # Final opaque pixels are checked again, including all finishing steps.
-        verified_final=score_visible([final_output])[0]
-        if verified_final is None or verified_final < finish_floor - .0001:
+        # Match the exact visible bytes to the last scored and accepted
+        # candidate. Repeated inference on identical pixels adds latency
+        # without new evidence; any unexpected mutation fails closed.
+        try:
+            checkpoint_ok=verify_visible_checkpoint(target_path,final_output,verified_probe,temp_dir)
+        except (ValueError,OSError,cv2.error):
+            checkpoint_ok=False
+        if not checkpoint_ok or result_similarity < finish_floor - .0001:
             raise IdentityVerificationError("Son teslim piksellerinin kimlik ölçümü doğrulanamadı.")
-        result_similarity=verified_final
 
         # An unverifiable or measurably worse identity is a failed edit, not
         # a successful-looking photo. This relative guard avoids claiming a

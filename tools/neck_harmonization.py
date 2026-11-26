@@ -104,7 +104,7 @@ def harmonize_neck(original, composite, bounds, landmarks):
     roi=output[y0:y1,x0:x1]
     roi[changed,:3]=adjusted[changed]
     roi[changed,3]=255
-    if not neck_transition_safe(src,dst,roi,changed):
+    if not neck_transition_safe(src,dst,roi,changed) or not neck_tone_evidence(src,roi,changed,offset)["improved"]:
         return None,"quality-rejected",0
     return output,"applied",int(np.count_nonzero(changed))
 
@@ -148,3 +148,36 @@ def neck_transition_safe(original, base, edited, changed):
         if old_energy>=1.5 and not .78<=new_energy/old_energy<=1.30:
             return False
     return True
+
+
+def neck_tone_evidence(source, edited, changed, desired_offset):
+    """Measure correction relative to the original's own skin tone.
+
+    The expected offset comes from actual edited face skin, not a universal
+    skin color. Report residual LAB offset, not a cosmetic quality percent.
+    """
+    if not np.any(changed):
+        return {"improved":False}
+    original_lab=cv2.cvtColor(source[:,:,:3],cv2.COLOR_BGR2LAB).astype(np.float32)
+    edited_lab=cv2.cvtColor(edited[:,:,:3],cv2.COLOR_BGR2LAB).astype(np.float32)
+    delta=np.median((edited_lab-original_lab)[changed],axis=0)
+    expected=np.asarray(desired_offset,dtype=np.float32)
+    before=float(np.linalg.norm(expected))
+    after=float(np.linalg.norm(expected-delta))
+    return {"improved":bool(before>0 and after<before-.20),
+            "before":before,"after":after,"correction":float(np.linalg.norm(delta))}
+
+
+def neck_delivery_evidence(original_path, base_path, edited_path, bounds):
+    """Report actual added neck pixels and luminance shift for accepted edit."""
+    original=cv2.imread(str(original_path),cv2.IMREAD_COLOR)
+    base=cv2.imread(str(base_path),cv2.IMREAD_UNCHANGED)
+    edited=cv2.imread(str(edited_path),cv2.IMREAD_UNCHANGED)
+    if original is None or base is None or edited is None or base.shape!=edited.shape or base.shape!=(*original.shape[:2],4):
+        return ""
+    changed=(base[:,:,3]==0)&(edited[:,:,3]>0)
+    if not np.any(changed): return ""
+    before=cv2.cvtColor(original,cv2.COLOR_BGR2LAB).astype(np.float32)
+    after=cv2.cvtColor(edited[:,:,:3],cv2.COLOR_BGR2LAB).astype(np.float32)
+    delta=(after-before)[changed]
+    return f"lab:{np.mean(np.linalg.norm(delta,axis=1)):.2f},luma:{np.mean(delta[:,0]):.2f}"

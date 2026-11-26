@@ -7,10 +7,14 @@ const HEALTH_KEYS = Object.freeze([
   "ultra_default_depth", "fine_features", "identity_scorer", "pass_cache", "nvidia_judge",
   "nim_editors_configured", "pixel_boost", "face_enhancer_enabled", "face_enhancer_model",
   "realism", "personal_model", "cuda", "ultra_learning", "self_test_benchmark",
-  "neck_harmonization", "last_job_cleanup"
+  "neck_harmonization", "last_job_cleanup", "quality_revision", "regional_edit_evidence",
+  "lower_face_texture_evidence", "native_input_recovery", "reference_appearance_tiebreak",
+  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard"
 ]);
 const SECRET_NAME = /token|secret|key|pairing|auth|cookie|password/i;
 const MAX_VALUE = 300;
+export const EXPECTED_QUALITY_REVISION = "portrait-quality-20261126-r7";
+export const WEB_QUALITY_REVISION = EXPECTED_QUALITY_REVISION;
 
 // Windows/POSIX paths and file names never leave the device.
 export function scrub(value) {
@@ -92,12 +96,60 @@ export function buildDiagnosticReport({ headers = {}, health = null, depth = "",
   if (depth) lines.push(`Seçilen derinlik: ${scrub(depth)}`);
   const timing = describeUltraTiming(headers["x-retake-ultra-timing"]);
   if (timing) lines.push(timing);
+  const evidence = summarizeQualityEvidence(headers);
+  if (evidence) lines.push(evidence);
+  const resultRevision = validQualityRevision(headers["x-retake-quality-revision"]);
+  const currentRevision = validQualityRevision(health?.quality_revision);
+  lines.push(`Sonucu üreten kalite sürümü: ${resultRevision || "doğrulanamadı (eski motor veya sonuç)"}`);
+  if (currentRevision) lines.push(`Şu an bağlı motorun kalite sürümü: ${currentRevision}`);
+  if (resultRevision && currentRevision && resultRevision !== currentRevision) lines.push("Not: Sonuç farklı bir motor sürümünde üretildi; güncel motor durumu bu sonucun kanıtı değildir.");
   lines.push("", "Sonuç ölçümleri:");
-  for (const [name, value] of Object.entries(headers)) lines.push(`${name}: ${value}`);
+  for (const [name, value] of Object.entries(headers)) {
+    if (SECRET_NAME.test(name)) continue;
+    lines.push(`${scrub(name)}: ${scrub(value)}`);
+  }
   const summary = healthSummary(health);
   if (Object.keys(summary).length) {
     lines.push("", "Motor durumu:");
     for (const [key, value] of Object.entries(summary)) lines.push(`${key}: ${value}`);
   }
   return lines.join("\n");
+}
+
+
+export function validQualityRevision(value) {
+  return typeof value === "string" && /^portrait-quality-\d{8}-r\d{1,4}$/.test(value) ? value : null;
+}
+
+export function describeQualityCompatibility(value) {
+  const revision=validQualityRevision(value);
+  if (revision === EXPECTED_QUALITY_REVISION) return "";
+  if (!revision) return "Motorun yeni kalite paketi doğrulanamadı; yerel motoru güncelle ve yeniden başlat.";
+  const parse=v=>v.match(/(\d{8})-r(\d+)$/).slice(1).map(Number);
+  const [date,number]=parse(revision), [expectedDate,expectedNumber]=parse(EXPECTED_QUALITY_REVISION);
+  if (date>expectedDate || (date===expectedDate && number>=expectedNumber)) return "";
+  return "Yerel motor eski kalite paketini kullanıyor ("+revision+"); güncelle ve yeniden başlat.";
+}
+
+
+export function summarizeQualityEvidence(headers) {
+  const read=(key,min,max)=>{
+    const raw=headers[key];
+    if(raw===undefined||raw===null||String(raw).trim()==="")return null;
+    const n=Number(raw);
+    return Number.isFinite(n)&&n>=min&&n<=max?n:null;
+  };
+  const final=read("x-retake-similarity",-1,1);
+  const peak=read("x-retake-ultra-peak-identity",-1,1);
+  const goal=read("x-retake-identity-aspiration",-1,1);
+  const points=value=>(100*value).toFixed(2).replace(".",",");
+  const rows=[];
+  if(final!==null&&peak!==null&&peak>=final-.0001)
+    rows.push("arama zirvesinden fark "+points(Math.max(0,peak-final))+" puan");
+  if(final!==null&&goal!==null)
+    rows.push("arama hedefinden fark "+points(final-goal)+" puan");
+  if(headers["x-retake-detail-gate"]==="passed")rows.push("motor ayrıntı kontrolü geçti");
+  if(headers["x-retake-nim-editor"]==="retake-local/flux2-klein-4b"&&headers["x-retake-flux-status"]==="accepted")
+    rows.push("seçilen adayda FLUX kullanıldı");
+  return rows.length?"Kalite özeti (kosinüs ölçeği, benzerlik yüzdesi değil): "+rows.join(" · "):"";
 }

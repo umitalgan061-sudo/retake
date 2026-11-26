@@ -467,3 +467,37 @@ class ExplicitDetailFailureTest(unittest.TestCase):
         self.assertEqual(photo,b"good")
         self.assertAlmostEqual(float(headers["X-Retake-Ultra-Peak-Identity"]),.83)
         self.assertEqual(headers["X-Retake-Ultra-Rounds"],"23")
+
+
+class JobLocalScoreReuseTest(unittest.TestCase):
+    def test_one_job_cache_is_shared_across_rounds_and_never_the_next_job(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"same.png"
+            path.write_bytes(b"same pixels")
+            seen=[]
+            measured=[]
+            def fake_swap(*args):
+                cache=args[5]["identity_scores"]
+                seen.append(cache)
+                def measure(probes):
+                    measured.extend(probes)
+                    return [.92]*len(probes)
+                value=cache.score([1.0,0.0],[path],measure)[0]
+                return b"verified", {**score(value),"X-Retake-Detail-Gate":"passed",
+                                    "X-Retake-Identity-Photo-Level":".90"}
+            original_caches={}
+            with patch.object(srv,"process_swap",fake_swap):
+                _,first=srv.run_ultra_search(Path("."),"1024x1024",False,fake_request(),
+                    lambda *_a,**_k:None,caches=original_caches,min_duration_seconds=0)
+                first_count=len(seen)
+                self.assertGreater(first_count,1)
+                self.assertTrue(all(c is seen[0] for c in seen))
+                self.assertEqual(len(measured),1)
+                self.assertEqual(first["X-Retake-Identity-Score-Cache"],f"hits:{first_count-1},measured:1,failed:0")
+                _,second=srv.run_ultra_search(Path("."),"1024x1024",False,fake_request(),
+                    lambda *_a,**_k:None,caches=original_caches,min_duration_seconds=0)
+                self.assertIsNot(seen[first_count],seen[0])
+                self.assertEqual(len(measured),2)
+                self.assertEqual(first["X-Retake-Similarity"],second["X-Retake-Similarity"])
+                self.assertEqual(original_caches,{})

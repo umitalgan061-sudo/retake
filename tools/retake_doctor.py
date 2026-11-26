@@ -266,7 +266,7 @@ def check_background(ctx: Context) -> list[Check]:
         if task.get("working_dir_matches") is False:
             status = "fail"
             detail = (detail + " Görev başka bir Retake klasörünü çalıştırıyor; güncellemeler bu motora ulaşmaz.").strip()
-            fix = "Bu klasörden yeniden kurun: .\\tools\\install_retake_autostart.ps1 -Action Remove ; .\\tools\\install_retake_autostart.ps1"
+            fix = "Görevi bu klasöre taşıyın (ayarlar korunur): .\\tools\\install_retake_autostart.ps1"
         checks.append(Check("Gizli motor", status, f"Açılış görevi durumu: {state}.", detail=detail, fix=fix))
     port = ctx.windows.get("port") if isinstance(ctx.windows.get("port"), dict) else None
     if port and port.get("listening") and port.get("owner_is_retake") is False:

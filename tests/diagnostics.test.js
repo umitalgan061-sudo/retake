@@ -64,7 +64,7 @@ test("result revision is not silently replaced by a newer connected motor", asyn
   const report=buildDiagnosticReport({headers:{"x-retake-quality-revision":old,"x-retake-token":"private"},
     health:{quality_revision:EXPECTED_QUALITY_REVISION,flux_texture_alternatives:true}});
   assert.match(report,/Sonucu üreten kalite sürümü: portrait-quality-20261125-r2/);
-  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261126-r7/);
+  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261126-r8/);
   assert.match(report,/güncel motor durumu bu sonucun kanıtı değildir/);
   assert.match(report,/flux_texture_alternatives: true/);
   assert.doesNotMatch(report,/private|x-retake-token/);
@@ -86,7 +86,7 @@ test("local comparison distinguishes same input from different preparation and s
   const context={input:"a".repeat(64),prepared:"b".repeat(64)};
   const headers={"x-retake-detail-gate":"passed","x-retake-similarity":".832",
     "x-retake-detail-score":".80","x-retake-ultra-timing":"total=1560",
-    "x-retake-quality-revision":"portrait-quality-20261126-r7"};
+    "x-retake-quality-revision":"portrait-quality-20261126-r8"};
   const baseline=createQualityBaseline(context,headers,1000);
   const current=createQualityBaseline({...context,prepared:"c".repeat(64)},{...headers,"x-retake-similarity":".85",
     "x-retake-detail-score":".82","x-retake-ultra-timing":"total=1200"},2000);

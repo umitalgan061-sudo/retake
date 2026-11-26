@@ -77,3 +77,34 @@ class PortraitEvidenceTest(unittest.TestCase):
         pool=srv.judge_pool(*rows[0],rows,.83)
         self.assertEqual(pool[0][0],b"local")
         self.assertEqual({r[0] for r in pool},{b"local",b"regional",b"fine",b"repeat"})
+
+
+    def test_expensive_realism_keeps_distinct_verified_regional_candidate(self):
+        from tools.ultra_mode import finalist_specs
+        base={"X-Retake-Similarity":".832","X-Retake-Reference-Appearance":".5","X-Retake-Fine-Quality":".5"}
+        records=[((0,None),base),((1,None),{**base,"X-Retake-Similarity":".831","X-Retake-Reference-Appearance":".9"}),
+                 ((2,None),{**base,"X-Retake-Similarity":".831","X-Retake-Fine-Quality":".9"}),
+                 ((3,None),{**base,"X-Retake-Similarity":".80","X-Retake-Reference-Appearance":"1"})]
+        self.assertEqual(finalist_specs(records,(0,None),.832,3),[(0,None),(1,None),(2,None)])
+
+    def test_texture_orientation_is_not_invented_on_flat_input(self):
+        from tools.portrait_evidence import describe_regions
+        flat=np.full((96,96),120,np.float32)
+        self.assertIsNone(describe_regions(flat)["chin"]["coherence"])
+        stripes=np.tile(np.sin(np.arange(96)*.7)*30+120,(96,1)).astype(np.float32)
+        self.assertGreater(describe_regions(stripes)["chin"]["coherence"],.9)
+
+    def test_hidden_pixels_do_not_count_as_delivered_evidence(self):
+        from tools.portrait_evidence import reference_evidence_file
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            a,b=Path(tmp)/"a.png",Path(tmp)/"b.png"
+            cv2.imwrite(str(a),self.base)
+            hidden=np.dstack((self.edited,np.zeros(self.base.shape[:2],np.uint8)))
+            cv2.imwrite(str(b),hidden)
+            evidence,fit=reference_evidence_file(a,b,self.b,None,None)
+            self.assertIsNone(fit)
+            for v in evidence.values():
+                self.assertAlmostEqual(v[0],v[1])
+                self.assertAlmostEqual(v[2],v[3])

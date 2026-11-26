@@ -39,12 +39,16 @@ try:
 except ImportError:  # run directly from tools/
     from retake_event_log import EVENT_LOG_NAME, read_events, summarize_events, _SCRUBBERS
 
-DOCTOR_VERSION = 1
+DOCTOR_VERSION = 2
 ENGINE_URL = "http://127.0.0.1:8765"
 HAFIZE_URL = "https://hafize-free.onrender.com"
 SITE_URL = "https://retake06-ua.web.app"
 TOKEN_FORMAT = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
 REVISION_LINE = re.compile(r'^QUALITY_PIPELINE_REVISION = "([^"]+)"$', re.MULTILINE)
+IDENTITY_LINE = re.compile(r'^IDENTITY_MODEL = "([A-Za-z0-9_.-]+)"$', re.MULTILINE)
+FALLBACK_LINE = re.compile(r'^IDENTITY_FALLBACK_MODEL = "([A-Za-z0-9_.-]+)"$', re.MULTILINE)
+# Files the engine reads NVIDIA_API_KEY from (tools/nvidia_judge.py ENV_FILES).
+DIRECT_KEY_FILES = (".env", "functions/.env", ".dev.vars")
 SHELL_CACHE_LINE = re.compile(r'SHELL_CACHE\s*=\s*["\']([^"\']{1,60})["\']')
 FULL_BOOST = "1024x1024"
 DISK_WARN_GIB = 15.0
@@ -357,13 +361,15 @@ def check_engine(ctx: Context) -> tuple[list[Check], dict | None]:
         checks.append(Check("Motor", "warn", f"Yüz çözünürlüğü {boost}: ince ayrıntılar (kirpik, gözenek) düşük kalır.",
                             fix=".\\tools\\install_retake_autostart.ps1 -Action Remove ; .\\tools\\install_retake_autostart.ps1 -FaceSwapperPixelBoost 1024x1024"))
     optional = []
+    if health.get("identity_model"):
+        optional.append(f"kimlik modeli {redact(str(health['identity_model']), ctx.env)[:40]}")
     optional.append("gerçekçilik (difüzyon) " + ("açık" if health.get("realism") else "kapalı"))
     optional.append("kişisel model " + ("var" if health.get("personal_model") else "yok"))
     optional.append("GFPGAN " + ("açık" if health.get("face_enhancer_enabled") else "kapalı"))
     editors = health.get("nim_editors_configured") or []
     if editors:
         optional.append(f"ek düzenleyici: {len(editors)}")
-    checks.append(Check("Motor", "info", "İsteğe bağlı aşamalar: " + ", ".join(optional) + "."))
+    checks.append(Check("Motor", "info", "Aşamalar: " + ", ".join(optional) + "."))
     scorer = health.get("identity_scorer") if isinstance(health.get("identity_scorer"), dict) else {}
     if scorer:
         if not scorer.get("enabled"):
@@ -521,8 +527,21 @@ def check_jury(ctx: Context, health: dict | None) -> list[Check]:
     except OSError:
         pass
     if not token:
+        transport = str((health or {}).get("nvidia_judge_transport") or "")
+        source = direct_key_source(ctx)
+        if transport == "direct" or source:
+            where = source or "motorun ortamı"
+            checks.append(Check("Jüri", "ok", f"Jüri doğrudan NVIDIA yolunda: anahtar bu bilgisayarda ({where}; değeri okunmadı, yazılmadı).",
+                                detail="Hafize jetonu yok; finalistlerin yüz kırpımları NVIDIA'ya doğrudan gider."))
+            if health is not None and transport not in ("", "direct"):
+                fix = ("Gizli motor bu pencerenin ortam değişkenlerini görmez: anahtarı Retake klasöründeki .env dosyasına yazıp motoru yeniden başlatın."
+                       if source == "ortam değişkeni" else "Motoru yeniden başlatın: .\\tools\\update_retake_ultra.ps1 -SkipPull -SkipDeploy")
+                checks.append(Check("Jüri", "warn", "NVIDIA_API_KEY bulundu ama çalışan motor doğrudan jüriyi görmüyor.", fix=fix))
+            if ctx.probe_jury:
+                checks.append(_direct_probe(ctx))
+            return checks
         return [Check("Jüri", "info", "NVIDIA jürisi bu bilgisayarda kurulmamış (isteğe bağlı danışman).",
-                      fix="Kurmak için: .\\tools\\setup_hafize_judge.ps1")]
+                      fix="Kurmak için: .\\tools\\setup_hafize_judge.ps1 (Hafize üzerinden) ya da Retake klasöründeki .env dosyasına NVIDIA_API_KEY (doğrudan)")]
     if not TOKEN_FORMAT.match(token):
         return [Check("Jüri", "fail", "Yerel jüri jetonu bozuk görünüyor (içeriği rapora yazılmadı).",
                       fix=".\\tools\\setup_hafize_judge.ps1 -Rotate")]
@@ -570,6 +589,104 @@ def check_jury(ctx: Context, health: dict | None) -> list[Check]:
     if ctx.probe_jury:
         checks.append(_jury_probe(ctx, token))
     return checks
+
+
+def _key_in_file(path: Path) -> bool:
+    """Whether the file defines a non-empty NVIDIA_API_KEY; the value is never returned."""
+    try:
+        raw = path.read_bytes()[:65536]
+    except OSError:
+        return False
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    try:
+        lines = raw.decode(encoding).splitlines()
+    except UnicodeDecodeError:
+        return False
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, sep, value = line.partition("=")
+        if sep and name.strip() == "NVIDIA_API_KEY" and value.split(" #", 1)[0].strip().strip("\"'"):
+            return True
+    return False
+
+
+def direct_key_source(ctx: Context) -> str | None:
+    """Where the engine would find NVIDIA_API_KEY (a name, never the value)."""
+    if ctx.env.get("RETAKE_NVIDIA_JUDGE", "").strip().lower() in {"0", "off", "false", "no"}:
+        return None
+    if ctx.env.get("NVIDIA_API_KEY", "").strip():
+        return "ortam değişkeni"
+    explicit = ctx.env.get("RETAKE_ENV_FILE", "").strip()
+    if explicit and _key_in_file(Path(explicit).expanduser()):
+        return "RETAKE_ENV_FILE"
+    for name in DIRECT_KEY_FILES:
+        if _key_in_file(ctx.root / name):
+            return name
+    return None
+
+
+def _direct_probe(ctx: Context) -> Check:
+    """Run the engine's own jury self-test (a generated scene, never a photo)."""
+    started = time.monotonic()
+    code, out = ctx.run([ctx.executable, str(ctx.root / "tools" / "nvidia_judge.py")], 240)
+    elapsed = time.monotonic() - started
+    lines = [line.strip() for line in out.splitlines() if line.strip()]
+    working = next((line for line in lines if line.startswith("NVIDIA jürisi çalışıyor")), None)
+    if working:
+        return Check("Jüri", "ok", f"Doğrudan jüri öz testi geçti ({elapsed:.0f} sn).", detail=redact(working, ctx.env)[:220])
+    failed = next((line for line in lines if line.startswith("NVIDIA jüri testi başarısız")), None)
+    if failed:
+        return Check("Jüri", "fail", "Doğrudan jüri öz testi başarısız.", detail=redact(failed, ctx.env)[:220],
+                     fix="NVIDIA anahtarının build.nvidia.com'da etkin olduğunu kontrol edin; sürerse raporu paylaşın.")
+    if "ModuleNotFoundError" in out or code == 127:
+        return Check("Jüri", "warn", "Doğrudan jüri öz testi bu Python ortamında çalışamadı.",
+                     fix="conda run --no-capture-output -n facefusion python tools\\nvidia_judge.py")
+    return Check("Jüri", "warn", f"Doğrudan jüri öz testinin sonucu okunamadı (çıkış kodu {code}).")
+
+
+def identity_models(ctx: Context, health: dict | None) -> tuple[str | None, str | None]:
+    try:
+        source = (ctx.root / "tools" / "facefusion_local_server.py").read_text(encoding="utf-8")
+    except OSError:
+        source = ""
+    primary = IDENTITY_LINE.search(source)
+    fallback = FALLBACK_LINE.search(source)
+    name = str((health or {}).get("identity_model") or "") or (primary.group(1) if primary else "")
+    if not re.fullmatch(r"[A-Za-z0-9_.-]{1,60}", name or ""):
+        name = ""
+    return (name or None), (fallback.group(1) if fallback else None)
+
+
+def check_models(ctx: Context, health: dict | None) -> list[Check]:
+    """Whether FaceFusion already has the identity models (it downloads missing ones on first use)."""
+    config = _read_json(ctx.retake_dir / "background-config.json") or {}
+    folder = str(config.get("facefusion_dir") or "")
+    if not folder:
+        return []
+    models_dir = Path(folder) / ".assets" / "models"
+    if not models_dir.is_dir():
+        return [Check("Modeller", "info", "FaceFusion model klasörü henüz yok; modeller ilk işte indirilir.")]
+    try:
+        files = [path for path in models_dir.iterdir() if path.suffix.lower() == ".onnx" and path.is_file()]
+    except OSError:
+        return []
+    total = sum(path.stat().st_size for path in files)
+    names = {path.stem for path in files}
+    primary, fallback = identity_models(ctx, health)
+    if not primary:
+        return [Check("Modeller", "info", f"FaceFusion'da {len(files)} model ({_gib(total)}).")]
+    spare = f"yedek {fallback} {'hazır' if fallback in names else 'yok'}" if fallback else "yedek tanımsız"
+    if primary in names:
+        return [Check("Modeller", "ok", f"Kimlik modeli {primary} hazır; {spare}. FaceFusion'da {len(files)} model ({_gib(total)}).")]
+    if fallback and fallback in names:
+        return [Check("Modeller", "warn", f"Varsayılan kimlik modeli {primary} bu bilgisayarda henüz yok; {spare}.",
+                      detail="İlk işte FaceFusion indirmeyi dener; indirilemezse yedek modelle devam edilir (kimlik benzerliği biraz düşebilir).",
+                      fix="Bir kez Standart derinlikte iş çalıştırıp raporu yeniden alın; model hâlâ yoksa kurum ağı indirmeyi engelliyor olabilir.")]
+    return [Check("Modeller", "warn", f"Kimlik modelleri ({primary}{', ' + fallback if fallback else ''}) bu bilgisayarda henüz yok.",
+                  detail="İlk iş modelleri indirirken uzun sürer; indirme engellenirse iş tamamlanamaz.",
+                  fix="Bir kez Standart derinlikte iş çalıştırıp raporu yeniden alın.")]
 
 
 WEB_PATHS = ("index.html", "app.js", "styles.css", "sw.js", "manifest.webmanifest", "src")
@@ -647,6 +764,9 @@ def check_events(ctx: Context) -> list[Check]:
         "realism": ("gerçekçilik aşaması hatası", "Gerçekçilik isteğe bağlıdır; sürerse motoru yeniden başlatın."),
         "jury_skip": ("jüri atlanması", "Jüri bölümüne bakın; yerel seçim her zaman korunur."),
         "identity": ("ArcFace ölçüm hatası", "Sürerse motoru yeniden başlatın."),
+        "fallback": ("kimlik modelinin yedeğe düşmesi", "Varsayılan kimlik modeli çalışmadı; Modeller bölümüne bakın."),
+        "detail": ("son fotoğrafın bölgesel ayrıntı kontrolünü geçememesi",
+                   "Derin ya da Maksimum derinliği deneyin; kaynak fotoğraflar keskin ve iyi ışıklı olmalı."),
         "error": ("hata", "Sürerse bu raporu paylaşın."),
     }
     for category, (label, fix) in advice.items():
@@ -675,6 +795,7 @@ def collect(ctx: Context) -> list[Check]:
     engine_checks, health = check_engine(ctx)
     checks += engine_checks
     checks += check_calibration(ctx, health)
+    checks += check_models(ctx, health)
     checks += check_gpu(ctx, health)
     checks += check_disk(ctx)
     checks += check_packages(ctx)

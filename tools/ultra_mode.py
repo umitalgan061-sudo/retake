@@ -130,6 +130,8 @@ def realism_order(headers: dict[str, str]) -> tuple:
     return (
         headers.get("X-Retake-Identity-Reinforced") != "on",
         -(rim if rim is not None else 1.0),
+        fine_quality_from_headers(headers) or 0.0,
+        reference_appearance_from_headers(headers) or 0.0,
         detail if detail is not None else 0.0,
         _photo_detail(headers),
         score_from_headers(headers) or -1.0,
@@ -153,6 +155,9 @@ def prefer_sufficient_candidate(candidate: dict[str, str], best: dict[str, str])
     fine = fine_preference(candidate, best)
     if fine is not None:
         return fine
+    appearance = reference_appearance_preference(candidate, best)
+    if appearance is not None:
+        return appearance
     # 4. More of the real photo's eye/nose/mouth detail.
     new_detail, old_detail = detail_from_headers(candidate), detail_from_headers(best)
     if new_detail is not None and old_detail is not None and abs(new_detail - old_detail) > ULTRA_DETAIL_GAIN / 2:
@@ -180,8 +185,12 @@ def prefer_ultra_candidate(
     old = score_from_headers(best)
     if old is None:
         return True
-    if is_identity_sufficient(candidate) and is_identity_sufficient(best):
+    new_sufficient = is_identity_sufficient(candidate)
+    old_sufficient = is_identity_sufficient(best)
+    if new_sufficient and old_sufficient:
         return prefer_sufficient_candidate(candidate, best)
+    if new_sufficient != old_sufficient and identity_sufficiency(candidate) == identity_sufficiency(best):
+        return new_sufficient
     if new > old + ULTRA_REALISM_TIE_LOSS:
         return True
     if old > new + ULTRA_REALISM_TIE_LOSS:
@@ -205,6 +214,11 @@ def prefer_ultra_candidate(
     if fine is False and new <= old + ULTRA_SCORE_EPS:
         return False
 
+    appearance = reference_appearance_preference(candidate, best)
+    if appearance is True and new >= old - ULTRA_REALISM_TIE_LOSS:
+        return True
+    if appearance is False and new <= old + ULTRA_SCORE_EPS:
+        return False
     new_detail = detail_from_headers(candidate)
     old_detail = detail_from_headers(best)
     if new_detail is not None and old_detail is not None:
@@ -245,11 +259,14 @@ def _header_cosine(headers, name):
 def identity_aspiration(headers):
     median = _header_cosine(headers, "X-Retake-Identity-Median-Similarity")
     before = _header_cosine(headers, "X-Retake-Similarity-Before")
-    if median is None or median < .30:
-        return None
-    # Never demand an impossible fixed score; preserve an already strong
-    # original rather than making larger edits merely for the sake of edits.
-    target = min(.93, max(.55, median + ULTRA_PROFILE_MARGIN))
+    # Use the measured leave-one-out reference level when it exists. The
+    # old pairwise median is on a different scale and could report a
+    # completed search while the output remained below photo sufficiency.
+    target = identity_sufficiency(headers)
+    if target is None:
+        if median is None or median < .30:
+            return None
+        target = min(.93, max(.55, median + ULTRA_PROFILE_MARGIN))
     if before is not None:
         target = max(target, before)
     return target
@@ -537,5 +554,22 @@ def fine_preference(candidate: dict[str, str], best: dict[str, str]) -> bool | N
     """True/False when the finest features clearly differ, else None."""
     new, old = fine_quality_from_headers(candidate), fine_quality_from_headers(best)
     if new is None or old is None or abs(new - old) <= ULTRA_FINE_GAIN:
+        return None
+    return new > old
+
+
+def reference_appearance_from_headers(headers):
+    try:
+        value = float(headers.get("X-Retake-Reference-Appearance", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and 0 <= value <= 1 else None
+
+
+def reference_appearance_preference(candidate, best):
+    """Measured lower-face contrast/texture fit, not another identity score."""
+    new = reference_appearance_from_headers(candidate)
+    old = reference_appearance_from_headers(best)
+    if new is None or old is None or abs(new-old) <= .075:
         return None
     return new > old

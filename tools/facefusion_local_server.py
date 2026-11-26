@@ -44,7 +44,7 @@ try:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE, format_ultra_timing
+        REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor
@@ -71,7 +71,7 @@ except ImportError:
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
-        REALISM_SEED_STRIDE, format_ultra_timing
+        REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 
 MAX_REFERENCES = 25
@@ -2189,6 +2189,30 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 JUDGE_FINALIST_BUFFER = 6
 
 
+def diverse_finalists(rows, limit):
+    """Keep the top local candidate plus verified appearance/fine-detail peaks.
+
+    Only measured, already-eligible candidates reach this function. Missing
+    metrics never create a winner and duplicate image bytes never take a slot.
+    """
+    selected = []
+    if limit <= 0:
+        return selected
+    def add(row):
+        if len(selected) < limit and not any(row[0] == prev[0] for prev in selected):
+            selected.append(row)
+    if rows:
+        add(rows[0])
+    for measure in (reference_appearance_from_headers, fine_quality_from_headers, score_from_headers):
+        measured = [(measure(row[1]), row) for row in rows]
+        measured = [(value,row) for value,row in measured if value is not None]
+        if len(measured) >= 2 and max(value for value,_ in measured)-min(value for value,_ in measured) > .001:
+            add(max(measured, key=lambda item:item[0])[1])
+    for row in rows:
+        add(row)
+    return selected
+
+
 def retain_judge_finalists(
     finalists: list[tuple[bytes, dict[str, str], int]],
     candidate: tuple[bytes, dict[str, str], int],
@@ -2204,13 +2228,7 @@ def retain_judge_finalists(
         sufficient = is_identity_sufficient(item[1])
         return (sufficient, realism_order(item[1]) if sufficient else (score_from_headers(item[1]) or -1.0,), item[2] == candidate[2])
     kept.sort(key=rank, reverse=True)
-    distinct = []
-    for item in kept:
-        if not any(item[0] == prior[0] for prior in distinct):
-            distinct.append(item)
-        if len(distinct) >= JUDGE_FINALIST_BUFFER:
-            break
-    return distinct
+    return diverse_finalists(kept, JUDGE_FINALIST_BUFFER)
 
 
 def judge_pool(
@@ -2219,17 +2237,11 @@ def judge_pool(
 ) -> list[tuple[bytes, dict[str, str], int]]:
     """Local winner first, then the strongest distinct near-ties (max 4)."""
     pool = [(best_result, best_headers, best_round)]
-    for item in finalists:
-        score = score_from_headers(item[1])
-        if (
-            len(pool) >= JUDGE_MAX_CANDIDATES or any(item[0] == prior[0] for prior in pool)
-            or not identity_acceptable(item[1], peak_identity)
-            or (is_identity_sufficient(best_headers) and not is_identity_sufficient(item[1]))
-            or item[1].get("X-Retake-Detail-Gate") != "passed"
-        ):
-            continue
-        pool.append(item)
-    return pool
+    eligible = [item for item in finalists if item[0] != best_result
+                and identity_acceptable(item[1], peak_identity)
+                and (not is_identity_sufficient(best_headers) or is_identity_sufficient(item[1]))
+                and item[1].get("X-Retake-Detail-Gate") == "passed"]
+    return diverse_finalists(pool + eligible, JUDGE_MAX_CANDIDATES)
 
 
 def engine_stats(pass_cache: Any, cache_start: dict[str, Any] | None,

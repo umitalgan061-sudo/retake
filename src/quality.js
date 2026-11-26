@@ -277,3 +277,32 @@ export function describePortraitEvidence(value, appearance) {
   return [rows.length?"Alt yüz mutlak doku enerjisi (önce→sonra): "+rows.join(", "):"",
     score!==null && score>=0 && score<=1?"referans alt yüz görünüm uyumu "+score.toFixed(2).replace(".",",")+" / 1 (doku/kontrast)":""].filter(Boolean).join(" · ");
 }
+
+
+// Geometry is re-detected on the delivered photograph, never copied from
+// the source mesh. Ratios describe expression/shape, not biometric identity.
+export function portraitGeometry(mesh,width,height) {
+  if (!Array.isArray(mesh)||mesh.length!==478||!Number.isFinite(width)||!Number.isFinite(height)||Math.min(width,height)<=0) return null;
+  const points=mesh.map(p=>p&&Number.isFinite(p.x)&&Number.isFinite(p.y)?[p.x*width,p.y*height]:null);
+  const distance=(a,b)=>points[a]&&points[b]?Math.hypot(points[a][0]-points[b][0],points[a][1]-points[b][1]):NaN;
+  const faceWidth=distance(234,454),faceHeight=distance(10,152),eyeR=distance(33,133),eyeL=distance(362,263),mouth=distance(61,291);
+  if (![faceWidth,faceHeight,eyeR,eyeL,mouth].every(Number.isFinite)||faceWidth<32||faceHeight<32||Math.min(eyeR,eyeL,mouth)<4) return null;
+  const values={rightEye:distance(159,145)/eyeR,leftEye:distance(386,374)/eyeL,
+    mouthOpen:distance(13,14)/mouth,mouthWidth:mouth/faceWidth,noseWidth:distance(98,327)/faceWidth,
+    jawWidth:distance(172,397)/faceWidth,faceRatio:faceWidth/faceHeight};
+  return Object.values(values).every(v=>Number.isFinite(v)&&v>=0&&v<3)?{width:Math.round(faceWidth),height:Math.round(faceHeight),values}:null;
+}
+
+export function describePortraitGeometry(report) {
+  if (!report?.source) return "";
+  const s=report.source, d=report.delivered;
+  const size=Number.isFinite(s.width)&&Number.isFinite(s.height)?"giriş yüz alanı "+s.width+"×"+s.height+" px":"";
+  if (!d) return [size,"son geometri ölçülemedi"].filter(Boolean).join(" · ");
+  const labels={rightEye:"sağ göz açıklığı",leftEye:"sol göz açıklığı",mouthOpen:"ağız açıklığı",mouthWidth:"ağız genişliği",noseWidth:"burun genişliği",jawWidth:"çene genişliği",faceRatio:"yüz oranı"};
+  const rows=Object.entries(labels).map(([key,label])=>{
+    const a=s.values?.[key],b=d.values?.[key];
+    if(!Number.isFinite(a)||!Number.isFinite(b))return "";
+    return label+" "+a.toFixed(2).replace(".",",")+"→"+b.toFixed(2).replace(".",",");
+  }).filter(Boolean);
+  return [size,rows.length?"Giriş→çıktı geometri oranları: "+rows.join(", "):""].filter(Boolean).join(" · ");
+}

@@ -445,3 +445,10 @@ class DistinctExtraWorkTest(unittest.TestCase):
         self.assertIsNotNone(calls[25][1])
         self.assertAlmostEqual(float(headers["X-Retake-Similarity"]),.87)
         self.assertEqual(headers["X-Retake-FLUX-Status"],"identity-loss")
+
+
+    def test_stronger_original_is_not_ignored_by_photo_level_sufficiency(self):
+        from tools.ultra_mode import needs_extra_finalist
+        headers={**score(.88),"X-Retake-Identity-Photo-Level":".89","X-Retake-Similarity-Before":".90"}
+        self.assertTrue(needs_extra_finalist(headers))
+        self.assertFalse(needs_extra_finalist({**headers,"X-Retake-Similarity":".90"}))

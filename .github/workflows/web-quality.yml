@@ -28,6 +28,7 @@ on:
       - "tools/local_flux2_editor.py"
       - "tools/managed_flux2.py"
       - "tools/nim_photo_edit.py"
+      - "tools/*.py"
       - "tools/*.ps1"
       - "docs/LOCAL_FACEFUSION_SETUP.md"
       - "docs/LOCAL_COMFYUI_SETUP.md"
@@ -61,6 +62,7 @@ on:
       - "tools/local_flux2_editor.py"
       - "tools/managed_flux2.py"
       - "tools/nim_photo_edit.py"
+      - "tools/*.py"
       - "tools/*.ps1"
       - "docs/LOCAL_FACEFUSION_SETUP.md"
       - "docs/LOCAL_COMFYUI_SETUP.md"
@@ -85,7 +87,7 @@ jobs:
       - name: Validate repository assets
         run: python3 tools/validate_assets.py
       - name: Check local FaceFusion server and ArcFace worker Python syntax
-        run: python3 -m py_compile tools/facefusion_local_server.py tools/retake_detail.py tools/retake_appearance.py tools/facefusion_identity_worker.py tools/identity_consistency.py tools/identity_selection.py tools/retake_rim_cleanup.py tools/lower_face_transfer.py tools/ultra_mode.py tools/ultra_quality.py tools/photo_realism_gate.py tools/facefusion_quality.py tools/retake_compositing.py tools/retake_cache.py tools/retake_background.py tools/local_flux2_editor.py tools/managed_flux2.py tools/nim_photo_edit.py tools/nvidia_judge.py
+        run: python3 -m py_compile tools/facefusion_local_server.py tools/retake_detail.py tools/retake_appearance.py tools/facefusion_identity_worker.py tools/identity_consistency.py tools/identity_selection.py tools/retake_rim_cleanup.py tools/lower_face_transfer.py tools/ultra_mode.py tools/ultra_quality.py tools/photo_realism_gate.py tools/facefusion_quality.py tools/retake_compositing.py tools/retake_cache.py tools/retake_background.py tools/local_flux2_editor.py tools/managed_flux2.py tools/nim_photo_edit.py tools/nvidia_judge.py tools/ultra_calibration.py tools/fine_features.py tools/identity_scorer.py tools/neck_harmonization.py
       - name: Install OpenCV and NumPy for the compositing tests
         run: python3 -m pip install --quiet numpy opencv-python-headless Pillow
       - name: Run local FaceFusion configuration tests
@@ -101,6 +103,9 @@ jobs:
           node --check src/reference-cache.js
           node --check src/quality.js
           node --check src/real-face.js
+          node --check src/depth.js
+          node --check src/diagnostics.js
+          node --check src/benchmark.js
           node --check worker/index.js
           node --check tools/deploy-worker.mjs
           node --check functions/index.js
@@ -132,4 +137,6 @@ jobs:
           python -m unittest discover -s tests -p "test_engine_lifecycle.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p "test_managed_flux2.py"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p "test_identity_scorer.py"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

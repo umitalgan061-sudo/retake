@@ -191,3 +191,97 @@ export function describeJudgeError(code) {
   }
   return ({tls:"jüri TLS sertifika doğrulama sorunu",timeout:"jüri zaman aşımı",network:"jüri ağ bağlantısı sorunu","payload-too-large":"jüri kırpım boyutu sınırı"})[code] || "";
 }
+
+// Above the person's own photo level a higher ArcFace score is not "more
+// like them"; the engine then picks the most photographic candidate.
+export function describeIdentitySufficiency(value) {
+  return value === "yes" ? "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" : "";
+}
+
+// Self-test: when the target is one of the person's own reference photos,
+// the original face is the right answer. SSIM 1 / ΔE 0 mean identical; for
+// scale, re-saving the same photo as JPEG gives about 0.97 / 1.3.
+export function describeSelfFidelity(value) {
+  const match = /^ssim:(-?\d+(?:\.\d+)?),deltaE:(\d+(?:\.\d+)?)$/.exec(String(value || "").trim());
+  if (!match) return "";
+  const ssim = Number(match[1]);
+  const deltaE = Number(match[2]);
+  if (!Number.isFinite(ssim) || ssim < -1 || ssim > 1 || !Number.isFinite(deltaE) || deltaE < 0 || deltaE > 200) return "";
+  const comma = (number, digits) => number.toFixed(digits).replace(".", ",");
+  return `Öz-test (fotoğraf referanslarında da var): orijinale yapısal benzerlik ${comma(ssim, 2)} · renk farkı ΔE ${comma(deltaE, 1)} (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 · 1,3)`;
+}
+
+// Learned Ultra order: which variants ran first, and on what evidence.
+export function describeUltraSchedule(mode, samples) {
+  const count = Number.isInteger(samples) && samples > 0 ? samples : null;
+  if (mode === "learned-fidelity") {
+    return "Öğrenilmiş sıra: öz-testlerde senin yüzünde en doğal ölçülen ayarlar önce denendi" + (count ? ` (${count} ölçüm)` : "");
+  }
+  if (mode === "learned-proxy") {
+    return "Öğrenilmiş sıra: önceki işlemlerde fotoğraf ayrıntısını en iyi koruyan ayarlar önce denendi" + (count ? ` (${count} tur)` : "");
+  }
+  return "";
+}
+
+// Quality depth (engine v23+): what the longer search actually did.
+export function describeUltraDepth(depth, refinements = "", realismFinalists = null) {
+  const names = { deep: "Derin arama", max: "En yüksek kalite araması" };
+  if (!Object.hasOwn(names, depth)) return "";
+  const parts = [names[depth]];
+  const match = /^(\d+)\/(\d+)$/.exec(typeof refinements === "string" ? refinements : "");
+  if (match && Number(match[2]) > 0) {
+    parts.push(Number(match[1]) > 0
+      ? `ince ayar sonucu ${match[1]} adımda iyileştirdi (${match[2]} denendi)`
+      : `${match[2]} ince ayar denendi, en iyi ızgara ayarı korundu`);
+  }
+  if (Number.isInteger(realismFinalists) && realismFinalists > 1) {
+    parts.push(`${realismFinalists} gerçekçilik finalisti karşılaştırıldı`);
+  }
+  return parts.join(" · ");
+}
+
+// Finest features (engine v24+): eyes, brows, lips, nose tip, teeth and
+// catchlights, each measured against the photo on the target mesh.
+const FINE_FEATURE_LABELS = Object.freeze({
+  eye_r: "sağ göz", eye_l: "sol göz", brow_r: "sağ kaş", brow_l: "sol kaş",
+  lips: "dudak", nose_tip: "burun ucu", mouth_inner: "dişler"
+});
+
+export function parseFineDetail(value) {
+  if (typeof value !== "string" || !value) return [];
+  return value.split(",").map((part) => {
+    const match = /^([a-z_]+):(\d+(?:\.\d+)?)>(\d+(?:\.\d+)?)$/.exec(part.trim());
+    if (!match || !Object.hasOwn(FINE_FEATURE_LABELS, match[1])) return null;
+    const before = Number(match[2]);
+    const after = Number(match[3]);
+    return Number.isFinite(before) && Number.isFinite(after) && before <= 10 && after <= 10
+      ? { name: match[1], label: FINE_FEATURE_LABELS[match[1]], before, after }
+      : null;
+  }).filter(Boolean);
+}
+
+function decimal(value) {
+  return value.toFixed(2).replace(".", ",");
+}
+
+export function describeFineFeatures(decision, detail = "", catchlights = "", sclera = "") {
+  const lights = /^(\d+)\/(\d+)$/.exec(typeof catchlights === "string" ? catchlights : "");
+  const restoredLights = lights ? Number(lights[1]) : 0;
+  const whites = /^(\d+)\/(\d+)$/.exec(typeof sclera === "string" ? sclera : "");
+  const correctedWhites = whites ? Number(whites[1]) : 0;
+  if (decision === "applied") {
+    const changed = parseFineDetail(detail)
+      .filter((item) => Math.abs(item.after - item.before) >= 0.02)
+      .slice(0, 4)
+      .map((item) => `${item.label} ${decimal(item.before)}→${decimal(item.after)}`);
+    const parts = ["İnce bölgeler iyileştirildi" + (changed.length ? ` (fotoğrafa göre ayrıntı: ${changed.join(", ")})` : "")];
+    if (restoredLights > 0) parts.push(`göz ışığı ${restoredLights}/${lights[2]} gözde geri getirildi`);
+    if (correctedWhites > 0) parts.push(`göz akı tonu ${correctedWhites}/${whites[2]} gözde fotoğrafın ışığına uyarlandı`);
+    return parts.join(" · ");
+  }
+  if (decision === "unchanged") return "göz, kaş ve dudak ayrıntısı fotoğrafla uyumlu";
+  if (decision === "identity-loss") return "ince bölge iyileştirmesi kimliği korumadığı için uygulanmadı";
+  if (decision === "detail-gate") return "ince bölge adayı ayrıntı kontrolünü geçemedi";
+  if (decision === "no-gain") return "ince bölge düzeltmesi ölçülebilir kazanç sağlamadı; sonuç korundu";
+  return "";
+}

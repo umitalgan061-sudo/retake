@@ -151,6 +151,15 @@
               <input id="realFaceToggle" type="checkbox">
               <span><strong>Fotoğraftan doku nakli (deneysel)</strong><small>Yüz, en uygun açılı fotoğrafından bükülerek alınır; bazı fotoğraflarda maske gibi durabilir</small></span>
             </label>
+            <fieldset id="qualityDepthRow" class="quality-depth" hidden>
+              <legend><strong>Kalite derinliği</strong><small>Daha uzun süre = daha çok ölçülmüş aday; kimlik ve doku kontrolleri her seviyede aynı</small></legend>
+              <div class="quality-depth-options">
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="standard"><span><strong>Standart</strong><small id="qualityDepthStandardTime">≈8–15 dk</small></span></label>
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="deep" checked><span><strong>Derin</strong><small id="qualityDepthDeepTime">≈25–40 dk · önerilen</small></span></label>
+                <label class="quality-depth-option"><input type="radio" name="qualityDepth" value="max"><span><strong>En yüksek</strong><small id="qualityDepthMaxTime">≈60–95 dk</small></span></label>
+              </div>
+              <p id="qualityDepthNote" class="quality-depth-note">Derin: 25 dakikalık arama, kazananın çevresinde ince ayar, 2 gerçekçilik finalisti.</p>
+            </fieldset>
             <label id="nvidiaJudgeRow" class="real-face-toggle" for="nvidiaJudgeToggle" hidden>
               <input id="nvidiaJudgeToggle" type="checkbox" disabled>
               <span><strong>NVIDIA görsel jürisi (Hafize üzerinden)</strong><small>Kimliği eşit en iyi 2–4 sonucun yüz kırpımları NVIDIA görsel modellerine gösterilir; jüri en doğal görüneni seçer, görseller saklanmaz</small></span>
@@ -166,6 +175,7 @@
                 <option value="jpeg">JPG</option>
               </select>
               <button id="shareButton" class="download-button share-button" type="button" hidden disabled><svg viewBox="0 0 24 24"><path d="M12 15V3m0 0L8 7m4-4 4 4M5 12v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7"/></svg> Paylaş</button>
+              <button id="diagnosticsButton" class="download-button share-button" type="button" hidden disabled title="Bu sonucun ölçümlerini kopyala (görsel, dosya adı veya yol içermez)"><svg viewBox="0 0 24 24"><path d="M9 9h10v12H9zM5 15V3h10"/></svg> Tanı raporu</button>
             </div>
             <p id="disabledNote" class="disabled-note">Ultra Mod her seferinde birden fazla adayı karşılaştırır ve en iyi tek sonucu gösterir.</p>
           </section>
@@ -186,6 +196,34 @@
                   <p id="engineFormStatus" class="state-detail" aria-live="polite">Adres ve kod yalnızca bu cihazın tarayıcısında saklanır.</p>
                 </div>
               </form>
+            </section>
+          </details>
+
+          <details id="benchmarkDetails" class="profile-details">
+            <summary><span>Öz-test kıyaslaması</span><span id="benchmarkSummaryNote" class="profile-summary-note">Ölç ve öğret</span></summary>
+            <section class="control-card" aria-labelledby="benchmarkTitle">
+              <div class="profile-head"><div><div class="card-overline">GERÇEK CEVABA KARŞI ÖLÇÜM</div><h2 id="benchmarkTitle">Ne kadar doğal?</h2></div></div>
+              <p class="profile-copy">Kendi referans fotoğraflarından birkaçı sırayla hedef yapılır. Doğru cevap bilindiği için (orijinal yüz) sonuç ona karşı ölçülür: yapısal benzerlik (SSIM, 1 = aynı) ve renk farkı (ΔE, 0 = aynı). Her test, hedef fotoğraf kaynaklardan tamamen çıkarılarak yapılır ve motor hangi ayarların senin yüzünde en doğal göründüğünü öğrenir; sonraki işlemlerde onları önce dener.</p>
+              <div class="benchmark-controls">
+                <label for="benchmarkCount">Fotoğraf sayısı</label>
+                <select id="benchmarkCount" class="export-format">
+                  <option value="3">3 (≈ 25 dk)</option>
+                  <option value="5" selected>5 (≈ 40 dk)</option>
+                  <option value="10">10 (≈ 80 dk)</option>
+                  <option value="25">25 (≈ 3,5 saat)</option>
+                </select>
+                <button id="benchmarkStart" class="choose-file-button" type="button" disabled><span>Kıyaslamayı başlat</span><svg viewBox="0 0 24 24"><path d="M5 12h14m-6-6 6 6-6 6"/></svg></button>
+                <button id="benchmarkStop" class="text-button" type="button" hidden>Bu testten sonra durdur</button>
+              </div>
+              <p id="benchmarkStatus" class="state-detail" aria-live="polite">Motor bu özelliği desteklediğinde başlatılabilir. Görseller yalnız bu cihaz ile yerel motor arasında kalır.</p>
+              <div class="benchmark-table-wrap" id="benchmarkResults" hidden>
+                <table class="benchmark-table">
+                  <thead><tr><th>Fotoğraf</th><th>SSIM</th><th>ΔE</th><th>Doğallık</th><th>Kimlik</th><th>Sıra</th></tr></thead>
+                  <tbody id="benchmarkRows"></tbody>
+                </table>
+                <p id="benchmarkSummary" class="state-detail"></p>
+                <button id="benchmarkDownload" class="text-button" type="button" hidden>Raporu indir (JSON, yalnız sayılar)</button>
+              </div>
             </section>
           </details>
 

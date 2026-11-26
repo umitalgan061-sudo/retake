@@ -242,3 +242,146 @@ def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds:
     _score, ratios = regional_photo_detail(single, reinforced, bounds)
     accepted, reason = reinforcement_detail_decision(ratios)
     return accepted, reason, ratios
+
+def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent):
+    """Prefer measured regional detail only within the verified identity peak."""
+    if not (len(identity_scores) == len(detail_scores) == len(labels)):
+        return incumbent
+    valid = [i for i, score in enumerate(identity_scores)
+             if isinstance(score, (int, float)) and not isinstance(score, bool)
+             and math.isfinite(score) and -1 <= score <= 1]
+    if not valid:
+        return incumbent
+    peak = max(valid, key=lambda i: identity_scores[i])
+    eligible = [i for i in valid if identity_scores[i] >= identity_scores[peak] - .003]
+    current = incumbent if incumbent in eligible else peak
+    current = choose_detail_safe_tie(identity_scores, detail_scores, current)
+    if labels[current] not in ("identity-beard", "identity-full", "identity-jaw"):
+        baseline = detail_scores[current]
+        if isinstance(baseline, (float, int)) and math.isfinite(baseline):
+            regional = [i for i in eligible
+                        if labels[i] in ("identity-beard", "identity-full", "identity-jaw")
+                        and isinstance(detail_scores[i], (float, int))
+                        and math.isfinite(detail_scores[i])
+                        and detail_scores[i] >= baseline - .025]
+            if regional:
+                current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
+    return current
+
+def regional_edit_statistics(original_path, edited_path, bounds):
+    """Native-pixel edit evidence, independent of source texture energy.
+
+    A change is not a quality or identity gain. In particular, smooth lips
+    and small beards may have insufficient high-frequency baseline energy
+    but still allow a valid measurement of the delivered pixel difference.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    edited = cv2.imread(str(edited_path), cv2.IMREAD_COLOR)
+    if original is None or edited is None or original.shape != edited.shape:
+        return {}
+    height, width = original.shape[:2]
+    try:
+        x, y, fw, fh = (float(bounds[key]) for key in ("x", "y", "width", "height"))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if not all(math.isfinite(v) for v in (x,y,fw,fh)) or min(fw,fh) < 20:
+        return {}
+    regions = {**REGIONS, "moustache": (.27,.50,.73,.62), "chin": (.29,.76,.71,.92),
+               "forehead": (.24,.10,.76,.25), "brows": (.12,.19,.88,.30),
+               "left_cheek": (.12,.43,.34,.68), "right_cheek": (.66,.43,.88,.68),
+               "left_jaw": (.12,.69,.35,.87), "right_jaw": (.65,.69,.88,.87)}
+    result = {}
+    for name, (left,top,right,bottom) in regions.items():
+        x0,x1 = max(0,int(x+fw*left)), min(width,int(x+fw*right))
+        y0,y1 = max(0,int(y+fh*top)), min(height,int(y+fh*bottom))
+        if min(x1-x0,y1-y0) < 4:
+            continue
+        before = original[y0:y1,x0:x1].astype(np.int16)
+        after = edited[y0:y1,x0:x1].astype(np.int16)
+        values = np.max(np.abs(after-before),axis=2)
+        result[name] = round(float(np.mean(values)),3)
+    return result
+
+
+def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold, minimum_detail_gain=0.025):
+    """Inside one render: once identity reaches the person's photo level,
+    pick the identity-sufficient candidate that keeps the most real photo
+    detail (e.g. no-head-warp, photo-balance) instead of the highest cosine.
+
+    Below the level, or without a measured level, the identity winner stays.
+    """
+    def valid(value, low, high):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and low <= value <= high
+
+    if (
+        threshold is None or not valid(threshold, -1, 1)
+        or not (0 <= chosen < len(identity_scores) == len(detail_scores))
+        or not valid(identity_scores[chosen], -1, 1) or identity_scores[chosen] < threshold
+        or not valid(detail_scores[chosen], 0, 1)
+    ):
+        return chosen
+    contenders = [
+        index for index, score in enumerate(identity_scores)
+        if valid(score, -1, 1) and score >= threshold and valid(detail_scores[index], 0, 1)
+    ]
+    best = max(contenders, key=lambda index: (detail_scores[index], identity_scores[index]))
+    return best if detail_scores[best] >= detail_scores[chosen] + minimum_detail_gain else chosen
+
+
+def reinforcement_wanted(single, double, threshold, minimum_gain=0.008):
+    """128 px InSwapper reinforcement only when identity is still short of the
+    person's photo level and ArcFace actually rises."""
+    def valid(value):
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+    if not valid(single) or not valid(double):
+        return False, "unscored"
+    if threshold is not None and valid(threshold) and single >= threshold:
+        return False, "identity-sufficient"
+    if double <= single + minimum_gain:
+        return False, "no-identity-gain"
+    return True, "gain"
+
+
+def _ssim_luma(a: np.ndarray, b: np.ndarray) -> float:
+    a = a.astype(np.float64)
+    b = b.astype(np.float64)
+    c1, c2 = (0.01 * 255) ** 2, (0.03 * 255) ** 2
+    blur = lambda image: cv2.GaussianBlur(image, (0, 0), 1.5)
+    mu_a, mu_b = blur(a), blur(b)
+    var_a = blur(a * a) - mu_a ** 2
+    var_b = blur(b * b) - mu_b ** 2
+    cov = blur(a * b) - mu_a * mu_b
+    ssim_map = ((2 * mu_a * mu_b + c1) * (2 * cov + c2)) / ((mu_a ** 2 + mu_b ** 2 + c1) * (var_a + var_b + c2))
+    return float(np.mean(ssim_map))
+
+
+def self_fidelity(original_path: Path, edited_path: Path, bounds: dict[str, Any]) -> dict[str, float]:
+    """Ground-truth realism for a self-test: the target is one of the
+    person's own reference photos, so its original face is the right answer.
+
+    Returns face-region luma SSIM (1 = structurally identical) and mean CIE76
+    colour difference ΔE (0 = identical). Measurement only, never selection:
+    choosing by it would turn the self-test into an oracle.
+    """
+    original = cv2.imread(str(original_path), cv2.IMREAD_COLOR)
+    edited = cv2.imread(str(edited_path), cv2.IMREAD_COLOR)
+    if original is None or edited is None or original.shape != edited.shape:
+        return {}
+    try:
+        x, y, fw, fh = (float(bounds[key]) for key in ("x", "y", "width", "height"))
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if not all(math.isfinite(value) for value in (x, y, fw, fh)) or min(fw, fh) < 16:
+        return {}
+    height, width = original.shape[:2]
+    x0, y0 = max(0, int(x - fw * 0.05)), max(0, int(y - fh * 0.05))
+    x1, y1 = min(width, int(math.ceil(x + fw * 1.05))), min(height, int(math.ceil(y + fh * 1.05)))
+    if x1 - x0 < 16 or y1 - y0 < 16:
+        return {}
+    a, b = original[y0:y1, x0:x1], edited[y0:y1, x0:x1]
+    ssim = _ssim_luma(cv2.cvtColor(a, cv2.COLOR_BGR2GRAY), cv2.cvtColor(b, cv2.COLOR_BGR2GRAY))
+    lab_a = cv2.cvtColor(a.astype(np.float32) / 255.0, cv2.COLOR_BGR2LAB)
+    lab_b = cv2.cvtColor(b.astype(np.float32) / 255.0, cv2.COLOR_BGR2LAB)
+    delta_e = float(np.mean(np.sqrt(np.sum((lab_a - lab_b) ** 2, axis=2))))
+    return {"ssim": round(max(-1.0, min(1.0, ssim)), 4), "delta_e": round(delta_e, 3)}

@@ -42,6 +42,77 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 **Apple Retake ile aynı model değildir.** Retake, 25 referanstan ağırlıklı kimlik ortalaması ve hizalanmış görünüm ortalaması üretir; AlphaFace kimliği, UniFace ise alt yüz görünüm/sakal detay katmanını işler. Bu, kişiye özel diffusion modeli eğitimi veya LoRA fine-tuning değildir; kimlik benzerliği, sakal aktarımı ve saç transferi garanti edilmez.
 
+### Kimlik yeterliliği: fotoğraflarının düzeyinden sonra gerçekçilik seçer
+
+ArcFace benzerliği bir noktadan sonra "daha çok sen" demek değildir. Motor, 25 referansının her birini *diğer* 24'ün ortalamasıyla karşılaştırarak senin gerçek bir fotoğrafının kimlik merkezine tipik benzerliğini ölçer (`X-Retake-Identity-Photo-Level`, birini dışarıda bırakarak; fotoğraf kendine oy vermez). Bir aday bu düzeyin 0,02 altına kadar geldiyse kimlik "yeterli" sayılır:
+
+- Yeterli adaylar arasında karar sırası: 128 px pekiştirme olmayan sonuç → daha temiz saç/çene çizgisi → göz/burun/ağızda gerçek fotoğrafın ayrıntısını daha çok koruyan sonuç → ancak sonra ArcFace.
+- Yeterli bir sonuç, sırf daha yüksek kosinüslü (çoğunlukla 128 px pekiştirmeli) bir aday çıktı diye geri çekilmez; ek finalist araması da yapılmaz.
+- Düzeyin altındaki adaylarda eski kimlik öncelikli kurallar aynen geçerlidir. Ölçüm yoksa (eski önbellek) davranış değişmez; kimlik raporu sürümü `centroid-v2` olduğu için ilk işte referanslar bir kez yeniden ölçülür.
+- NVIDIA jürisine giden finalistler de artık yalnız ArcFace'e yakınlıkla değil, yeterli adaylar arasından gerçekçilik sırasıyla seçilir.
+- Sonuç rozeti "Kimlik fotoğraflarının düzeyinde; adaylar arasından en doğal görünen seçildi" der; "fotoğraflarınla aynı düzeyde" karşılaştırması da artık aynı ölçekteki bu değere göre yapılır.
+
+Aynı kural tek bir işlemin içinde de geçerli: 256 px geçiş zaten bu düzeye ulaştıysa 128 px InSwapper pekiştirmesi hiç uygulanmaz (`X-Retake-Reinforce-Guard: identity-sufficient`), ve başlık uydurma/ham-kafa/fotoğraf-dengesi gibi iç adaylar arasından gerçek fotoğraf ayrıntısını en çok koruyan seçilir.
+
+**Öz-test ölçümü.** Hedef fotoğraf 25 referansından biriyse (aynı dosya), orijinal yüz doğru cevaptır. Bu durumda motor sonucu orijinalle karşılaştırır: yüz bölgesinde yapısal benzerlik (SSIM, 1 = aynı) ve ortalama renk farkı (ΔE, 0 = aynı); sonuç rozetinde "Öz-test" satırı olarak görünür (`X-Retake-Self-Fidelity`). Ölçek için: aynı fotoğrafı JPEG olarak yeniden kaydetmek ≈ 0,97 / 1,3 verir; 25 Kasım testindeki yapay görünen sonuç 0,69 / 7,2 idi (σ=2 bulanıklaştırılmış orijinal bile 0,77 / 2,4). Bu yalnız ölçümdür; seçimde kullanılmaz, yoksa test kendi cevabını görmüş olurdu.
+
+Neden: Kendi referans fotoğrafınla yapılan bir testte sonuç ArcFace'te 0,85'ten 0,91'e çıktı ama gözler bulanık, burun delikleri lekeli, cilt mumsu göründü. Yüksek puan, gerçek bir fotoğrafından daha "sen" olduğu anlamına gelmiyordu.
+
+### Öğrenen Ultra ve öz-test kıyaslaması (v22.3)
+
+Bir GPU turu birkaç dakika sürdüğü için 7 dakikalık Ultra penceresinde 24 varyanttan genellikle yalnız ilk birkaçı çalışır; eskiden sabit sıra hangi ayarların hiç denendiğini fiilen belirliyordu. Artık motor bu bilgisayarda, her referans bankası (kişi) için ayrı olarak, hangi varyantların en doğal sonucu verdiğini öğrenir (`tools/ultra_calibration.py`, `%USERPROFILE%\.retake\ultra-calibration.json`):
+
+- **Altın ölçü — öz-testler:** Hedef 25 referansından biriyse orijinal yüz doğru cevaptır; her tur SSIM ve ΔE ile ölçülür, doğallık = SSIM − 0,02·ΔE (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,94; 25 Kasım'daki yapay sonuç ≈ 0,55).
+- **Vekil ölçü — normal işler:** Korunan bölgesel fotoğraf ayrıntısı (128 px pekiştirmeye küçük ceza). Yalnız yeterli öz-test yokken kullanılır.
+- **Sıra:** Ortalama + keşif payı (UCB). Kanıtlanmış varyantlar önce çalışır, hiç denenmemiş olanlar da işler arasında denenmeye devam eder. Ek finalistler de bu sıradan seçilir. Kimlik, ayrıntı ve diğer tüm kapılar aynen geçerli; öğrenme yalnız *hangi sırayla denendiğini* değiştirir.
+- Yalnız sayılar saklanır (görsel, gömme vektörü yok). `RETAKE_ULTRA_LEARNING=off` kapatır; dosyayı silmek sıfırlar; varyantların anlamı değişirse (profil sürümü) öğrenme kendiliğinden sıfırlanır. Motorun `/api/calibration` ucu varyant başına sayı/ortalama özetini verir. Rozet "Öğrenilmiş sıra: …" satırıyla hangi kanıtla sıralandığını söyler.
+
+**Öz-test kıyaslaması** (sitede "Öz-test kıyaslaması" paneli): Tek onayla 3/5/10/25 referans fotoğrafı, bankaya eşit aralıklarla dağılacak biçimde sırayla hedef yapılır ve her biri için Ultra çalışır. Bu modda (`selfTest`) hedef fotoğraf **tüm kimlik kaynak havuzlarından çıkarılır** (gerçek "birini dışarıda bırak"); aksi halde test kopyalamayı ölçerdi. Tablo her fotoğraf için SSIM, ΔE, doğallık, kimlik ve sıranın öğrenilmiş olup olmadığını gösterir; ortalama ve en iyi/en kötü özetlenir; rapor yalnız sayılardan oluşan JSON olarak indirilebilir. "Bu testten sonra durdur" ile yarıda bırakılabilir; toplanan ölçümler yine öğrenmeye eklenir. Görseller yalnız tarayıcı ile yerel motor arasında kalır.
+
+### Kalite derinliği ve iş boyu geçiş önbelleği (v23)
+
+Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (motor v23 gerekir; tercih bu cihazda saklanır):
+
+| Derinlik | Süre (yaklaşık) | Ne yapar |
+| --- | --- | --- |
+| Standart | 8–15 dk | 7 dakikalık varyant araması, 1 gerçekçilik finalisti (eski davranış; öz-test kıyaslaması hep bunu kullanır) |
+| **Derin** (varsayılan) | 25–40 dk | 25 dakikalık arama, kazanan ayarın çevresinde 3 adımlık ince ayar, 2 gerçekçilik finalisti, 3 ek finalist |
+| En yüksek | 60–95 dk | 1 saatlik arama (24 ayarın hepsi), 6 adımlık ince ayar, 3 gerçekçilik finalisti, 4 ek finalist |
+
+- **İnce ayar:** 24 varyant kaba bir ızgaradır. Kazananın sürekli ayarları (alt yüz ayrıntı gücü, kafa oranı gücü) pusula aramasıyla adım adım denenir: kazanan yön sürdürülür, tüm komşular ölçülünce adım yarıya iner. Yüz değiştirici ağırlığı değişmez; bu yüzden FaceFusion geçişleri önbellekten gelir ve bir ince ayar yeni kimlik geçişi değil, yalnız birleştirme + ölçüm maliyetidir. Bir adım yalnız normal seçim kuralları (kimlik, yeterlilik, ayrıntı kapısı) onu tercih ederse kalır.
+- **Birden fazla gerçekçilik finalisti:** Difüzyon rastgeledir. Kazanan varsayılan tohumlarla, sonraki farklı finalistler (kimlik eşitlik bandındaki veya fotoğraf düzeyindeki adaylar) başka tohumlarla gerçekçilik geçişinden geçer; en iyi doğrulanmış sonuç seçilir.
+- **Geçiş önbelleği:** Bir turda ağırlık başına ~6–9 FaceFusion geçişi (kimlik havuzları, pekiştirme, görünüm, doku) yapılır. Eski 8 girdilik önbellek, ağırlık her değiştiğinde (1,00/0,95/0,90) tüm geçişleri yeniden çalıştırıyordu — turların ~3 dk sürmesinin ana nedeni buydu. Önbellek artık bir işin tüm geçişlerini tutar (96 girdi, en çok 1,5 GB RAM; `RETAKE_PASS_CACHE_MB` ile 64–8192 MB) ve her işten sonra boşaltılır. Aynı ağırlığın sonraki turları kimlik geçişlerini yeniden çalıştırmaz; bu, Standart derinlikte bile 7 dakikaya daha çok varyant sığdırır. `/health` içindeki `pass_cache.last_job` son işin isabet/ıska sayısını gösterir.
+- Uzun işlerde sonuç bu sayfaya gelir: sayfa açık kalmalı. Tarayıcı ekranın uyumasını engeller (Wake Lock) ve sekme kapatılırken uyarır. Bekleme süresi derinliğe göre 45/90/150 dakikadır; motor 7 dakikalık asgari süreyi her derinlikte korur.
+- Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
+- Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
+
+### Tanı raporu ve süre dökümü; ince bölgeler seçimde (v26)
+
+- **Tanı raporu:** Sonuçtan sonra "Tanı raporu" düğmesi bu sonucun tüm ölçümlerini ve motorun durumunu tek bir metin olarak panoya kopyalar (pano yoksa `.txt` indirir). Rapor yalnız sayılar ve durumlar içerir: görsel, dosya adı, klasör yolu, anahtar veya eşleştirme kodu içermez (yollar ve dosya adları `[yol]`/`[dosya]` olarak silinir; motor durumu beyaz listeden geçer). Sohbete yapıştırınca motor o bilgisayara göre ayarlanabilir.
+- **Süre dökümü:** `X-Retake-Ultra-Timing` (`search=19x72;refine=4x31;realism=2x210;extra=1x65;judge=40;hold=0;total=2210`) her aşamanın sayısını ve ortalama süresini verir; rozet "Süre: 19 tur × 72 sn · 4 ince ayar × 31 sn · …" diye yazar. `X-Retake-Engine-Stats` bu işin geçiş önbelleği isabet/ıskasını ve ArcFace ölçüm sayısı × ortalama süresini verir.
+- **İnce bölgeler seçimde:** Her adayın teslim edilen piksellerindeki göz/kaş/dudak doğallığı (`X-Retake-Fine-Quality`, 0–1) artık Ultra eşitliklerinde kullanılır: kimlik yeterliyse kontur temizliğinden hemen sonra, yeterli değilse yalnız kimlik eşitlik bandı içinde. Kimlik hâlâ önce gelir; 0,03'ten küçük farklar dikkate alınmaz.
+
+### Kalıcı ArcFace ölçümü (v25)
+
+Her kimlik ölçümü eskiden yeni bir Python süreci açıp FaceFusion'ı içe aktarıyor, YOLO yüz algılayıcısını ve ArcFace ONNX oturumunu (CUDA kurulumu dahil) sıfırdan yüklüyordu. Bir render 5–7 kez ölçüm yaptığı için (havuz seçimi, pekiştirme, karışımlar, son adaylar, ince bölge ve kontur adımları), geçiş önbelleği devreye girdikten sonra turun büyük kısmı aynı iki modeli yüklemekle geçiyordu.
+
+- Motor artık iş boyunca tek bir ArcFace çalışanını modeller yüklü halde tutar ve stdin/stdout üzerinden satır satır JSON ile konuşur (`tools/identity_scorer.py`, çalışanın `--serve` kipi). Ölçüm sonuçları aynı modelden ve aynı kodla gelir; yalnız yükleme tekrarlanmaz.
+- Yalnız hızlandırıcıdır: başlatma hatası, çökme, zaman aşımı veya bozuk yanıtta çalışan kapatılır ve o ölçüm eski tek seferlik yolla yapılır. Art arda 3 hatada kalıcı yol motor yeniden başlayana kadar kapanır.
+- GPU belleği: çalışan her işten sonra ve difüzyon gerçekçilik geçişinden önce kapatılır. Bir FaceFusion geçişi bellek hatası verirse, kaliteyi (pixel boost) düşürmeden önce ArcFace çalışanı kapatılıp aynı ayarla yeniden denenir.
+- Kapatmak için: `RETAKE_PERSISTENT_ARCFACE=off`. `/health` → `identity_scorer` başlatma, ölçüm, hata sayısını ve ortalama ölçüm süresini gösterir.
+
+### İnce bölgeler: göz, kirpik, kaş, dudak, burun ucu, diş, göz ışığı ve göz akı (v24)
+
+Yüz genelindeki doku eşleştirmesi tek bir keskinlik oranı kullanır: yanakları keskinleştirirken gözler yumuşak kalabilir. Bir yüz değişiminin "yapay" görünmesinin en sık nedeni de tam bu küçük yerlerdir — kirpik ve göz kapağı çizgisi silinir, kaş kılı mumlaşır, dudak çizgileri kaybolur, gözbebeğindeki ışık yansıması (catchlight) söner, göz akı griye/sarıya kayar. Motor artık her adayda, tarayıcının 478 noktalı yüz ağıyla bu bölgeleri tek tek ölçer (`tools/fine_features.py`):
+
+- **Ölçüm:** Sağ/sol göz (kirpik ve kapak kıvrımı dahil), sağ/sol kaş, dudaklar, burun ucu ve ağız açıksa dişler için ince (kirpik, kıl, gözenek) ve orta (kapak kıvrımı, dudak çizgisi) frekans enerjisi orijinal fotoğrafla karşılaştırılır. Baş oranı ve çene uyarlaması özellikleri birkaç piksel kaydırabildiği için konum faz korelasyonuyla yeniden hizalanır.
+- **Yumuşamış bölge:** Sonucun *kendi* ayrıntısı sınırlı bir kazançla geri kazandırılır (en çok 2,2×). Hedef fotoğraftan doku kopyalanmaz; hedef kişinin özellikleri yeni yüze sızmaz.
+- **Aşırı keskin bölge** (hale, çınlama): fotoğrafın odak düzeyine yumuşatılır.
+- **Sönmüş göz ışığı:** Orijinal fotoğrafın iris içindeki speküler yansıması (sahnenin ışık kaynağı, kimlik değil) kaydırılmış irise geri konur. Kapalı gözlere dokunulmaz.
+- **Göz akı tonu:** Gri, sarı veya patlamış göz akı, aynı ışık altındaki fotoğrafın kendi göz akına doğru sınırlı bir Lab kaymasıyla çekilir; iris boyanmaz.
+- **Doğrulama:** İyileştirme yalnız ArcFace kimliği en çok 0,003 düşerse, bölgesel ayrıntı kapısı geçerse ve ince bölgeler ölçülebilir biçimde fotoğrafa yaklaşırsa (veya göz ışığı/göz akı düzeldiyse) kalır; aksi halde doğrulanmış sonuç aynen korunur. Maskenin dışındaki tek bir piksel bile değişmez.
+- Sonuç rozeti ne yapıldığını yazar ("İnce bölgeler iyileştirildi (fotoğrafa göre ayrıntı: sağ göz 0,61→0,97, …) · göz ışığı 1/2 gözde geri getirildi"). Yanıt başlıkları: `X-Retake-Fine-Features`, `X-Retake-Fine-Detail`, `X-Retake-Catchlights`, `X-Retake-Sclera`. Yüz ağı yoksa (`no-mesh`) adım atlanır.
+
 ### NVIDIA görsel jürisi (isteğe bağlı, Hafize üzerinden)
 
 Ultra araması kimlik için yerel ArcFace'i, doku için bölgesel ayrıntı ölçümünü kullanır; ama "hangisi gerçek fotoğraf gibi duruyor" sorusunu bir insan gözü daha iyi yanıtlar. Jüri bu boşluğu NVIDIA'nın ücretsiz barındırılan görsel modelleriyle doldurur:

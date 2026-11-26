@@ -6,7 +6,10 @@ import {
   describeSimilarity,
   parseSimilarity,
   similarityScore,
-  similarityVerdict
+  similarityVerdict,
+  describeUltraDepth,
+  describeFineFeatures,
+  parseFineDetail
 } from "../src/quality.js";
 
 test("engine scores are parsed defensively", () => {
@@ -96,4 +99,64 @@ test("adaptive result and diagnostic labels do not imply missing data or certain
   assert.match(describeFluxMetrics(-.01,.03,.2),/kimlik farkı -1,0/);
   assert.match(describeJudgeError("http-401"),/yetkilendirmesi/);
   assert.equal(describeJudgeError("token=secret"),"");
+});
+test("identity sufficiency badge only speaks when the engine measured it", async () => {
+  const {describeIdentitySufficiency} = await import("../src/quality.js");
+  assert.match(describeIdentitySufficiency("yes"), /en doğal/);
+  assert.equal(describeIdentitySufficiency("no"), "");
+  assert.equal(describeIdentitySufficiency("unknown"), "");
+  assert.equal(describeIdentitySufficiency(undefined), "");
+});
+test("self-test fidelity is shown only for a well-formed engine measurement", async () => {
+  const {describeSelfFidelity} = await import("../src/quality.js");
+  assert.equal(describeSelfFidelity("ssim:0.6929,deltaE:7.152"), "Öz-test (fotoğraf referanslarında da var): orijinale yapısal benzerlik 0,69 · renk farkı ΔE 7,2 (aynı fotoğrafın JPEG yeniden kaydı ≈ 0,97 · 1,3)");
+  assert.equal(describeSelfFidelity(""), "");
+  assert.equal(describeSelfFidelity("ssim:2,deltaE:1"), "");
+  assert.equal(describeSelfFidelity("ssim:0.9,deltaE:-1"), "");
+  assert.equal(describeSelfFidelity("<script>"), "");
+});
+test("learned schedule badge names its evidence", async () => {
+  const {describeUltraSchedule} = await import("../src/quality.js");
+  assert.match(describeUltraSchedule("learned-fidelity", 9), /öz-testlerde.*\(9 ölçüm\)/);
+  assert.match(describeUltraSchedule("learned-proxy", 12), /\(12 tur\)/);
+  assert.equal(describeUltraSchedule("learned-proxy", null).includes("("), false);
+  assert.equal(describeUltraSchedule("default", 5), "");
+  assert.equal(describeUltraSchedule(undefined), "");
+});
+
+test("describes what a deeper Ultra search did", () => {
+  assert.equal(describeUltraDepth("standard", "0/0", 1), "");
+  assert.equal(describeUltraDepth("", "", null), "");
+  assert.equal(
+    describeUltraDepth("deep", "1/3", 2),
+    "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı"
+  );
+  assert.equal(describeUltraDepth("max", "0/6", 1), "En yüksek kalite araması · 6 ince ayar denendi, en iyi ızgara ayarı korundu");
+  assert.equal(describeUltraDepth("deep", "garbage", "2"), "Derin arama");
+});
+
+test("fine feature headers are parsed defensively", () => {
+  assert.deepEqual(parseFineDetail("eye_r:0.610>0.970,lips:1.020>1.010"), [
+    { name: "eye_r", label: "sağ göz", before: 0.61, after: 0.97 },
+    { name: "lips", label: "dudak", before: 1.02, after: 1.01 }
+  ]);
+  for (const bad of ["", null, "ear:0.5>0.9", "eye_r:abc>1", "eye_r:0.5>99", "<script>"]) {
+    assert.deepEqual(parseFineDetail(bad), []);
+  }
+});
+
+test("describes the finest-feature finishing step", () => {
+  assert.equal(
+    describeFineFeatures("applied", "eye_r:0.610>0.970,eye_l:0.640>0.950,lips:1.020>1.010", "1/2"),
+    "İnce bölgeler iyileştirildi (fotoğrafa göre ayrıntı: sağ göz 0,61→0,97, sol göz 0,64→0,95) · göz ışığı 1/2 gözde geri getirildi"
+  );
+  assert.equal(describeFineFeatures("applied", "", "0/2"), "İnce bölgeler iyileştirildi");
+  assert.equal(
+    describeFineFeatures("applied", "", "0/2", "2/2"),
+    "İnce bölgeler iyileştirildi · göz akı tonu 2/2 gözde fotoğrafın ışığına uyarlandı"
+  );
+  assert.equal(describeFineFeatures("identity-loss"), "ince bölge iyileştirmesi kimliği korumadığı için uygulanmadı");
+  assert.equal(describeFineFeatures("unchanged"), "göz, kaş ve dudak ayrıntısı fotoğrafla uyumlu");
+  assert.equal(describeFineFeatures("no-mesh"), "");
+  assert.equal(describeFineFeatures(""), "");
 });

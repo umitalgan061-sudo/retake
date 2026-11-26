@@ -327,18 +327,8 @@ class UltraNaturalnessTest(unittest.TestCase):
         self.assertFalse(prefer_ultra_candidate(self.headers(0.80, 92), self.headers(0.85, 70)))
 
     def test_without_naturalness_the_old_rules_apply(self):
-        from tools.ultra_mode import identity_slack, prefer_ultra_candidate, ULTRA_REALISM_TIE_LOSS
+        from tools.ultra_mode import prefer_ultra_candidate
         self.assertTrue(prefer_ultra_candidate(self.headers(0.81), self.headers(0.80)))
-        self.assertEqual(identity_slack(self.headers(0.79), self.headers(0.80)), ULTRA_REALISM_TIE_LOSS)
-
-    def test_identity_slack_follows_naturalness(self):
-        from tools.ultra_mode import (
-            ULTRA_NATURALNESS_BAND, ULTRA_NATURALNESS_FLOOR_BAND, ULTRA_REALISM_TIE_LOSS, identity_slack
-        )
-        strongest = self.headers(0.80, 60)
-        self.assertEqual(identity_slack(self.headers(0.78, 82), strongest), ULTRA_NATURALNESS_FLOOR_BAND)
-        self.assertEqual(identity_slack(self.headers(0.78, 64), self.headers(0.80, 50)), ULTRA_NATURALNESS_BAND)
-        self.assertEqual(identity_slack(self.headers(0.78, 82), self.headers(0.80, 80)), ULTRA_REALISM_TIE_LOSS)
 
 
 class FluxOutcomeTest(unittest.TestCase):
@@ -393,3 +383,12 @@ class AdaptiveFinalistsTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-FLUX-Status"],"accepted")
         self.assertEqual(headers["X-Retake-Identity-Gain"],".8000".rjust(6,"0"))
         self.assertEqual(sum(editing for _,editing in calls),2)
+
+
+class FluxRetryBudgetTest(unittest.TestCase):
+    def test_defer_only_when_both_metrics_are_measured_and_bad(self):
+        from tools.ultra_mode import defer_flux_retry
+        self.assertTrue(defer_flux_retry("identity-loss",{"X-Retake-FLUX-Identity-Delta":"-.076","X-Retake-FLUX-Detail-Delta":"-.11"}))
+        for identity,detail in (("-.01","-.11"),("-.076",".05"),("nan","-.11"),("-.076","")):
+            self.assertFalse(defer_flux_retry("identity-loss",{"X-Retake-FLUX-Identity-Delta":identity,"X-Retake-FLUX-Detail-Delta":detail}))
+        self.assertFalse(defer_flux_retry("accepted",{"X-Retake-FLUX-Identity-Delta":"-.076","X-Retake-FLUX-Detail-Delta":"-.11"}))

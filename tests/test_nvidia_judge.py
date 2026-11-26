@@ -396,3 +396,28 @@ class JudgeReasonTest(unittest.TestCase):
         self.assertEqual(nj.judge_headers("error",2,error=error)["X-Retake-NVIDIA-Judge-Reason"],"PROJECT_AI_UPSTREAM_FAILED")
         error = nj.JudgeError("private message","http-502","secret\nheader")
         self.assertNotIn("X-Retake-NVIDIA-Judge-Reason",nj.judge_headers("error",2,error=error))
+
+class JuryDiversityTest(unittest.TestCase):
+    def test_duplicate_images_do_not_consume_finalist_slots(self):
+        headers = {"X-Retake-Similarity": ".8", "X-Retake-Detail-Gate": "passed"}
+        rows = [(b"a",headers,1),(b"a",headers,2),(b"b",headers,1),(b"c",headers,3)]
+        retained = []
+        for row in rows:
+            retained = srv.retain_judge_finalists(retained,row,.8)
+        self.assertEqual(len(retained),3)
+        pool = srv.judge_pool(b"a",headers,1,retained,.8)
+        self.assertEqual({row[0] for row in pool},{b"a",b"b",b"c"})
+    def test_distinct_same_round_upgrade_may_be_judged(self):
+        headers = {"X-Retake-Similarity": ".8", "X-Retake-Detail-Gate": "passed"}
+        pool = srv.judge_pool(b"original",headers,1,[(b"upgrade",headers,1)],.8)
+        self.assertEqual(len(pool),2)
+
+
+class NeckMetadataTest(unittest.TestCase):
+    def test_neck_scope_is_explicit_and_boolean(self):
+        base={"referenceWeights":[1]*25,"faceBounds":{"x":10,"y":10,"width":100,"height":100},"targetSize":{"width":784,"height":1024}}
+        self.assertFalse(srv._validate_metadata(base,25)["neckHarmonize"])
+        self.assertTrue(srv._validate_metadata({**base,"neckHarmonize":True},25)["neckHarmonize"])
+        for invalid in ("true",1,None):
+            with self.assertRaises(ValueError):
+                srv._validate_metadata({**base,"neckHarmonize":invalid},25)

@@ -717,6 +717,7 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
+    item.diagnostics?.['x-retake-identity-pixel-scope']==='visible-engine-crop' ? 'kimlik ölçümü: motorun görünür yüz kırpımı (tarayıcı ölçekleme öncesi)' : '',
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     describeAdaptiveQuality(item.similarity, item.before, item.identityAspiration, item.finalistAttempts),
     describeFluxStatus(item.fluxStatus),
@@ -2537,6 +2538,7 @@ async function runFaceFusionEdit(options = {}) {
         `scale=${finish.scale};sharpen=${finish.sharpen};grain=${finish.resultGrain}>${finish.sourceGrain};added=${finish.addedGrain}`;
     }
     if (scores.diagnostics) {
+      scores.diagnostics['browser-pixel-scope'] = 'Son PNG: tarayıcı ölçekleme/kompozisyon sonrası; ArcFace puanı motor kırpımına aittir.';
       if (delivered.portraitGeometry) scores.diagnostics['browser-portrait-geometry'] = describePortraitGeometry(delivered.portraitGeometry);
       if (delivered.sourcePortraitQuality) scores.diagnostics['browser-source-quality'] = describeSourcePortraitQuality(delivered.sourcePortraitQuality);
     }

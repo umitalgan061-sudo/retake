@@ -32,7 +32,7 @@ try:
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference
+    from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -59,7 +59,7 @@ except ImportError:
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
-    from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference
+    from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
@@ -129,7 +129,7 @@ APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 # Keep the transport model identifier stable for older web clients. Track
 # quality-pipeline changes separately for deployment and calibration checks.
-QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r8"
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r9"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -1755,8 +1755,28 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 continue
         rescue_candidates.extend(recovery_candidates)
+        visible_probes = {}
+
+        def score_visible(paths):
+            # Preserve positional correspondence even if an optional candidate
+            # cannot be decoded. Invalid image data is never a verified score.
+            prepared,indices=[],[]
+            values=[None]*len(paths)
+            for idx,path in enumerate(paths):
+                try:
+                    probe = prepare_visible_identity_probe(target_path,path,temp_dir)
+                    prepared.append(probe)
+                    indices.append(idx)
+                    visible_probes[path] = probe
+                except (ValueError,OSError,cv2.error):
+                    continue
+            if prepared:
+                for idx,value in zip(indices,score_identity(facefusion_dir,centroid,prepared)):
+                    values[idx]=value
+            return values
+
         probes = [path for _, path in rescue_candidates] + [*renders, target_path]
-        scores = score_identity(facefusion_dir, centroid, probes)
+        scores = score_visible(probes)
         # Filter unchanged interiors before selection, not only before blending.
         # This prevents a high ArcFace score on an almost original face winning.
         had_verified_identity = any(value is not None for value in scores[:len(rescue_candidates)])
@@ -1853,6 +1873,7 @@ def process_swap(
                 flush=True
             )
             shutil.copyfile(rescue_candidates[chosen_index][1], final_output)
+        verified_probe = visible_probes.get(rescue_candidates[chosen_index][1])
         result_similarity = best_score
         used_realism = False
         render_scores = scores[len(rescue_candidates):-1]
@@ -1878,13 +1899,24 @@ def process_swap(
         chosen = choose_realism_render(result_similarity, acceptable_renders, acceptable_scores)
         if chosen is not None:
             render_path, render_similarity = chosen
-            apply_realism_render(final_output, render_path)
-            print(
-                f"Fotoğraf gerçekçiliği uygulandı: kimlik benzerliği {result_similarity:.3f} → {render_similarity:.3f}.",
-                flush=True
-            )
-            result_similarity = render_similarity
-            used_realism = True
+            merged_render=temp_dir/"retake-verified-realism.png"
+            try:
+                shutil.copyfile(final_output,merged_render)
+                apply_realism_render(merged_render,render_path)
+                merged_score=score_visible([merged_render])[0]
+                if (merged_score is not None
+                        and merged_score>=finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
+                        and check_detail_gate(target_path,merged_render,metadata["faceBounds"])[0]
+                        and measure_final_face_edit(target_path,merged_render,metadata["faceBounds"])["meaningful"]):
+                    shutil.copyfile(merged_render,final_output)
+                    print(f"Fotoğraf gerçekçiliği doğrulandı: {result_similarity:.3f} → {merged_score:.3f}.",flush=True)
+                    result_similarity=merged_score
+                    verified_probe=visible_probes.get(merged_render)
+                    used_realism=True
+                else:
+                    print("[Retake] Birleştirilmiş gerçekçilik adayı doğrulanamadı; önceki sonuç korundu.",flush=True)
+            except (ValueError,OSError,RuntimeError,cv2.error) as error:
+                print(f"[Retake] Gerçekçilik birleştirmesi atlandı: {type(error).__name__}",flush=True)
         elif renders:
             listed = ", ".join("—" if value is None else f"{value:.3f}" for value in render_scores)
             print(
@@ -1942,7 +1974,7 @@ def process_swap(
                     if not measured:
                         print(f"[NIM] {model}: kalite kontrolünden geçmedi.", flush=True)
                         continue
-                    values = score_identity(facefusion_dir, centroid, [row[0] for row in measured])
+                    values = score_visible([row[0] for row in measured])
                     for (candidate, strength, detail, blend_mode, skin_gain), value in zip(measured, values):
                         if value is None:
                             continue
@@ -1967,6 +1999,7 @@ def process_swap(
             if nim_candidates:
                 result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = max(nim_candidates, key=lambda row: (row[0], row[1]))
                 shutil.copyfile(path, final_output)
+                verified_probe=visible_probes.get(path)
                 if nim_used == flux_model:
                     flux_status = "accepted"
                     flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
@@ -1996,7 +2029,7 @@ def process_swap(
                 if fine_report.get("status") == "applied":
                     gate_passed = check_detail_gate(target_path, fine_path, metadata["faceBounds"])[0]
                     if gate_passed:
-                        fine_score = score_identity(facefusion_dir, centroid, [fine_path])[0]
+                        fine_score = score_visible([fine_path])[0]
                 accepted_fine, fine_decision = accept_fine_refinement(
                     fine_report, fine_score, result_similarity, gate_passed
                 )
@@ -2005,6 +2038,7 @@ def process_swap(
                 if accepted_fine:
                     shutil.copyfile(fine_path, final_output)
                     result_similarity = fine_score
+                    verified_probe=visible_probes.get(fine_path)
                     fine_report["delivered_quality"] = fine_report.get("quality_after")
                 elif fine_report.get("quality_before") is not None:
                     fine_report["delivered_quality"] = fine_report.get("quality_before")
@@ -2044,10 +2078,11 @@ def process_swap(
                 flush=True
             )
             if rim_stats.get("corrected_pixels", 0) > 0 and centroid:
-                corrected_score = score_identity(facefusion_dir, centroid, [rim_candidate])[0]
+                corrected_score = score_visible([rim_candidate])[0]
                 if corrected_score is not None and corrected_score >= max(result_similarity - 0.004,finish_floor) and check_detail_gate(target_path, rim_candidate, metadata["faceBounds"])[0]:
                     shutil.copyfile(rim_candidate, final_output)
                     result_similarity = corrected_score
+                    verified_probe=visible_probes.get(rim_candidate)
                     rim_cleaned = True
                     print(
                         f"[Retake] Koyu yüz konturu temizlendi "
@@ -2069,11 +2104,12 @@ def process_swap(
             try:
                 neck_status, neck_pixels = neck_candidate_file(target_path, final_output, neck_path, metadata['faceBounds'], metadata.get('targetLandmarks'))
                 if neck_status == 'applied':
-                    neck_score = score_identity(facefusion_dir, centroid, [neck_path])[0]
+                    neck_score = score_visible([neck_path])[0]
                     if neck_score is not None and neck_score >= max(result_similarity - .001,finish_floor) and check_detail_gate(target_path, neck_path, metadata['faceBounds'])[0]:
                         neck_evidence = neck_delivery_evidence(target_path,final_output,neck_path,metadata["faceBounds"])
                         shutil.copyfile(neck_path, final_output)
                         result_similarity = neck_score
+                        verified_probe=visible_probes.get(neck_path)
                     else:
                         neck_status, neck_pixels = 'quality-rejected', 0
             except Exception as error:
@@ -2096,6 +2132,16 @@ def process_swap(
                     print(f"[Ultra] Sonuç yüz konturu kararma payı: %{measure * 100:.2f}.", flush=True)
         except (TypeError, ValueError, KeyError, OSError) as error:
             print(f"[Ultra] Yüz konturu ölçümü doğrulanamadı: {error}", flush=True)
+
+        # Match the exact visible bytes to the last scored and accepted
+        # candidate. Repeated inference on identical pixels adds latency
+        # without new evidence; any unexpected mutation fails closed.
+        try:
+            checkpoint_ok=verify_visible_checkpoint(target_path,final_output,verified_probe,temp_dir)
+        except (ValueError,OSError,cv2.error):
+            checkpoint_ok=False
+        if not checkpoint_ok or result_similarity < finish_floor - .0001:
+            raise IdentityVerificationError("Son teslim piksellerinin kimlik ölçümü doğrulanamadı.")
 
         # An unverifiable or measurably worse identity is a failed edit, not
         # a successful-looking photo. This relative guard avoids claiming a
@@ -2151,6 +2197,7 @@ def process_swap(
         result = encode_preblended_result(target_path, final_output)
         headers = {
             "X-Retake-Quality-Revision": QUALITY_PIPELINE_REVISION,
+            "X-Retake-Identity-Pixel-Scope": "visible-engine-crop",
             'X-Retake-Self-Fidelity': (f"ssim:{self_test['ssim']:.4f},deltaE:{self_test['delta_e']:.3f}" if self_test else ""),
             'X-Retake-Neck-Status': neck_status,
             'X-Retake-Neck-Pixels': str(neck_pixels),
@@ -3024,7 +3071,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
-            "X-Retake-Quality-Revision, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
+            "X-Retake-Quality-Revision, X-Retake-Identity-Pixel-Scope, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
@@ -3096,6 +3143,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
             "quality_revision": QUALITY_PIPELINE_REVISION,
+            "visible_identity_verification": True,
             "finishing_identity_guard": True,
             "flux_texture_alternatives": True,
             "distinct_extra_search": True,

@@ -36,7 +36,12 @@ if ($managedTask) {
     # it or publish a newer frontend while claiming that engine was updated.
     $taskRoots = @($managedTask.Actions | ForEach-Object { $_.WorkingDirectory } | Where-Object { $_ })
     if ($taskRoots.Count -ne 1 -or [System.IO.Path]::GetFullPath($taskRoots[0]).TrimEnd("\") -ne $Root.TrimEnd("\")) {
-        throw "Retake startup task points to a different worktree. Update the registered worktree or reinstall the task from this directory; no restart or publish was performed."
+        $registered = if ($taskRoots.Count) { ($taskRoots -join ", ") } else { "(none)" }
+        Write-Host ("Retake startup task runs another folder: {0}" -f $registered) -ForegroundColor Yellow
+        Write-Host ("This folder: {0}" -f $Root) -ForegroundColor Yellow
+        Write-Host "Move the task here (settings are kept), then run this update again:" -ForegroundColor Cyan
+        Write-Host "  .\tools\install_retake_autostart.ps1"
+        throw "Retake startup task points to a different worktree; no restart or publish was performed."
     }
 }
 if ($managedTask -and $managedTask.State -eq "Running") {

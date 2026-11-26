@@ -145,6 +145,11 @@ def identity_model_for(variation: int) -> str:
 REINFORCE_MODEL = "inswapper_128"
 APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
+# Keep the transport model identifier stable for older web clients. Track
+# quality-pipeline changes separately for deployment and calibration checks.
+# r8: HyperSwap 1b identity model (alternating with AlphaFace), naturalness
+# guard on regional transfers, detail-fused reinforcement — resets learned order.
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r8"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -2290,6 +2295,7 @@ def process_swap(
         headers = {
             "X-Retake-Naturalness": "" if natural.get("score") is None else f"{natural['score']:.1f}",
             "X-Retake-Naturalness-Checks": ",".join(f"{name}={value:.0f}" for name, value in natural.get("checks", {}).items()),
+            "X-Retake-Quality-Revision": QUALITY_PIPELINE_REVISION,
             'X-Retake-Self-Fidelity': (f"ssim:{self_test['ssim']:.4f},deltaE:{self_test['delta_e']:.3f}" if self_test else ""),
             'X-Retake-Neck-Status': neck_status,
             'X-Retake-Neck-Pixels': str(neck_pixels),
@@ -3170,7 +3176,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
-            "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
+            "X-Retake-Quality-Revision, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
@@ -3242,6 +3248,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "engine": "facefusion",
             "version": "3.9.2",
             "model": HYBRID_PROFILE_VERSION,
+            "quality_revision": QUALITY_PIPELINE_REVISION,
+            "finishing_identity_guard": True,
+            "flux_texture_alternatives": True,
+            "distinct_extra_search": True,
+            "jury_local_quality_guard": True,
             "lossless_preblended_transport": True,
             "final_face_edit_proof": True,
             "regional_detail_gate": True,
@@ -3503,7 +3514,7 @@ def main() -> int:
         IDENTITY_SCORER = PersistentIdentityScorer(facefusion_dir, popen_options=subprocess_options())
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
     server.calibration = CalibrationStore(  # type: ignore[attr-defined]
-        signature=schedule_signature(HYBRID_PROFILE_VERSION, ULTRA_VARIATIONS),
+        signature=schedule_signature(HYBRID_PROFILE_VERSION + ":" + QUALITY_PIPELINE_REVISION, ULTRA_VARIATIONS),
         enabled=os.environ.get("RETAKE_ULTRA_LEARNING", "").strip().lower() not in {"0", "off", "false", "no"},
     )
     if args.shading_strength is not None and not 0.0 <= args.shading_strength <= 1.2:

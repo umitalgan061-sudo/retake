@@ -150,9 +150,15 @@ def reference_evidence_file(original_path, edited_path, bounds, landmarks, real_
         edited=np.where(edited[:,:,3:4]>0,edited[:,:,:3],original)
     refs=[]
     if real_face:
-        for payload,ref in zip(real_face.get("images",()),real_face.get("references",())):
-            image=cv2.imdecode(np.frombuffer(payload,np.uint8),cv2.IMREAD_COLOR)
-            refs.append((image,ref.get("landmarks")))
+        # The dict is owned by this single process_swap invocation; reuse
+        # decoded reference crops for its bounded ties, never across jobs.
+        refs=real_face.get("_portrait_evidence_refs")
+        if refs is None:
+            refs=[]
+            for payload,ref in zip(real_face.get("images",()),real_face.get("references",())):
+                image=cv2.imdecode(np.frombuffer(payload,np.uint8),cv2.IMREAD_COLOR)
+                refs.append((image,ref.get("landmarks")))
+            real_face["_portrait_evidence_refs"]=refs
     return reference_evidence(original,edited,bounds,landmarks,refs)
 
 

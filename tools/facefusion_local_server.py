@@ -35,6 +35,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file
+    from .portrait_evidence import reference_evidence_file, format_evidence
     from .fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -61,6 +62,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file
+    from portrait_evidence import reference_evidence_file, format_evidence
     from fine_features import refine_fine_features_file, accept_fine_refinement, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -2071,6 +2073,10 @@ def process_swap(
         if not edit['meaningful']:
             raise NoOpSwapError('Son kompozisyonda anlamlı yüz içi değişim kalmadı; sonuç reddedildi.')
         region_edits = regional_edit_statistics(target_path, final_output, metadata["faceBounds"])
+        try:
+            portrait_evidence, reference_appearance = reference_evidence_file(target_path, final_output, metadata['faceBounds'], metadata.get('targetLandmarks'), real_face)
+        except (ValueError, TypeError, OSError, cv2.error):
+            portrait_evidence, reference_appearance = {}, None
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
         if not accepted:
             raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
@@ -2101,6 +2107,8 @@ def process_swap(
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
             "X-Retake-Detail-Regions": ",".join(f"{name}:{detail_regions[name]:.4f}" for name in ("eyes","nose","mouth","lower_face") if name in detail_regions),
             "X-Retake-Regional-Edit": ",".join(f"{name}:{value:.3f}" for name,value in region_edits.items()),
+            "X-Retake-Lower-Texture": format_evidence(portrait_evidence),
+            "X-Retake-Reference-Appearance": "" if reference_appearance is None else f"{reference_appearance:.4f}",
             "X-Retake-Rim-Cleanup": "on" if rim_cleaned else "off",
             "X-Retake-Fine-Features": fine_decision,
             # The delivered pixels' finest-feature naturalness (0..1), for Ultra ties.
@@ -2206,6 +2214,7 @@ def judge_pool(
         if (
             len(pool) >= JUDGE_MAX_CANDIDATES or any(item[0] == prior[0] for prior in pool)
             or not identity_acceptable(item[1], peak_identity)
+            or (is_identity_sufficient(best_headers) and not is_identity_sufficient(item[1]))
             or item[1].get("X-Retake-Detail-Gate") != "passed"
         ):
             continue
@@ -2920,7 +2929,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, "
@@ -2997,6 +3006,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "self_test_benchmark": True,
             "neck_harmonization": True,
             "regional_edit_evidence": True,
+            "lower_face_texture_evidence": True,
+            "reference_appearance_tiebreak": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),

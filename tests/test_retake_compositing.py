@@ -354,3 +354,56 @@ class OddTargetSizeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+@unittest.skipIf(cv2 is None, "OpenCV/NumPy yüklü değil")
+class SkinGrainTest(unittest.TestCase):
+    def grainy_photo(self):
+        rng = np.random.default_rng(3)
+        photo = np.full((HEIGHT, WIDTH, 3), (120, 150, 205), np.float32)
+        photo += rng.normal(0, 4.0, photo.shape)
+        return np.clip(photo, 0, 255).astype(np.uint8)
+
+    def test_a_smooth_swapped_face_gets_the_photos_grain(self):
+        photo = self.grainy_photo()
+        mask = np.zeros((HEIGHT, WIDTH), np.uint8)
+        cv2.ellipse(mask, (196, 260), (85, 110), 0, 0, 360, 1, -1)
+        smooth = cv2.GaussianBlur(photo, (0, 0), 2.0).astype(np.float32)
+        composite = np.where(mask[:, :, None] > 0, smooth, photo.astype(np.float32))
+        core = cv2.erode(mask, np.ones((15, 15), np.uint8)).astype(np.float32)
+        luma = lambda image: rc._luma(np.clip(image, 0, 255))
+        before = rc._flat_grain(luma(composite), core > 0.5)
+        out = rc.match_skin_grain(composite, photo.astype(np.float32), core, mask, 170.0)
+        after = rc._flat_grain(luma(out), core > 0.5)
+        reference = rc._flat_grain(luma(photo), core > 0.5)
+        self.assertLess(before, reference * 0.5)
+        self.assertGreater(after, reference * 0.75)
+        self.assertLess(after, reference * 1.3)
+        # Outside the face nothing changes; the result is deterministic.
+        self.assertTrue(np.array_equal(out[core == 0], composite[core == 0]))
+        self.assertTrue(np.array_equal(out, rc.match_skin_grain(composite, photo.astype(np.float32), core, mask, 170.0)))
+
+    def test_a_noisy_face_in_a_soft_photo_is_calmed(self):
+        rng = np.random.default_rng(4)
+        photo = np.full((HEIGHT, WIDTH, 3), (120, 150, 205), np.float32) + rng.normal(0, 3.0, (HEIGHT, WIDTH, 3))
+        mask = np.zeros((HEIGHT, WIDTH), np.uint8)
+        cv2.ellipse(mask, (196, 260), (85, 110), 0, 0, 360, 1, -1)
+        noisy = photo + rng.normal(0, 6.0, photo.shape)
+        composite = np.where(mask[:, :, None] > 0, noisy, photo).astype(np.float32)
+        core = cv2.erode(mask, np.ones((15, 15), np.uint8)).astype(np.float32)
+        luma = lambda image: rc._luma(np.clip(image, 0, 255))
+        before = rc._flat_grain(luma(composite), core > 0.5)
+        out = rc.match_skin_grain(composite, photo.astype(np.float32), core, mask, 170.0)
+        after = rc._flat_grain(luma(out), core > 0.5)
+        self.assertLess(after, before * 0.75)
+        # Bounded: at most SKIN_GRAIN_CALM_MAX of the finest band goes.
+        self.assertGreater(after, before * (1 - rc.SKIN_GRAIN_CALM_MAX) * 0.9)
+        self.assertTrue(np.array_equal(out[core == 0], composite[core == 0]))
+
+    def test_a_face_with_enough_grain_is_left_alone(self):
+        photo = self.grainy_photo().astype(np.float32)
+        mask = np.zeros((HEIGHT, WIDTH), np.uint8)
+        cv2.ellipse(mask, (196, 260), (85, 110), 0, 0, 360, 1, -1)
+        core = cv2.erode(mask, np.ones((15, 15), np.uint8)).astype(np.float32)
+        self.assertIs(rc.match_skin_grain(photo, photo, core, mask, 170.0), photo)

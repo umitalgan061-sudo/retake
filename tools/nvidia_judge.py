@@ -8,8 +8,10 @@ teeth. It never generates pixels and never overrides identity: every finalist is
 inside the local ArcFace tie band and passed the regional detail gate.
 
 Data rule: only downscaled face crops of finalists leave the computer, only when
-the user opted in for that job, only to an allow-listed Hafize address. Any
-error, timeout or split vote keeps the local winner.
+the user opted in for that job, only to an allow-listed Hafize address — or, when no Hafize token is set
+up but this computer has NVIDIA_API_KEY (process environment or a
+git-ignored .env file of the Retake folder), directly to NVIDIA's own API
+host. Any error, timeout or split vote keeps the local winner.
 
 v28: each finalist is sent as one "review sheet" — the face with its
 surroundings plus enlarged eye/brow and mouth close-ups of the same edit —
@@ -27,6 +29,7 @@ import re
 import ssl
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -67,6 +70,16 @@ class JudgeError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.upstream_code = upstream_code
+
+
+def _ssl_context() -> ssl.SSLContext:
+    # Corporate HTTPS inspection: trust the Windows certificate store when the
+    # truststore package is available (the realism installer adds it).
+    try:
+        import truststore
+        return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    except Exception:
+        return ssl.create_default_context()
 
 
 @dataclass(frozen=True)
@@ -111,11 +124,243 @@ def judge_config(env: Mapping[str, str] | None = None, token_path: Path | None =
     return JudgeConfig(url=url, token=token)
 
 
-def judge_status(env: Mapping[str, str] | None = None, token_path: Path | None = None) -> str:
+# --- Direct NVIDIA transport (no Hafize token, NVIDIA_API_KEY on this PC) ---
+
+DIRECT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+ROOT = Path(__file__).resolve().parents[1]
+# Git-ignored local secret files of the Retake folder, after the process
+# environment. RETAKE_ENV_FILE may name one more file explicitly.
+ENV_FILES = (".env", "functions/.env", ".dev.vars")
+# Hosted vision models of the free catalogue, asked in parallel; each casts
+# one vote (the local consensus rule still needs >= 2 votes and 2/3).
+DIRECT_MODELS = (
+    "nvidia/nemotron-3.5-super-vl-120b-a12b",
+    "mistralai/mistral-large-4-1t-a52b",
+    "z-ai/glm-5.3-flash",
+)
+DIRECT_MAX_RESPONSE_BYTES = 512 * 1024
+SHEET_PANEL_HEIGHT = 360
+DIRECT_SYSTEM = (
+    "You are a meticulous senior photo retoucher. You compare edited versions of one photo and judge only "
+    "photographic realism. You never identify people and never judge attractiveness. "
+    "Answer with one JSON object and nothing else."
+)
+
+
+@dataclass(frozen=True)
+class DirectConfig:
+    key: str
+    source: str
+
+
+def _key_from_file(path: Path) -> str | None:
     try:
-        return "configured" if judge_config(env, token_path) else "not-configured"
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    # PowerShell 5 writes UTF-16 by default (Out-File, >); editors write UTF-8.
+    encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"
+    try:
+        lines = raw.decode(encoding).splitlines()
+    except UnicodeDecodeError:
+        return None
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, sep, value = line.partition("=")
+        if not sep or name.strip() != "NVIDIA_API_KEY":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        else:
+            value = value.split(" #", 1)[0].strip()
+        if value:
+            return value
+    return None
+
+
+def direct_config(env: Mapping[str, str] | None = None, env_files: list[Path] | None = None) -> DirectConfig | None:
+    """NVIDIA_API_KEY from the environment or a .env file; the source names where, never the value.
+
+    With an explicit `env` (tests) no file is read unless `env_files` is given.
+    """
+    if env is None:
+        env = os.environ
+        if env_files is None:
+            env_files = [ROOT / name for name in ENV_FILES]
+    if env.get("RETAKE_NVIDIA_JUDGE", "").strip().lower() in {"0", "off", "false", "no"}:
+        return None
+    key = env.get("NVIDIA_API_KEY", "").strip()
+    if key:
+        return DirectConfig(key, "ortam değişkeni")
+    files = list(env_files or [])
+    explicit = env.get("RETAKE_ENV_FILE", "").strip()
+    if explicit:
+        files.insert(0, Path(explicit).expanduser())
+    for path in files:
+        key = _key_from_file(path)
+        if key:
+            return DirectConfig(key, path.name if path.parent == ROOT else str(path))
+    return None
+
+
+def _direct_prompt(count: int, sheet: bool, review: bool = False) -> str:
+    unit = "panel" if sheet else "image"
+    layout = (f"The picture is one row of {count} panels numbered in their top-left corner. " if sheet
+              else f"These are {count} images. ")
+    if review:
+        layout += (f"Each {unit} is a review sheet of one edit: the face with its surroundings on the left and "
+                   "enlarged close-ups of the same edit's eyes/brows and mouth on the right. ")
+    return (
+        layout + f"Each {unit} is a differently edited version of the same photo crop in which the face was "
+        "replaced. Decide which one looks most convincingly like an untouched camera photograph: check skin "
+        "texture (pores vs. plastic/waxy), blend edges at forehead, hairline, cheeks and jaw, skin tone versus "
+        "neck and ears, light and shadow direction, eyes (catchlights, symmetry), lips and teeth, blur or "
+        "over-sharpening, warping. If none is clearly more realistic, answer 0. "
+        f'Reply exactly as {{"best": <{unit} number 1-{count} or 0>, "reason": "<at most 12 words>"}}'
+    )
+
+
+def contact_sheet(crops: list[bytes]) -> bytes:
+    """One JPEG with the crops side by side, numbered 1..N (for one-image models)."""
+    import cv2
+    import numpy as np
+
+    panels = []
+    for number, data in enumerate(crops, 1):
+        image = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise ValueError("Jüri kırpımı okunamadı.")
+        scale = SHEET_PANEL_HEIGHT / image.shape[0]
+        image = cv2.resize(image, (max(1, round(image.shape[1] * scale)), SHEET_PANEL_HEIGHT),
+                           interpolation=cv2.INTER_AREA)
+        cv2.rectangle(image, (0, 0), (44, 40), (255, 255, 255), -1)
+        cv2.putText(image, str(number), (10, 32), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 2, cv2.LINE_AA)
+        panels += [image, np.full((SHEET_PANEL_HEIGHT, 8, 3), 255, np.uint8)]
+    ok, encoded = cv2.imencode(".jpg", np.hstack(panels[:-1]), [cv2.IMWRITE_JPEG_QUALITY, 88])
+    if not ok:
+        raise ValueError("Karşılaştırma görseli kodlanamadı.")
+    return encoded.tobytes()
+
+
+def _post_direct(payload: dict[str, Any], key: str, opener=None, timeout: float = TIMEOUT_SECONDS) -> dict[str, Any]:
+    request = urllib.request.Request(DIRECT_URL, data=json.dumps(payload).encode("utf-8"), method="POST", headers={
+        "Content-Type": "application/json", "Accept": "application/json",
+        "Authorization": "Bearer " + key, "User-Agent": "Retake-Engine/nvidia-judge",
+    })
+    try:
+        with (opener or _default_opener()).open(request, timeout=timeout) as response:
+            raw = response.read(DIRECT_MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as error:
+        raise JudgeError(f"NVIDIA HTTP {error.code}") from None
+    except (urllib.error.URLError, OSError, TimeoutError) as error:
+        raise JudgeError("NVIDIA'ya ulaşılamadı: " + type(error).__name__) from None
+    if len(raw) > DIRECT_MAX_RESPONSE_BYTES:
+        raise JudgeError("NVIDIA yanıtı çok büyük.")
+    try:
+        return json.loads(raw)
     except ValueError:
-        return "invalid"
+        raise JudgeError("NVIDIA JSON döndürmedi.") from None
+
+
+def parse_best(text: Any, count: int) -> int | None:
+    """0..count from {"best": n}; 0 means no clear winner. None if unreadable."""
+    if not isinstance(text, str):
+        return None
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
+    for match in re.finditer(r"\{[^{}]*\}", text):
+        try:
+            data = json.loads(match.group(0))
+        except ValueError:
+            continue
+        best = data.get("best") if isinstance(data, dict) else None
+        if isinstance(best, str) and best.strip().isdigit():
+            best = int(best.strip())
+        if type(best) is int and 0 <= best <= count:
+            return best
+    return None
+
+
+def _model_vote(model: str, crops: list[bytes], order: list[int], key: str, poster, review: bool = False) -> int | None:
+    """One model's vote as an index into `crops` (-1 = no clear winner)."""
+    shown = [crops[index] for index in order]
+    for sheet in (False, True):
+        images = [contact_sheet(shown)] if sheet else shown
+        content: list[dict[str, Any]] = [{"type": "text", "text": _direct_prompt(len(shown), sheet, review)}]
+        content += [{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}}
+                    for data in images]
+        payload = {"model": model, "messages": [{"role": "system", "content": DIRECT_SYSTEM},
+                                                 {"role": "user", "content": content}],
+                   "temperature": 0.1, "top_p": 0.7, "max_tokens": 1024, "stream": False}
+        try:
+            response = poster(payload, key)
+        except JudgeError as error:
+            # A model that takes one image per request gets a contact sheet.
+            if not sheet and re.search(r"HTTP (400|413|422)\b", str(error)):
+                continue
+            return None
+        try:
+            text = response["choices"][0]["message"].get("content")
+        except (KeyError, IndexError, TypeError, AttributeError):
+            return None
+        best = parse_best(text, len(shown))
+        if best is None:
+            return None
+        return -1 if best == 0 else order[best - 1]
+    return None
+
+
+def request_direct(config: DirectConfig, crops: list[bytes], poster=None,
+                   models: tuple[str, ...] = DIRECT_MODELS, layout: str = LAYOUT_FACE) -> dict[str, Any]:
+    """Same verdict shape as the Hafize jury: decision/winner/votes/agreement/models.
+
+    Each model sees the finalists in a different order (rotation), which
+    cancels the position bias these models have.
+    """
+    if not MIN_CANDIDATES <= len(crops) <= MAX_CANDIDATES:
+        raise ValueError("Jüriye 2–4 aday gönderilebilir.")
+    poster = poster or _post_direct
+    count = len(crops)
+    orders = [[(start + offset) % count for offset in range(count)] for start in range(len(models))]
+    with ThreadPoolExecutor(max_workers=len(models)) as pool:
+        votes = list(pool.map(lambda job: _model_vote(job[0], crops, job[1], config.key, poster,
+                                                      layout == LAYOUT_SHEET),
+                              zip(models, orders)))
+    answered = [(model, vote) for model, vote in zip(models, votes) if vote is not None]
+    if not answered:
+        raise JudgeError("NVIDIA görsel modellerinden okunabilir oy gelmedi.")
+    tally: dict[int, int] = {}
+    for _, vote in answered:
+        if vote >= 0:
+            tally[vote] = tally.get(vote, 0) + 1
+    winner, top = max(tally.items(), key=lambda item: (item[1], -item[0])) if tally else (None, 0)
+    agreement = top / len(answered)
+    decision = "winner" if winner is not None and agreement > 0.5 else "abstain"
+    return {"decision": decision, "winner": winner if decision == "winner" else None,
+            "votes": len(answered), "agreement": round(agreement, 3),
+            "models": [model for model, _ in answered]}
+
+
+def judge_transport(env: Mapping[str, str] | None = None, token_path: Path | None = None,
+                    env_files: list[Path] | None = None) -> tuple[str, str]:
+    """("hafize" | "direct" | "none" | "invalid", detail without secrets)."""
+    try:
+        if judge_config(env, token_path):
+            return "hafize", "Hafize jetonu"
+    except ValueError as error:
+        return "invalid", str(error)
+    direct = direct_config(env, env_files)
+    if direct:
+        return "direct", direct.source
+    return "none", ""
+
+
+def judge_status(env: Mapping[str, str] | None = None, token_path: Path | None = None,
+                 env_files: list[Path] | None = None) -> str:
+    transport = judge_transport(env, token_path, env_files)[0]
+    return {"hafize": "configured", "direct": "configured", "invalid": "invalid"}.get(transport, "not-configured")
 
 
 def _decode_rgb(png_bytes: bytes):
@@ -255,7 +500,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _default_opener():
-    return urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=ssl.create_default_context()))
+    return urllib.request.build_opener(_NoRedirect, urllib.request.HTTPSHandler(context=_ssl_context()))
 
 
 def _normalize_verdict(payload: Any, count: int) -> dict[str, Any]:
@@ -344,37 +589,62 @@ def judged_winner(verdict: Mapping[str, Any], count: int) -> int | None:
     return clean["winner"]
 
 
-def build_judge(env: Mapping[str, str] | None = None, token_path: Path | None = None) -> Callable[[list[bytes]], dict[str, Any]] | None:
-    """Per-job factory: a token added while the engine runs is picked up next job."""
+def build_judge(env: Mapping[str, str] | None = None, token_path: Path | None = None,
+                env_files: list[Path] | None = None) -> Callable[[list[bytes]], dict[str, Any]] | None:
+    """Per-job factory: a token or key added while the engine runs is picked up next job.
+
+    The Hafize gateway (key stays in Hafize) is preferred; without a Hafize
+    token, NVIDIA_API_KEY of this computer reaches NVIDIA's API directly.
+    """
     try:
         config = judge_config(env, token_path)
     except ValueError as error:
         print(f"[NVIDIA jüri] Devre dışı: {error}", flush=True)
         return None
-    if config is None:
+    if config is not None:
+        def judge(images: list[bytes], bounds: Mapping[str, Any], landmarks: Any = None, opener=None) -> dict[str, Any]:
+            """Review sheets first; an older Hafize that refuses the layout gets
+            the plain face crops (one retry, nothing else changes)."""
+            sheets = _review_sheets(images, bounds, landmarks)
+            if sheets is not None:
+                try:
+                    return {**request_judgement(config, sheets, opener=opener, layout=LAYOUT_SHEET), "layout": LAYOUT_SHEET}
+                except JudgeError as error:
+                    if not (error.code == "http-400" and error.upstream_code == "PROJECT_AI_INVALID_INPUT"):
+                        raise
+                    print("[NVIDIA jüri] Hafize inceleme paftasını henüz tanımıyor; yüz kırpımları gönderiliyor.", flush=True)
+            crops = [face_crop_jpeg(image, bounds) for image in images]
+            return {**request_judgement(config, crops, opener=opener), "layout": LAYOUT_FACE}
+
+        judge.accepts_images = True  # type: ignore[attr-defined]
+        return judge
+
+    direct = direct_config(env, env_files)
+    if direct is None:
         return None
 
-    def judge(images: list[bytes], bounds: Mapping[str, Any], landmarks: Any = None, opener=None) -> dict[str, Any]:
-        """Review sheets first; an older Hafize that refuses the layout gets
-        the plain face crops (one retry, nothing else changes)."""
-        sheets: list[bytes] | None
-        try:
-            sheets = [review_sheet_jpeg(image, bounds, landmarks) for image in images]
-        except ValueError as error:
-            print(f"[NVIDIA jüri] İnceleme paftası hazırlanamadı ({error}); yüz kırpımları gönderiliyor.", flush=True)
-            sheets = None
-        if sheets is not None and sum(map(len, sheets)) <= 2_000_000:
+    def direct_judge(images: list[bytes], bounds: Mapping[str, Any], landmarks: Any = None, poster=None) -> dict[str, Any]:
+        """The same review sheets, straight to NVIDIA's hosted vision models."""
+        sheets = _review_sheets(images, bounds, landmarks)
+        if sheets is not None:
             try:
-                return {**request_judgement(config, sheets, opener=opener, layout=LAYOUT_SHEET), "layout": LAYOUT_SHEET}
+                return {**request_direct(direct, sheets, poster, layout=LAYOUT_SHEET), "layout": LAYOUT_SHEET}
             except JudgeError as error:
-                if not (error.code == "http-400" and error.upstream_code == "PROJECT_AI_INVALID_INPUT"):
-                    raise
-                print("[NVIDIA jüri] Hafize inceleme paftasını henüz tanımıyor; yüz kırpımları gönderiliyor.", flush=True)
+                print(f"[NVIDIA jüri] İnceleme paftasıyla oy alınamadı ({error}); yüz kırpımları gönderiliyor.", flush=True)
         crops = [face_crop_jpeg(image, bounds) for image in images]
-        return {**request_judgement(config, crops, opener=opener), "layout": LAYOUT_FACE}
+        return {**request_direct(direct, crops, poster), "layout": LAYOUT_FACE}
 
-    judge.accepts_images = True  # type: ignore[attr-defined]
-    return judge
+    direct_judge.accepts_images = True  # type: ignore[attr-defined]
+    return direct_judge
+
+
+def _review_sheets(images: list[bytes], bounds: Mapping[str, Any], landmarks: Any) -> list[bytes] | None:
+    try:
+        sheets = [review_sheet_jpeg(image, bounds, landmarks) for image in images]
+    except ValueError as error:
+        print(f"[NVIDIA jüri] İnceleme paftası hazırlanamadı ({error}); yüz kırpımları gönderiliyor.", flush=True)
+        return None
+    return sheets if sum(map(len, sheets)) <= 2_000_000 else None
 
 
 def judge_headers(outcome: str, finalists: int = 0, verdict: Mapping[str, Any] | None = None, error=None) -> dict[str, str]:
@@ -402,3 +672,37 @@ def judge_headers(outcome: str, finalists: int = 0, verdict: Mapping[str, Any] |
         if verdict.get("layout") in (LAYOUT_FACE, LAYOUT_SHEET):
             headers["X-Retake-NVIDIA-Judge-Layout"] = verdict["layout"]
     return headers
+
+
+def _selftest() -> int:
+    """Checks the configured jury with synthetic, non-personal crops."""
+    import cv2
+    import numpy as np
+
+    transport, detail = judge_transport()
+    if transport in ("none", "invalid"):
+        print("NVIDIA jürisi yapılandırılmamış" + (f": {detail}" if detail else "")
+              + ". NVIDIA_API_KEY (ortam değişkeni ya da Retake klasöründeki .env) veya Hafize jetonu gerekli.")
+        return 2
+    print(f"NVIDIA jürisi yolu: {'Hafize' if transport == 'hafize' else 'doğrudan NVIDIA'} ({detail}).")
+    rng = np.random.default_rng(1)
+    yy, xx = np.mgrid[0:384, 0:320].astype(np.float32)
+    scene = np.stack([90 + xx * 0.1, 110 + yy * 0.05, 140 + xx * 0.05], 2)
+    cv2.ellipse(scene, (160, 190), (90, 120), 0, 0, 360, (130, 160, 210), -1)
+    scene = np.clip(scene + rng.normal(0, 3, scene.shape), 0, 255).astype(np.uint8)
+    pasted = scene.copy()
+    cv2.ellipse(pasted, (160, 190), (70, 95), 0, 0, 360, (90, 170, 240), -1)
+    images = [cv2.imencode(".png", image)[1].tobytes() for image in (scene, pasted)]
+    bounds = {"x": 70, "y": 70, "width": 180, "height": 240}
+    try:
+        verdict = build_judge()(images, bounds)
+    except Exception as error:
+        print(f"NVIDIA jüri testi başarısız: {error}")
+        return 1
+    print(f"NVIDIA jürisi çalışıyor ({verdict.get('layout')}): karar={verdict['decision']} kazanan={verdict['winner']} "
+          f"oy={verdict['votes']} uzlaşı={verdict['agreement']} modeller={verdict['models']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_selftest())

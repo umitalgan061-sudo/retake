@@ -24,14 +24,14 @@ try:
     from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
-        judge_status, judged_winner
+        judge_status, judge_transport, judged_winner
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from .identity_scorer import PersistentIdentityScorer
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
-    from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
+    from .ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
@@ -51,14 +51,14 @@ except ImportError:
     from ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
-        judge_status, judged_winner
+        judge_status, judge_transport, judged_winner
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
     from identity_scorer import PersistentIdentityScorer
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
-    from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
+    from ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
@@ -116,10 +116,31 @@ DEFAULT_SHADING_STRENGTH = 0.35
 # one (per 100 px of face width), and always this much.
 BORDER_STEP_RATIO = 2.0
 BORDER_STEP_FLOOR = 0.6
+# A blend may be at most this many naturalness points (0-100) behind the most
+# natural one to compete on identity.
+NATURALNESS_TOLERANCE = 8.0
 # Bumped when the cached ArcFace report gains fields (centroid for scoring).
 IDENTITY_REPORT_VERSION = "centroid-v2"
 PAIRING_HEADER = "X-Retake-Token"
-IDENTITY_MODEL = "alphaface_256"
+# Identity swappers, measured on real photos with the same 25 references
+# (CPU, full pipeline, HyperSwap 1b vs AlphaFace, ArcFace / naturalness):
+#   512 px  garden 0.798/81 vs 0.795/78   night 0.845/84 vs 0.839/82
+#   1024 px garden 0.801/79 vs 0.801/73   night 0.847/86 vs 0.840/86
+#           studio 0.878/80 vs 0.865/87 (HyperSwap warmer, smoother skin)
+# Neither wins every photo, so Ultra alternates them across variants (even:
+# HyperSwap 1b, odd: AlphaFace) and the identity/naturalness rules decide per
+# photo; a failed HyperSwap pass
+# (e.g. the model cannot be downloaded) falls back to AlphaFace.
+# Licenses (FaceFusion catalogue): hyperswap_1b_256 ResearchRAIL,
+# alphaface_256 Non-Commercial — personal use only, see docs.
+IDENTITY_MODEL = "hyperswap_1b_256"
+IDENTITY_FALLBACK_MODEL = "alphaface_256"
+IDENTITY_MODELS = (IDENTITY_MODEL, IDENTITY_FALLBACK_MODEL)
+
+
+def identity_model_for(variation: int) -> str:
+    """Even variants (incl. the default 0) use HyperSwap 1b, odd ones AlphaFace."""
+    return IDENTITY_MODELS[int(variation) % len(IDENTITY_MODELS)]
 # A second identity pass over the first one's result. On the user's photos
 # ArcFace similarity to the references went 0.803 (AlphaFace) -> 0.832
 # (AlphaFace + InSwapper); AlphaFace twice gave 0.816. It is kept only when
@@ -129,7 +150,10 @@ APPEARANCE_MODEL = "uniface_256"
 HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 # Keep the transport model identifier stable for older web clients. Track
 # quality-pipeline changes separately for deployment and calibration checks.
-QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r9"
+# r10: on top of main's r9 — HyperSwap 1b identity model (alternating with
+# AlphaFace), naturalness guard on regional transfers, detail-fused
+# reinforcement; resets the learned variant order of the AlphaFace era.
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r10"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -896,23 +920,87 @@ def person_beard(profile_path: Path, target_landmarks: list[list[float]] | None)
     return {"points": target_landmarks, "offset": offset.tolist()}
 
 
+def _face_box(bounds: dict[str, float]) -> tuple[float, float, float, float]:
+    return (float(bounds["x"]), float(bounds["y"]), float(bounds["width"]), float(bounds["height"]))
+
+
+def photo_naturalness_score(composite, target, face_bounds: dict[str, float]) -> float | None:
+    """0..100 photographic naturalness of a composite (tools/photo_naturalness.py).
+
+    Measured where the edit really changed the photo (near the face), not on
+    the matte: a wide matte would put the border check on untouched pixels.
+    """
+    try:
+        try:
+            from .photo_naturalness import naturalness
+        except ImportError:
+            from photo_naturalness import naturalness
+        return naturalness(composite, target, region=_face_box(face_bounds))["score"]
+    except Exception as error:  # informative only
+        print(f"Gerçeklik ölçümü atlandı: {error}", flush=True)
+        return None
+
+
+def naturalness_keeps(candidate: float | None, current: float | None, slack: float = 1.5) -> bool:
+    """A candidate does not look more edited than the current one (unknown: no)."""
+    if candidate is None or current is None:
+        return False
+    return candidate >= current - slack
+
+
+def final_naturalness(target_path: Path, final_path: Path, face_bounds: dict[str, float]) -> dict[str, Any]:
+    """Naturalness report of the finished crop (RGBA matte over the target)."""
+    import cv2
+    import numpy as np
+    try:
+        try:
+            from .photo_naturalness import naturalness
+        except ImportError:
+            from photo_naturalness import naturalness
+        target = cv2.imread(str(target_path), cv2.IMREAD_COLOR)
+        final = cv2.imread(str(final_path), cv2.IMREAD_UNCHANGED)
+        if target is None or final is None or final.shape[:2] != target.shape[:2]:
+            return {"score": None, "checks": {}}
+        if final.ndim == 3 and final.shape[2] == 4:
+            alpha = final[:, :, 3]
+            weight = alpha[:, :, None].astype(np.float32) / 255.0
+            color = np.clip(final[:, :, :3] * weight + target * (1.0 - weight), 0, 255).astype(np.uint8)
+            return naturalness(color, target, region=_face_box(face_bounds))
+        return naturalness(final[:, :, :3], target, region=_face_box(face_bounds))
+    except Exception as error:  # informative only
+        print(f"Gerçeklik ölçümü atlandı: {error}", flush=True)
+        return {"score": None, "checks": {}}
+
+
 def choose_composite(
     facefusion_dir: Path,
     centroid: list[float] | None,
-    blends: list[tuple[Path, float]],
+    blends: list[tuple],
     labels: list[str] | None = None
 ) -> Path:
-    """The blend closest to the person among those with an invisible border.
+    """The blend closest to the person among those that look like a photograph.
 
-    `blends` is (path, border step) with the most seamless one first; it is
-    the fallback when nothing can be measured.
+    `blends` is (path, border step[, naturalness 0..100]) with the most
+    seamless one first; it is the fallback when nothing can be measured.
+    Two guards come before identity: an invisible border, and a photographic
+    naturalness within NATURALNESS_TOLERANCE of the most natural blend, so a
+    blend never wins on ArcFace while clearly looking pasted.
     """
     if len(blends) == 1 or not centroid:
         return blends[0][0]
+    naturalness = {item[0]: (item[2] if len(item) > 2 else None) for item in blends}
+    blends = [(item[0], item[1]) for item in blends]
     limit = max(BORDER_STEP_FLOOR, BORDER_STEP_RATIO * min(border for _, border in blends))
     names = {path: (labels[index] if labels and index < len(labels) else str(index + 1))
              for index, (path, _) in enumerate(blends)}
     allowed = [(path, border) for path, border in blends if border <= limit]
+    measured = [naturalness[path] for path, _ in allowed if isinstance(naturalness[path], (int, float))]
+    if measured:
+        floor = max(measured) - NATURALNESS_TOLERANCE
+        natural = [(path, border) for path, border in allowed
+                   if not isinstance(naturalness[path], (int, float)) or naturalness[path] >= floor]
+        if natural:
+            allowed = natural
     scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
     scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
     if not scored:
@@ -941,7 +1029,9 @@ def choose_composite(
     elif matched_lower:
         value, path, border = max(matched_lower, key=lambda item: item[0])
     listed = ", ".join(
-        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f})"
+        f"{names[item[0]]}: {'—' if score is None else f'{score:.3f}'} (kenar {item[1]:.2f}"
+        + (f", gerçeklik {naturalness[item[0]]:.0f}" if isinstance(naturalness[item[0]], (int, float)) else "")
+        + ")"
         for item, score in zip(allowed, scores)
     )
     print(f"Kimlik öncelikli birleştirme: {listed}; seçilen benzerlik {value:.3f}.", flush=True)
@@ -1264,6 +1354,7 @@ def blend_lower_face(
         )
     if report is not None:
         report["border"] = matte_border_step(composite, target, alpha, face_width)
+        report["naturalness"] = photo_naturalness_score(composite, target, face_bounds)
     rgba = cv2.cvtColor(composite, cv2.COLOR_BGR2BGRA)
     rgba[:, :, 3] = alpha
 
@@ -1389,8 +1480,9 @@ def process_swap(
             f"görünüm profili={len(reference_paths)} hizalanmış fotoğraf.",
             flush=True
         )
+        identity_model = identity_model_for(variation)
         print(
-            f"1/2 kimlik geçişi: {IDENTITY_MODEL}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
+            f"1/2 kimlik geçişi: {identity_model}; 2/2 görünüm geçişi: {APPEARANCE_MODEL}; "
             f"hedef=1 fotoğraf; tercih edilen pixel boost={preferred_boost}.",
             flush=True
         )
@@ -1420,7 +1512,15 @@ def process_swap(
                 pass_cache.put(key, output.read_bytes(), used)
             return used
 
-        identity_boost = cached_pass(1, weighted_identity_paths, identity_output, IDENTITY_MODEL)
+        try:
+            identity_boost = cached_pass(1, weighted_identity_paths, identity_output, identity_model)
+        except Exception as error:
+            if identity_model == IDENTITY_FALLBACK_MODEL:
+                raise
+            # A missing/undownloadable HyperSwap model must not cost the job.
+            print(f"{identity_model} kullanılamadı ({error}); {IDENTITY_FALLBACK_MODEL} ile devam ediliyor.", flush=True)
+            identity_model = IDENTITY_FALLBACK_MODEL
+            identity_boost = cached_pass(1, weighted_identity_paths, identity_output, identity_model)
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
         centroid = identity_report.get("centroid")
@@ -1435,7 +1535,7 @@ def process_swap(
                 source_subset = [reference_paths[i] for i in pool]
                 alternative_output = temp_dir / f"retake-identity-{name}.png"
                 try:
-                    boost = cached_pass(1, source_subset, alternative_output, IDENTITY_MODEL)
+                    boost = cached_pass(1, source_subset, alternative_output, identity_model)
                     candidates.append((name, alternative_output, source_subset, boost))
                 except Exception as error:
                     # The original full-25 pass remains usable if an optional
@@ -1482,6 +1582,29 @@ def process_swap(
                             f"Kimlik pekiştirme reddedildi: 128 px sonuç ayrıntı kaybettiriyor ({reinforce_guard}; oranlar={reinforce_ratios}).",
                             flush=True
                         )
+                        # Keep the identity, not the blur: 128 px coarse
+                        # structure + the 256 px pass's own fine detail,
+                        # verified like the plain reinforcement.
+                        fused_output = temp_dir / "retake-identity-reinforced-detail.png"
+                        sigma = fuse_reinforcement_detail(identity_source, reinforced_output, fused_output, metadata["faceBounds"])
+                        fused_score = score_identity(facefusion_dir, centroid, [fused_output])[0]
+                        fused_wanted, _ = reinforcement_wanted(
+                            single, fused_score, sufficiency_from_level(identity_report.get("photo_level_similarity"))
+                        )
+                        fused_keeps, fused_guard, fused_ratios = check_reinforcement_detail(
+                            identity_source, fused_output, metadata["faceBounds"]
+                        )
+                        print(
+                            f"Kimlik pekiştirme ayrıntı birleşimi (sigma {sigma:.1f}): benzerlik "
+                            + ("—" if fused_score is None else f"{fused_score:.3f}")
+                            + f", ayrıntı {fused_guard} {fused_ratios}.",
+                            flush=True
+                        )
+                        if fused_wanted and fused_keeps:
+                            identity_source = fused_output
+                            reinforced = True
+                            double = fused_score
+                            reinforce_guard = "detail-fused"
                 else:
                     # Already at the person's photo level, or no real gain.
                     reinforce_guard = why
@@ -1569,7 +1692,7 @@ def process_swap(
                     continue
                 if used:
                     transplanted[path] = transplant.get("mode", "full") if transplant else "full"
-                blends.append((path, float(report.get("border", 0.0))))
+                blends.append((path, float(report.get("border", 0.0)), report.get("naturalness")))
                 label = f"ton {harmonize:g}"
                 if path in transplanted:
                     label += " + referans alt yüz" if transplanted[path] == "lower" else " + tam referans yüzü"
@@ -1592,7 +1715,7 @@ def process_swap(
                 if not measure_final_face_edit(target_path, path, metadata["faceBounds"])["meaningful"]:
                     continue
                 texture_blends.add(path)
-                blends.append((path, float(report.get("border", 0.0))))
+                blends.append((path, float(report.get("border", 0.0)), report.get("naturalness")))
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         if not blends:
             raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
@@ -1738,23 +1861,10 @@ def process_swap(
         if identity_fallback is not None:
             rescue_candidates.append(("identity-only", identity_fallback))
         rescue_candidates.extend(identity_regional_candidates)
-        # Add bounded recovery alternatives only when the base composite
-        # destroys native detail. Score each actual new image independently.
-        recovery_candidates = []
-        for label, candidate_path in rescue_candidates:
-            if label not in ("head-fit", "identity-only"):
-                continue
-            try:
-                if check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
-                    continue
-                for strength in (.35, .60):
-                    repaired = temp_dir / f"photo-balance-{label}-{int(strength * 100)}.png"
-                    balance_with_original(target_path, candidate_path, repaired, strength)
-                    if check_detail_gate(target_path, repaired, metadata["faceBounds"])[0]:
-                        recovery_candidates.append(("photo-balance", repaired))
-            except (ValueError, OSError, cv2.error):
-                continue
-        rescue_candidates.extend(recovery_candidates)
+        # No "photo-balance" recovery: mixing 35-60% of the original face
+        # back into a swapped one ghosts the old brows/expression over the new
+        # face and fades a new beard (measured on real photos), which works
+        # against identity. The detail gate below ranks instead.
         visible_probes = {}
 
         def score_visible(paths):
@@ -1782,14 +1892,26 @@ def process_swap(
         had_verified_identity = any(value is not None for value in scores[:len(rescue_candidates)])
         if not had_verified_identity:
             raise IdentityVerificationError('Üretilen yüz ArcFace ile doğrulanamadı.')
+        gate_failures: dict[int, str] = {}
         for idx, (_, candidate_path) in enumerate(rescue_candidates):
             try:
                 if not measure_final_face_edit(target_path, candidate_path, metadata['faceBounds'])['meaningful']:
                     scores[idx] = None
-                elif not check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[0]:
-                    scores[idx] = None
+                    continue
+                accepted_detail, detail_reason = check_detail_gate(target_path, candidate_path, metadata["faceBounds"])[:2]
+                if not accepted_detail:
+                    gate_failures[idx] = detail_reason
             except (ValueError, OSError, cv2.error):
                 scores[idx] = None
+        # Regional detail is a preference, not a reason to deliver nothing:
+        # blurred / over-sharpened candidates are dropped when a verified one
+        # passes the gate; otherwise the best identity is kept and labelled.
+        if any(scores[idx] is not None and idx not in gate_failures for idx in range(len(rescue_candidates))):
+            for idx in gate_failures:
+                scores[idx] = None
+        elif gate_failures:
+            print("Bölgesel ayrıntı kontrolünü geçen aday yok ("
+                  + ", ".join(sorted(set(gate_failures.values()))) + "); en iyi kimlik adayı uyarıyla korunuyor.", flush=True)
         before_similarity = scores[-1]
         candidate_scores = scores[:len(rescue_candidates)]
         final_score = candidate_scores[0]
@@ -1809,6 +1931,14 @@ def process_swap(
             except (ValueError, OSError, cv2.error):
                 detail = None
             candidate_detail_scores.append(detail)
+        # Photographic naturalness of each verified candidate: a regional
+        # reference transfer may not win an identity tie by looking edited.
+        candidate_naturalness: list[float | None] = []
+        for index, (_, candidate_path) in enumerate(rescue_candidates):
+            value = None
+            if candidate_scores[index] is not None:
+                value = final_naturalness(target_path, candidate_path, metadata["faceBounds"]).get("score")
+            candidate_naturalness.append(value)
         # Preserve the actual highest verified score, not a chain of near-ties.
         previous = chosen_index
         # Existing full/lower reference composites already carry real texture.
@@ -1819,19 +1949,23 @@ def process_swap(
             for label, _ in rescue_candidates
         ]
         chosen_index = select_verified_regional_candidate(
-            candidate_scores, candidate_detail_scores, effective_labels, chosen_index
+            candidate_scores, candidate_detail_scores, effective_labels, chosen_index, candidate_naturalness
         )
         # At the person's photo level, keep the candidate with the most real
         # photographic detail rather than the highest cosine.
         chosen_index = select_sufficient_realism(
             candidate_scores, candidate_detail_scores, chosen_index,
-            sufficiency_from_level(identity_report.get("photo_level_similarity"))
+            sufficiency_from_level(identity_report.get("photo_level_similarity")),
+            naturalness_scores=candidate_naturalness
         )
         # Compare regional appearance for only a few already measured close
         # candidates. No extra GPU passes and no preference for missing data.
         if real_face:
             level = sufficiency_from_level(identity_report.get('photo_level_similarity'))
             indices = regional_tie_indices(candidate_scores,candidate_detail_scores,chosen_index,level)
+            # Reference evidence may not bring back a transfer that looks edited.
+            indices = [index for index in indices if index == chosen_index or naturalness_keeps(
+                candidate_naturalness[index], candidate_naturalness[chosen_index])]
             if len(indices)>1:
                 evidence_scores = {}
                 for index in indices:
@@ -1841,6 +1975,10 @@ def process_swap(
                     except (ValueError,TypeError,OSError,cv2.error):
                         continue
                 chosen_index = choose_regional_evidence(candidate_scores,candidate_detail_scores,chosen_index,evidence_scores,level)
+        print("Aday gerçekliği: " + ", ".join(
+            f"{label}={'—' if score is None else f'{score:.3f}'}/{'—' if nat is None else f'{nat:.0f}'}"
+            for (label, _), score, nat in zip(rescue_candidates, candidate_scores, candidate_naturalness)
+        ) + " (ArcFace/gerçeklik).", flush=True)
         if candidate_scores[chosen_index] is not None:
             best_score = candidate_scores[chosen_index]
         selected_identity = rescue_candidates[chosen_index][0]
@@ -2182,8 +2320,17 @@ def process_swap(
         except (ValueError, TypeError, OSError, cv2.error):
             portrait_evidence, reference_appearance = {}, None
         accepted, reason, detail_score, detail_regions = check_detail_gate(target_path, final_output, metadata["faceBounds"])
+        detail_gate_status = reason if accepted else "failed:" + reason
         if not accepted:
-            raise NoOpSwapError("Son fotoğraf bölgesel ayrıntı kontrolünü geçemedi: " + reason)
+            print("Uyarı: son fotoğraf bölgesel ayrıntı kontrolünü geçemedi (" + reason
+                  + "); daha iyi bir aday yoktu, sonuç etiketlenerek teslim ediliyor.", flush=True)
+        natural = final_naturalness(target_path, final_output, metadata["faceBounds"])
+        if natural.get("score") is not None:
+            print(
+                f"Gerçeklik puanı: {natural['score']:.0f}/100 ("
+                + ", ".join(f"{name} {value:.0f}" for name, value in natural["checks"].items()) + ").",
+                flush=True
+            )
         # Self-test: the target is one of the person's own references, so the
         # original face is ground truth. Measured, never used for selection.
         self_test: dict[str, float] = {}
@@ -2196,6 +2343,8 @@ def process_swap(
                 print(f"[Öz-test] Orijinale yapısal benzerlik {self_test['ssim']:.3f}, renk farkı ΔE {self_test['delta_e']:.2f}.", flush=True)
         result = encode_preblended_result(target_path, final_output)
         headers = {
+            "X-Retake-Naturalness": "" if natural.get("score") is None else f"{natural['score']:.1f}",
+            "X-Retake-Naturalness-Checks": ",".join(f"{name}={value:.0f}" for name, value in natural.get("checks", {}).items()),
             "X-Retake-Quality-Revision": QUALITY_PIPELINE_REVISION,
             "X-Retake-Identity-Pixel-Scope": "visible-engine-crop",
             'X-Retake-Self-Fidelity': (f"ssim:{self_test['ssim']:.4f},deltaE:{self_test['delta_e']:.3f}" if self_test else ""),
@@ -2210,7 +2359,7 @@ def process_swap(
             'X-Retake-FLUX-Blend-Mode': flux_blend_mode,
             'X-Retake-FLUX-Skin-Gain': '' if flux_skin_gain is None else f'{flux_skin_gain:.4f}',
             'X-Retake-Photo-Balance': 'on' if selected_identity == 'photo-balance' else 'off',
-            'X-Retake-Detail-Gate': 'passed',
+            'X-Retake-Detail-Gate': detail_gate_status,
             'X-Retake-Face-Changed-Ratio': f"{edit['changed_ratio']:.5f}",
             'X-Retake-Face-Mean-Delta': f"{edit['mean_delta']:.4f}",
             "X-Retake-Detail-Score": "" if detail_score is None else f"{detail_score:.4f}",
@@ -2255,6 +2404,7 @@ def process_swap(
             "X-Retake-Reinforce-Guard": reinforce_guard,
             "X-Retake-Identity-Selection": selected_identity,
             "X-Retake-Identity-Source": identity_pool,
+            "X-Retake-Identity-Model": identity_model,
             "X-Retake-Texture-Source": chosen_texture,
             "X-Retake-Compositing": "preblended",
             "X-Retake-Alpha-Transport": "binary",
@@ -2287,6 +2437,11 @@ def _swap_error(error: Exception) -> tuple[int, str]:
 
 # Near-ties kept in memory for the optional jury (PNG bytes, bounded).
 JUDGE_FINALIST_BUFFER = 6
+
+
+# Detail-gate outcomes that count as verified photographic detail; a soft
+# original has nothing to compare and is not a failure (see ultra_quality).
+DETAIL_GATE_OK = ("passed", "soft-original")
 
 
 def diverse_finalists(rows, limit):
@@ -2322,7 +2477,7 @@ def retain_judge_finalists(
     kept = [
         item for item in [*finalists, candidate]
         if identity_acceptable(item[1], peak_identity)
-        and item[1].get("X-Retake-Detail-Gate") == "passed"
+        and item[1].get("X-Retake-Detail-Gate") in DETAIL_GATE_OK
     ]
     def rank(item):
         sufficient = is_identity_sufficient(item[1])
@@ -2688,7 +2843,7 @@ def run_ultra_search(
                 finally:
                     timing["extra"].append(clock() - step_started)
                 candidate_score = score_from_headers(candidate_headers)
-                if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
+                if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
                     continue
                 # Only original grid results teach the next job the grid order.
                 # An editor/refinement score does not describe its base variant.
@@ -2875,7 +3030,8 @@ def run_job(job: dict[str, Any], server: Any, parsed: tuple) -> None:
         job["stage_started"] = None
 
     def judging() -> None:
-        job["stage"] = "Ultra · NVIDIA görsel jürisi finalistleri karşılaştırıyor (Hafize)"
+        route = "doğrudan NVIDIA" if judge_transport()[0] == "direct" else "Hafize"
+        job["stage"] = f"Ultra · NVIDIA görsel jürisi finalistleri karşılaştırıyor ({route})"
         job["step"] = job["total"] - 1
         job["stage_started"] = None
 
@@ -3075,6 +3231,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
+            "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, X-Retake-FLUX-Skin-Gain, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
@@ -3160,9 +3317,11 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "reference_appearance_tiebreak": True,
             "adaptive_finalists": True,
             "nvidia_judge": getattr(self.server, "judge_status", judge_status)(),
+            "nvidia_judge_transport": judge_transport()[0],
             "nim_editors_configured": list(configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}),
             "managed_flux2": (configured_editors() if getattr(self.server, "dynamic_editors", False) else getattr(self.server, 'nim_editors', {}) or {}).get("retake-local/flux2-klein-4b") == 0,
             "identity_model": IDENTITY_MODEL,
+            "identity_models": list(IDENTITY_MODELS),
             "identity_verifier": IDENTITY_VERIFIER_MODEL,
             "identity_verification": "local-arcface-medoid-screen",
             "appearance_model": APPEARANCE_MODEL,
@@ -3436,6 +3595,17 @@ def main() -> int:
         flush=True
     )
     print("Servis yalnızca loopback adresini dinler.", flush=True)
+    transport, detail = judge_transport()
+    if transport == "direct":
+        print(f"NVIDIA görsel jürisi hazır: doğrudan NVIDIA (anahtar kaynağı: {detail}). "
+              "Yalnız arayüzde kutu işaretli işlerde, kimliği eşit finalistlerin yüz kırpımları gönderilir.", flush=True)
+    elif transport == "hafize":
+        print("NVIDIA görsel jürisi hazır: Hafize üzerinden.", flush=True)
+    elif transport == "invalid":
+        print(f"NVIDIA görsel jürisi devre dışı: {detail}", flush=True)
+    else:
+        print("NVIDIA görsel jürisi kapalı: NVIDIA_API_KEY (ortam ya da Retake klasöründeki .env) "
+              "veya Hafize jetonu yok.", flush=True)
     if server.pairing_token:  # type: ignore[attr-defined]
         print(
             "Telefon/PWA eşleştirmesi AÇIK. Bu bilgisayara bir HTTPS tünel aç "

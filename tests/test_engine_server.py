@@ -292,6 +292,15 @@ class CachedPipelineTest(unittest.TestCase):
 
     def setUp(self):
         from tools.retake_cache import IdentityReportCache, PassCache
+        # These fakes paint flat shapes; the naturalness guard is tested on its
+        # own (CompositeChoiceTest), here the identity logic is.
+        guard = patch.object(srv, "NATURALNESS_TOLERANCE", 1e9)
+        guard.start()
+        self.addCleanup(guard.stop)
+        from tools import retake_compositing
+        grain = patch.object(retake_compositing, "match_skin_grain", lambda composite, *args, **kwargs: composite)
+        grain.start()
+        self.addCleanup(grain.stop)
         self.temp = tempfile.TemporaryDirectory()
         self.caches = {"identity": IdentityReportCache(Path(self.temp.name) / "identity"), "passes": PassCache()}
         self.arcface_calls = 0
@@ -316,6 +325,7 @@ class CachedPipelineTest(unittest.TestCase):
     render_scores: list = []
 
     reinforce_scores = (0.70, 0.60)
+    fused_score = 0.77
 
     blend_scores = None
     candidate_scores = None
@@ -335,6 +345,8 @@ class CachedPipelineTest(unittest.TestCase):
             # The optional post-render cleanup uses a second score probe.
             # Keep the preceding full-rescue probe available to existing tests.
             return [self.candidate_scores.get(names[0], 0.74) if self.candidate_scores else 0.74]
+        if names == ["retake-identity-reinforced-detail.png"]:
+            return [self.fused_score]
         if "retake-identity-reinforced.png" in names:
             self.reinforce_probes = names
             return list(self.reinforce_scores)
@@ -436,19 +448,21 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertLess(float(headers["X-Retake-Similarity"]), .99)
         self.assertEqual(headers["X-Retake-Detail-Gate"], "passed")
 
-    def test_all_blurry_candidates_fail_without_success_image(self):
-        with self.assertRaisesRegex(srv.NoOpSwapError, "bölgesel fotoğraf"):
-            self.run_swap(0, [], detail_gate=lambda *_a: (False, "eyes-blur", .5, {"eyes": .4}))
+    def test_when_no_candidate_passes_the_detail_gate_the_best_identity_is_labelled_not_lost(self):
+        headers = self.run_swap(0, [], detail_gate=lambda *_a: (False, "eyes-blur", .5, {"eyes": .4}))
+        self.assertIsNotNone(srv.score_from_headers(headers))
+        self.assertEqual(headers["X-Retake-Detail-Gate"], "failed:eyes-blur")
+        self.assertEqual(headers["X-Retake-Photo-Balance"], "off")
 
     def test_regenerating_reuses_arcface_and_both_gpu_passes(self):
         first, second = [], []
         self.run_swap(0, first)
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual([model for model, _ in self.facefusion_calls], ["alphaface_256", "inswapper_128", "uniface_256"])
+        self.assertEqual([model for model, _ in self.facefusion_calls], ["hyperswap_1b_256", "inswapper_128", "uniface_256"])
         # Stage 5 (photographic realism) is not installed here and is skipped.
         self.assertEqual(first, [(0, False), (1, False), (2, False), (3, False), (4, False), (6, False)])
 
-        self.run_swap(1, second)  # same swapper weight, different head fit
+        self.run_swap(2, second)  # same identity model and swapper weight, different head fit
         self.assertEqual(self.arcface_calls, 1, "ArcFace report reused")
         self.assertEqual(len(self.facefusion_calls), 3, "all FaceFusion passes reused")
         self.assertEqual(second, [(0, True), (1, True), (2, True), (3, True), (4, False), (6, False)])
@@ -460,6 +474,22 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(self.reinforce_probes, ["retake-identity-alpha.png", "retake-identity-reinforced.png"])
         self.reinforce_scores = (0.70, 0.66)
         self.assertEqual(self.run_swap(2, [])["X-Retake-Identity-Reinforced"], "off")
+
+    def test_a_blurring_reinforcement_keeps_its_identity_through_detail_fusion(self):
+        self.reinforce_scores = (0.70, 0.78)
+
+        def guard(single, candidate, bounds):
+            if candidate.name == "retake-identity-reinforced.png":
+                return False, "eyes-blur", {"eyes": 0.80}
+            return True, "passed", {"eyes": 0.95}
+
+        with patch.object(srv, "check_reinforcement_detail", guard):
+            headers = self.run_swap(0, [])
+            self.assertEqual(headers["X-Retake-Identity-Reinforced"], "on")
+            self.assertEqual(headers["X-Retake-Reinforce-Guard"], "detail-fused")
+            self.fused_score = 0.703          # no real identity gain: not used
+            headers = self.run_swap(2, [])
+            self.assertEqual(headers["X-Retake-Identity-Reinforced"], "off")
 
     def test_softer_variant_is_not_reinforced(self):
         headers = self.run_swap(3, [])
@@ -591,8 +621,8 @@ class CachedPipelineTest(unittest.TestCase):
         }
         headers = self.run_swap(0, [])
         self.assertEqual(headers["X-Retake-Identity-Source"], "consensus")
-        self.assertIn(("alphaface_256", 25), self.source_sizes)
-        self.assertIn(("alphaface_256", 12), self.source_sizes)
+        self.assertIn(("hyperswap_1b_256", 25), self.source_sizes)
+        self.assertIn(("hyperswap_1b_256", 12), self.source_sizes)
         self.assertEqual(headers["X-Retake-Compositing"], "preblended")
 
     def test_real_reference_texture_can_win_over_a_blurred_mean(self):
@@ -752,8 +782,29 @@ class CachedPipelineTest(unittest.TestCase):
         self.run_swap(0, [])
         self.run_swap(3, [])
         self.assertEqual(self.arcface_calls, 1)
-        self.assertEqual([model for model, _ in self.facefusion_calls].count("alphaface_256"), 2)
+        models = [model for model, _ in self.facefusion_calls]
+        # Variant 0 uses HyperSwap 1b, the odd variant 3 AlphaFace (srv.identity_model_for).
+        self.assertEqual((models.count("hyperswap_1b_256"), models.count("alphaface_256")), (1, 1))
         self.assertEqual(self.facefusion_calls[-1][1], 0.95)
+
+    def test_ultra_variants_alternate_identity_models(self):
+        self.assertEqual([srv.identity_model_for(v) for v in range(4)],
+                         ["hyperswap_1b_256", "alphaface_256", "hyperswap_1b_256", "alphaface_256"])
+        headers = self.run_swap(1, [])
+        self.assertEqual(headers["X-Retake-Identity-Model"], "alphaface_256")
+
+    def test_a_failed_hyperswap_pass_falls_back_to_alphaface(self):
+        real = self.fake_facefusion
+
+        def flaky(facefusion_dir, target, sources, output, model, *rest):
+            if model == "hyperswap_1b_256":
+                raise RuntimeError("model download failed")
+            return real(facefusion_dir, target, sources, output, model, *rest)
+
+        with patch.object(self, "fake_facefusion", flaky):
+            headers = self.run_swap(0, [])
+        self.assertEqual(headers["X-Retake-Identity-Model"], "alphaface_256")
+        self.assertIsNotNone(srv.score_from_headers(headers))
 
 
 class RemainingTimeTest(unittest.TestCase):
@@ -936,6 +987,23 @@ class CompositeChoiceTest(unittest.TestCase):
             self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends), Path("seamless.png"))
         self.assertEqual(srv.choose_composite(Path("ff"), None, self.blends), Path("seamless.png"))
         self.assertEqual(srv.choose_composite(Path("ff"), [1.0], self.blends[:1]), Path("seamless.png"))
+
+    def test_a_blend_that_looks_pasted_cannot_win_on_identity(self):
+        calls = []
+
+        def fake_score(facefusion_dir, centroid, probes):
+            calls.append([path.name for path in probes])
+            return {"natural.png": 0.74, "pasted.png": 0.80, "close.png": 0.76}.__getitem__ and [
+                {"natural.png": 0.74, "pasted.png": 0.80, "close.png": 0.76}[path.name] for path in probes]
+
+        blends = [(Path("natural.png"), 0.3, 90.0), (Path("pasted.png"), 0.3, 70.0), (Path("close.png"), 0.3, 85.0)]
+        with patch.object(srv, "score_identity", fake_score):
+            chosen = srv.choose_composite(Path("ff"), [1.0, 0.0], blends)
+        self.assertEqual(chosen, Path("close.png"), "pasted one is 20 points less natural: never scored")
+        self.assertEqual(calls, [["natural.png", "close.png"]])
+        # Without naturalness measurements the old identity choice stands.
+        with patch.object(srv, "score_identity", fake_score):
+            self.assertEqual(srv.choose_composite(Path("ff"), [1.0], [(p, b) for p, b, _ in blends]), Path("pasted.png"))
 
     def test_engine_and_compositor_agree_on_the_default_shading(self):
         from tools import retake_compositing as rc

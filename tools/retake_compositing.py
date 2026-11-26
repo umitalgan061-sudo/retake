@@ -233,6 +233,74 @@ def match_photo_texture(composite: np.ndarray, target: np.ndarray, core: np.ndar
     return composite
 
 
+SKIN_GRAIN_SIGMA = 0.7       # the finest band: sensor noise and pores
+SKIN_GRAIN_TOLERANCE = 0.9   # act when the face has under 90% of the grain it should
+SKIN_GRAIN_MAX = 4.0         # never add more than this mean |noise| (8-bit levels)
+SKIN_GRAIN_EXCESS = 1.2      # act when the face has over 120% of the grain it should
+SKIN_GRAIN_CALM_MAX = 0.45   # remove at most this share of the finest band (keeps pores)
+
+
+def _flat_grain(luma: np.ndarray, region: np.ndarray) -> float | None:
+    """Mean |finest residual| on the flat pixels of a region (see photo_naturalness)."""
+    if int(region.sum()) < 80:
+        return None
+    luma = luma.astype(np.float32)
+    residual = luma - cv2.GaussianBlur(luma, (0, 0), SKIN_GRAIN_SIGMA)
+    broad = cv2.GaussianBlur(luma, (0, 0), 2.0)
+    gradient = np.hypot(cv2.Sobel(broad, cv2.CV_32F, 1, 0), cv2.Sobel(broad, cv2.CV_32F, 0, 1))
+    flat = region & (gradient < np.percentile(gradient[region], 50))
+    if int(flat.sum()) < 40:
+        return None
+    return float(np.mean(np.abs(residual[flat])))
+
+
+def match_skin_grain(
+    composite: np.ndarray,
+    target: np.ndarray,
+    core: np.ndarray,
+    mask: np.ndarray,
+    face_width: float,
+    seed: int = 1234
+) -> np.ndarray:
+    """Give the face the photo's own skin grain level.
+
+    Swap models render skin without sensor noise; next to the photo's grainy
+    neck and hair it reads as airbrushed. Measured on flat skin, the photo's
+    face-to-surround grain relation is restored by adding fine luminance
+    noise (deterministic) where the face is fully swapped, never more than
+    SKIN_GRAIN_MAX. The opposite also happens: a soft phone portrait (smooth
+    face, crisper surroundings) gets a face rendered with crisp, noisy skin
+    from the references. Then part of the finest band (at most
+    SKIN_GRAIN_CALM_MAX) is calmed, so the face sits in the photo's softness.
+    """
+    inside = core > 0.5
+    wide = max(5, int(face_width * 0.22)) | 1
+    around = (cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (wide, wide))) > 0) & (mask == 0)
+    luma_t = _luma(target).astype(np.float32)
+    luma_c = _luma(np.clip(composite, 0, 255)).astype(np.float32)
+    values = [_flat_grain(luma_t, inside), _flat_grain(luma_t, around),
+              _flat_grain(luma_c, inside), _flat_grain(luma_c, around)]
+    if any(value is None for value in values):
+        return composite
+    face_t, around_t, face_c, around_c = values
+    wanted = around_c * (face_t + 0.05) / (around_t + 0.05)
+    if face_c > wanted * SKIN_GRAIN_EXCESS:
+        # Removing a share k of the finest band lowers its level by about k.
+        share = min(SKIN_GRAIN_CALM_MAX, 1.0 - wanted / face_c)
+        residual = luma_c - cv2.GaussianBlur(luma_c, (0, 0), SKIN_GRAIN_SIGMA)
+        return composite - (residual * share * core)[:, :, None]
+    if face_c >= wanted * SKIN_GRAIN_TOLERANCE:
+        return composite
+    rng = np.random.default_rng(seed)
+    noise = rng.standard_normal(luma_c.shape).astype(np.float32)
+    noise = noise - cv2.GaussianBlur(noise, (0, 0), SKIN_GRAIN_SIGMA)
+    unit = float(np.mean(np.abs(noise)))
+    # Independent noise adds in quadrature (as RMS ≈ 1.25 × mean |x|).
+    missing = math.sqrt(max(0.0, wanted * wanted - face_c * face_c))
+    amount = min(SKIN_GRAIN_MAX, missing) / max(unit, 1e-6)
+    return composite + (noise * amount * core)[:, :, None]
+
+
 # Shading transfer: the photo's own light-and-shadow relief (nose highlight,
 # cheek and eye-socket shadows, forehead sheen) is what makes a face read as
 # 3D. Swap models re-render the face with flat, averaged lighting, so that
@@ -345,6 +413,7 @@ def seamless_face_composite(
     # Stay clear of the face's outer rim, where the photo's own head edge sits.
     composite = transfer_shading(composite, target_f, core, face_width, shading_strength)
     composite = match_photo_texture(composite, target_f, core)
+    composite = match_skin_grain(composite, target_f, core, mask, face_width)
 
     # The coarse bands spread a little beyond the changed region; the matte
     # must cover that support, then fade where composite and target agree.

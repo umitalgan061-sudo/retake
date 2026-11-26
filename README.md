@@ -4,7 +4,7 @@ Retake, galeriden seçilen bir hedef fotoğraftaki yüzü aynı kişiye ait refe
 
 ## Mevcut web motoru
 
-- Yerel FaceFusion `3.9.2` ile iki geçişli hibrit motor: kimlik için `alphaface_256`, görünüm/sakal için `uniface_256`.
+- Yerel FaceFusion `3.9.2` ile iki geçişli hibrit motor: kimlik için `hyperswap_1b_256` (Ultra'da `alphaface_256` ile dönüşümlü, kullanılamazsa yedek), görünüm/sakal için `uniface_256`.
 - 25 fotoğrafın tamamı ortak göz koordinatına hizalanır ve netlik, açı, yüz alanı, ışık ölçütlerine göre ağırlık alır. 478 noktalı FaceLandmarker başarısız olursa BlazeFace'in altı anahtar noktalı yedek hizalaması kullanılır; yedek hizalamaların ağırlığı en fazla 2'dir.
 - Pixel boost ilk denemesi `1024x1024`; CUDA bellek hatasında `768x768`, ardından `512x512` denenir. Bu yüz crop inference ölçeğidir, native çıktı büyütme değildir.
 - FaceFusion ArcFace ONNX ile 25 crop için medoid/medyan tutarlılık taraması yapılır; güçlü aykırı referansların kimlik oyu 1'e düşürülür.
@@ -139,6 +139,12 @@ Kurulum (bir kez, PowerShell, Retake klasöründe):
 ```
 
 Betik rastgele bir proje jetonu üretir, ham jetonu yalnız `%USERPROFILE%\.retake\hafize-project-token` dosyasında (yalnız senin kullanıcın okuyabilir) saklar ve Hafize için `{"retake":"<sha256>"}` özetini verir. Bu özeti Render'da `hafize-free` servisine `HAFIZE_PROJECT_AI_TOKEN_HASHES` ortam değişkeni olarak ekle ve servisi yeniden dağıt (Cloud Run kullanılırsa aynı değer Hafize deposunda GitHub Secret olur). Motor varsayılan olarak `https://hafize-free.onrender.com` adresine bağlanır; Render Free uykudan uyanırken ilk istek bir dakika kadar sürebilir. Sonra Retake motorunu yeniden başlat; `/health` içinde `nvidia_judge: "configured"` görünür. Kontrol: `.\tools\setup_hafize_judge.ps1 -Check`. Kapatmak: `-Disable` veya `RETAKE_NVIDIA_JUDGE=off`. Farklı Hafize adresi için `RETAKE_HAFIZE_JUDGE_URL` yalnız `hafize-ua.web.app`, `hafize-free.onrender.com` veya `*.run.app` üzerindeki aynı yolu kabul eder.
+
+**Hafize jetonu olmadan, doğrudan NVIDIA:** Bilgisayarda `NVIDIA_API_KEY` varsa (ortam değişkeni ya da Retake klasöründeki git dışı `.env`, `functions\.env`, `.dev.vars`; başka dosya için `RETAKE_ENV_FILE`) jüri Hafize'yi beklemeden NVIDIA'nın `integrate.api.nvidia.com` ucuna doğrudan gider. `nemotron-3.5-super-vl`, `mistral-large-4` ve `glm-5.3-flash` paralel sorulur; her model adayları farklı sırada görür ve bir oy verir; tek görsel kabul eden modele numaralı tek karşılaştırma görseli gider. Aynı ⅔ uzlaşı kuralı yerelde uygulanır. Hafize jetonu varsa önce o kullanılır. Anahtarın değeri hiçbir yere yazılmaz; açılış logu yalnız kaynağını söyler. Test (kişisel fotoğraf göndermez, sentetik görsel):
+
+```powershell
+conda run --no-capture-output -n facefusion python tools\nvidia_judge.py
+```
 
 Neden NVIDIA'nın görüntü düzenleme modelleri (FLUX.2 Klein, FLUX.1 Kontext, Qwen-Image-Edit) yüzü üretmek için kullanılmıyor: ücretsiz barındırılan uçlar düzenleme modunda yalnız NVIDIA'nın önceden tanımlı örnek görsellerini kabul ediyor, kişisel fotoğraf yüklenemiyor; yerel NIM konteynerleri ise 48–80 GB VRAM istiyor (bkz. [docs/NVIDIA_SETUP.md](docs/NVIDIA_SETUP.md)).
 
@@ -300,7 +306,7 @@ Eski adres https://retake06.web.app (`hafize-23465` projesi, `.firebaserc` için
 
 Yüz profili ve çıkarım yerel bilgisayarda yapılır; kırpılmış profil görselleri ve ağırlıklar tarayıcının IndexedDB alanında cihazda saklanır. Ancak 25 orijinal referans JPEG'i public GitHub deposunda ve Firebase Hosting alanında bulunabilir; eski Git commit'lerinde de kalmış olabilir. Yerel profil önbelleği bu kaynak fotoğrafları public olmaktan çıkarmaz. Bunları gizli kabul etme. Fotoğrafları public depodan çıkarmak ve Git geçmişini temizlemek ayrı bir güvenlik çalışmasıdır; yalnızca yeni commit'ten silmek geçmiş kopyaları ortadan kaldırmaz.
 
-Model ağırlıklarının lisansları farklıdır. FaceFusion kataloğunda `alphaface_256` Non-Commercial, `uniface_256` ise Unknown olarak listelenir. Ticari kullanım hakkı olduğunu varsayma; iki modelin ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
+Model ağırlıklarının lisansları farklıdır. FaceFusion kataloğunda `hyperswap_1b_256` ResearchRAIL, `alphaface_256` Non-Commercial, `uniface_256` ise Unknown olarak listelenir. Ticari kullanım hakkı olduğunu varsayma; iki modelin ve yardımcı ağırlıkların lisansını ayrı ayrı doğrula.
 
 ## Testler
 

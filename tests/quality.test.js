@@ -53,6 +53,20 @@ test("the result is compared with the person's own photos", async () => {
   assert.equal(describeSimilarity(0.80, null), "Kimlik benzerliği 80,0 · Çok güçlü");
 });
 
+test("the engine's naturalness score reads as a short verdict", async () => {
+  const { describeNaturalness, parseNaturalness } = await import("../src/quality.js");
+  const good = parseNaturalness("88.4", "border=89,tone=100,grain=86,detail=83,light=97");
+  assert.equal(good.score, 88.4);
+  assert.equal(good.checks.tone, 100);
+  assert.equal(describeNaturalness(good), "Gerçeklik 88/100");
+  const weak = parseNaturalness("61", "border=28,tone=73,grain=100,detail=90,light=73");
+  assert.equal(describeNaturalness(weak), "Gerçeklik 61/100 · zayıf: kenar");
+  assert.equal(parseNaturalness(""), null);
+  assert.equal(parseNaturalness("140"), null);
+  assert.equal(describeNaturalness(null), "");
+  assert.equal(describeNaturalness(parseNaturalness("90")), "Gerçeklik 90/100");
+});
+
 test("original cosine below zero is not silently displayed as zero", () => {
   assert.match(describeSimilarity(.87, -.12), /orijinal -0,1200 \(kosinüs\)/);
   assert.match(describeSimilarity(.87, .001), /orijinal 0,0010 \(kosinüs\)/);

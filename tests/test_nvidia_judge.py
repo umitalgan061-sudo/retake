@@ -182,6 +182,128 @@ class RequestTest(unittest.TestCase):
         self.assertIsNone(nj.judged_winner({"decision": "winner", "winner": 5, "votes": 6, "agreement": 1}, 3))
 
 
+def chat(text: str) -> dict:
+    return {"choices": [{"message": {"content": text}}]}
+
+
+def jpeg(value: int) -> bytes:
+    return cv2.imencode(".jpg", np.full((300, 240, 3), value, np.uint8))[1].tobytes()
+
+
+class DirectTransportTest(unittest.TestCase):
+    """No Hafize token, NVIDIA_API_KEY on this computer: NVIDIA is asked directly."""
+
+    def test_key_comes_from_env_or_a_git_ignored_env_file_and_is_never_named(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            env_file = root / ".env"
+            env_file.write_text("# Hafize\nOTHER=1\nexport NVIDIA_API_KEY = \"nvapi-file\"\n", encoding="utf-8")
+            self.assertEqual(nj.direct_config({}, [env_file]), nj.DirectConfig("nvapi-file", str(env_file)))
+            env_file.write_text("NVIDIA_API_KEY=nvapi-utf16\r\n", encoding="utf-16")
+            self.assertEqual(nj.direct_config({}, [env_file]).key, "nvapi-utf16")
+            env_file.write_text("NVIDIA_API_KEY=nvapi-plain # yorum\n", encoding="utf-8")
+            self.assertEqual(nj.direct_config({}, [env_file]).key, "nvapi-plain")
+            self.assertEqual(nj.direct_config({"NVIDIA_API_KEY": "nvapi-env"}, [env_file]).source, "ortam değişkeni")
+            self.assertEqual(nj.direct_config({"RETAKE_ENV_FILE": str(env_file)}).key, "nvapi-plain")
+            self.assertIsNone(nj.direct_config({"RETAKE_NVIDIA_JUDGE": "off"}, [env_file]))
+            self.assertIsNone(nj.direct_config({}), "explicit env reads no files unless given")
+            missing = root / "no-token"
+            self.assertEqual(nj.judge_transport({}, missing, [env_file]), ("direct", str(env_file)))
+            self.assertEqual(nj.judge_status({}, missing, [env_file]), "configured")
+            self.assertEqual(nj.judge_transport({"RETAKE_HAFIZE_PROJECT_TOKEN": TOKEN}, missing, [env_file])[0], "hafize")
+            self.assertTrue(callable(nj.build_judge({}, missing, [env_file])))
+            self.assertNotIn("nvapi", nj.judge_transport({}, missing, [env_file])[1])
+        self.assertIn(".env", Path(".gitignore").read_text(encoding="utf-8").splitlines())
+
+    def test_each_model_votes_once_in_a_rotated_order_and_votes_map_back(self):
+        crops = [jpeg(80), jpeg(120), jpeg(160)]
+        seen = {}
+
+        def poster(payload, key):
+            self.assertEqual(key, "nvapi-k")
+            self.assertNotIn("nvapi-k", json.dumps(payload))
+            images = [part["image_url"]["url"] for part in payload["messages"][1]["content"] if part["type"] == "image_url"]
+            seen[payload["model"]] = images
+            # Every model prefers the crop that was originally index 1.
+            position = images.index("data:image/jpeg;base64," + base64.b64encode(crops[1]).decode("ascii")) + 1
+            return chat(f'<think>looking</think> {{"best": {position}, "reason": "pores"}}')
+
+        verdict = nj.request_direct(nj.DirectConfig("nvapi-k", "x"), crops, poster)
+        self.assertEqual(verdict, {"decision": "winner", "winner": 1, "votes": 3, "agreement": 1.0,
+                                   "models": list(nj.DIRECT_MODELS)})
+        orders = [tuple(images) for images in seen.values()]
+        self.assertEqual(len(set(orders)), 3, "each model sees a different order")
+        self.assertEqual(nj.judged_winner(verdict, 3), 1)
+
+    def test_split_no_winner_and_unreadable_answers(self):
+        crops = [jpeg(80), jpeg(160)]
+        answers = iter(['{"best": 1}', '{"best": 0}', "no json"])
+        verdict = nj.request_direct(nj.DirectConfig("k", "x"), crops, lambda *_a: chat(next(answers)),
+                                    models=("a", "b", "c"))
+        self.assertEqual((verdict["decision"], verdict["votes"]), ("abstain", 2))
+        self.assertIsNone(nj.judged_winner(verdict, 2))
+        with self.assertRaises(nj.JudgeError):
+            nj.request_direct(nj.DirectConfig("k", "x"), crops, lambda *_a: chat("?"), models=("a",))
+
+    def test_a_one_image_model_gets_a_numbered_contact_sheet(self):
+        crops = [jpeg(80), jpeg(160)]
+        sent = []
+
+        def poster(payload, key):
+            images = [part for part in payload["messages"][1]["content"] if part["type"] == "image_url"]
+            sent.append(len(images))
+            if len(images) > 1:
+                raise nj.JudgeError("NVIDIA HTTP 400")
+            self.assertIn("panel", payload["messages"][1]["content"][0]["text"])
+            return chat('{"best": 2}')
+
+        verdict = nj.request_direct(nj.DirectConfig("k", "x"), crops, poster, models=("only-one-image",))
+        self.assertEqual(sent, [2, 1])
+        self.assertEqual(verdict["winner"], 1)
+        sheet = cv2.imdecode(np.frombuffer(nj.contact_sheet(crops), np.uint8), 1)
+        self.assertEqual(sheet.shape[0], nj.SHEET_PANEL_HEIGHT)
+
+    def test_direct_judge_sends_review_sheets_and_falls_back_to_face_crops(self):
+        with tempfile.TemporaryDirectory() as folder:
+            env_file = Path(folder) / ".env"
+            env_file.write_text("NVIDIA_API_KEY=nvapi-k\n", encoding="utf-8")
+            judge = nj.build_judge({}, Path(folder) / "no-token", [env_file])
+        self.assertTrue(getattr(judge, "accepts_images", False))
+        images = [synthetic_png(1), synthetic_png(2)]
+        prompts = []
+
+        def poster(payload, key):
+            prompts.append(payload["messages"][1]["content"][0]["text"])
+            return chat('{"best": 1}')
+
+        verdict = judge(images, BOUNDS, None, poster)
+        self.assertEqual(verdict["layout"], nj.LAYOUT_SHEET)
+        self.assertTrue(all("review sheet" in text for text in prompts))
+        prompts.clear()
+
+        def sheet_refused(payload, key):
+            text = payload["messages"][1]["content"][0]["text"]
+            if "review sheet" in text:
+                raise nj.JudgeError("NVIDIA HTTP 500")
+            prompts.append(text)
+            return chat('{"best": 2}')
+
+        verdict = judge(images, BOUNDS, None, sheet_refused)
+        self.assertEqual(verdict["layout"], nj.LAYOUT_FACE)
+        self.assertEqual(verdict["votes"], len(nj.DIRECT_MODELS))
+
+    def test_http_layer_targets_only_nvidia_and_never_follows_redirects(self):
+        opener = RecordingOpener(chat('{"best": 1}'))
+        nj._post_direct({"model": "m"}, "nvapi-k", opener)
+        request, timeout = opener.requests[0]
+        self.assertEqual(request.full_url, "https://integrate.api.nvidia.com/v1/chat/completions")
+        self.assertEqual(request.get_header("Authorization"), "Bearer nvapi-k")
+        error = urllib.error.HTTPError(nj.DIRECT_URL, 401, "Unauthorized", {}, io.BytesIO(b'{"detail":"nvapi-leak"}'))
+        with self.assertRaisesRegex(nj.JudgeError, "HTTP 401") as caught:
+            nj._post_direct({"model": "m"}, "nvapi-k", RecordingOpener(error=error))
+        self.assertNotIn("nvapi", str(caught.exception))
+
+
 def ultra_request(consent: bool):
     return (
         b"original photo", [b"reference"] * 25, ".png", [".png"] * 25,
@@ -281,6 +403,14 @@ class UltraJuryTest(unittest.TestCase):
         self.assertEqual(calls, [])
         self.assertEqual(headers["X-Retake-NVIDIA-Judge"], "single-finalist")
         self.assertEqual(photo, images[0])
+
+    def test_a_soft_original_counts_as_verified_detail_but_a_failed_gate_does_not(self):
+        def item(round_, gate):
+            return (f"img-{round_}".encode(), {"X-Retake-Similarity": "0.8000", "X-Retake-Detail-Gate": gate}, round_)
+        best = item(1, "soft-original")
+        pool = srv.judge_pool(best[0], best[1], 1, [item(2, "soft-original"), item(3, "failed:eyes-blur"),
+                                                     item(4, "passed")], .800)
+        self.assertEqual([entry[2] for entry in pool], [1, 2, 4])
 
     def test_metadata_consent_must_be_boolean(self):
         base = {"referenceWeights": [1] * 25, "faceBounds": {"x": 10, "y": 10, "width": 100, "height": 100},
@@ -437,6 +567,18 @@ class JuryLocalQualityGuardTest(unittest.TestCase):
         safe={**self.best,"X-Retake-Similarity":".831","X-Retake-Rim-Fraction":".02"}
         self.assertEqual(judge_quality_guard(safe,self.best),(True,"passed"))
         self.assertEqual(len(srv.judge_pool(b"best",self.best,1,[(b"safe",safe,2)],.832)),2)
+
+    def test_jury_cannot_switch_to_a_clearly_less_natural_photo_but_accepts_a_soft_original(self):
+        from tools.ultra_mode import judge_quality_guard
+        best = {**self.best, "X-Retake-Naturalness": "80.0"}
+        edited = {**best, "X-Retake-Similarity": ".831", "X-Retake-Naturalness": "72.0"}
+        self.assertEqual(judge_quality_guard(edited, best), (False, "naturalness"))
+        close = {**best, "X-Retake-Similarity": ".831", "X-Retake-Naturalness": "77.0"}
+        self.assertTrue(judge_quality_guard(close, best)[0])
+        soft = {**close, "X-Retake-Detail-Gate": "soft-original"}
+        self.assertTrue(judge_quality_guard(soft, best)[0])
+        failed = {**close, "X-Retake-Detail-Gate": "failed:eyes-blur"}
+        self.assertEqual(judge_quality_guard(failed, best), (False, "detail-gate"))
 
     def test_malformed_or_contradictory_consensus_never_changes_winner(self):
         good={"decision":"winner","winner":1,"votes":2,"agreement":1.0,"reason":"CONSENSUS"}

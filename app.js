@@ -68,6 +68,8 @@ import {
   sourcePortraitQuality,
   describeSourcePortraitQuality,
   describeSimilarity,
+  describeNaturalness,
+  parseNaturalness,
   parseSimilarity,
   similarityScore
 } from "./src/quality.js";
@@ -353,8 +355,9 @@ async function checkFaceFusionStatus() {
         pixelBoost: health.pixel_boost || "768x768",
         realism: Boolean(health.realism),
         nimEditors: Array.isArray(health.nim_editors_configured) ? health.nim_editors_configured : [],
-        // Only an engine with a Hafize project token may offer the NVIDIA jury.
+        // Only an engine with a Hafize project token or a local NVIDIA key may offer the jury.
         nvidiaJudge: health.nvidia_judge === "configured",
+        nvidiaJudgeDirect: health.nvidia_judge_transport === "direct",
         // Strict leave-one-out self-tests and learned variant order (v22.3+).
         selfTestBenchmark: health.self_test_benchmark === true,
         ultraLearning: health.ultra_learning === true,
@@ -398,6 +401,11 @@ async function checkFaceFusionStatus() {
   if (elements.nvidiaJudgeRow) {
     const judgeReady = Boolean(state.faceFusionStatus.configured && state.faceFusionStatus.nvidiaJudge);
     elements.nvidiaJudgeRow.hidden = !judgeReady;
+    const judgeTitle = elements.nvidiaJudgeRow.querySelector("strong");
+    if (judgeTitle) {
+      judgeTitle.textContent = "NVIDIA görsel jürisi (" +
+        (state.faceFusionStatus.nvidiaJudgeDirect ? "doğrudan NVIDIA" : "Hafize üzerinden") + ")";
+    }
     if (elements.nvidiaJudgeToggle) elements.nvidiaJudgeToggle.disabled = !judgeReady;
   }
   updateQualityDepthAvailability();
@@ -717,6 +725,8 @@ function selectResult(index) {
   elements.outputStatus.textContent = item.label;
   const quality = [
     describeSimilarity(item.similarity, item.before, item.referenceMedian),
+    describeNaturalness(item.naturalness),
+    item.identityModel ? "kimlik modeli: " + ({ hyperswap_1b_256: "HyperSwap 1b", alphaface_256: "AlphaFace" }[item.identityModel] || item.identityModel) : "",
     item.diagnostics?.['x-retake-identity-pixel-scope']==='visible-engine-crop' ? 'kimlik ölçümü: motorun görünür yüz kırpımı (tarayıcı ölçekleme öncesi)' : '',
     item.faceEdit ? `yüz içi değişim %${(item.faceEdit.changedRatio*100).toFixed(1).replace('.',',')} · ortalama en büyük RGB kanal farkı ${item.faceEdit.meanDelta.toFixed(1).replace('.',',')}/255` : "",
     describeAdaptiveQuality(item.similarity, item.before, item.identityAspiration, item.finalistAttempts),
@@ -738,6 +748,7 @@ function selectResult(index) {
     item.nvidiaJudgeFinalists > 0 ? 'jüri finalisti: '+item.nvidiaJudgeFinalists : '',
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
+    item.detailGate.startsWith("failed:") ? "uyarı: bölgesel ayrıntı zayıf (" + ({eyes:"gözler",nose:"burun",mouth:"ağız",lower_face:"çene"}[item.detailGate.slice(7).split("-")[0]] || "yüz") + ")" : "",
     item.detailRegions ? "Orijinale göre doku enerjisi: " + Object.entries({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz"}).map(([region,name]) => { const part=item.detailRegions.split(",").find(value=>value.startsWith(region+":")); const ratio=part ? Number(part.split(":")[1]) : NaN; return name+" "+(Number.isFinite(ratio) && ratio>=0 ? ratio.toFixed(2)+"×" : "ölçülemedi"); }).join(", ") : "",
     item.regionalEdit ? "Bölgesel RGB farkı (/255): " + item.regionalEdit.split(",").map(part => { const [region,value]=part.split(":"); const name=({eyes:"göz",nose:"burun",mouth:"ağız",lower_face:"alt yüz",moustache:"bıyık",chin:"çene",forehead:"alın",brows:"kaşlar",left_cheek:"sol yanak",right_cheek:"sağ yanak",left_jaw:"sol çene",right_jaw:"sağ çene"})[region]; const delta=Number(value); return name && Number.isFinite(delta) && delta>=0 && delta<=255 ? name+" "+delta.toFixed(1) : ""; }).filter(Boolean).join(", ") : "",
     describePortraitEvidence(item.lowerTexture,item.referenceAppearance),
@@ -825,7 +836,9 @@ function addResult(blob, label, scores = {}) {
     identitySelection: scores.identitySelection || "",
     realism: scores.realism === true,
     texture: scores.texture || "average",
-    referenceMedian: scores.referenceMedian ?? null
+    referenceMedian: scores.referenceMedian ?? null,
+    naturalness: scores.naturalness ?? null,
+    identityModel: scores.identityModel || ""
   };
   state.results.push(item);
   while (state.results.length > MAX_RESULT_HISTORY) {
@@ -2334,7 +2347,9 @@ async function runFaceFusionEdit(options = {}) {
   const ultraDepths = state.faceFusionStatus.ultraDepths;
   const depthText = describeDepthDuration(qualityDepth, ultraDepths);
   const judgeNotice = useNvidiaJudge
-    ? " NVIDIA görsel jürisi açık: motor, kimliği eşit en fazla 4 sonuç adayının yüz kırpımını (en çok 512 px) Hafize sunucun üzerinden NVIDIA'nın barındırılan görsel modellerine gönderir. Jüri yalnız bu adaylardan en doğal görüneni seçer; görseller saklanmaz."
+    ? " NVIDIA görsel jürisi açık: motor, kimliği eşit en fazla 4 sonuç adayının yüz kırpımını (en çok 512 px) " +
+      (state.faceFusionStatus?.nvidiaJudgeDirect ? "bilgisayarındaki NVIDIA anahtarıyla doğrudan" : "Hafize sunucun üzerinden") +
+      " NVIDIA'nın barındırılan görsel modellerine gönderir. Jüri yalnız bu adaylardan en doğal görüneni seçer; 25 referans ve tam fotoğraf gönderilmez."
     : "";
   // A benchmark asked for consent once, for all of its photos.
   const consent = benchmark || await showAppDialog({
@@ -2507,6 +2522,11 @@ async function runFaceFusionEdit(options = {}) {
       sclera: response.headers.get("X-Retake-Sclera") || "",
       ultraRefinements: response.headers.get("X-Retake-Ultra-Refinements") || "",
       realismFinalists: Number.parseInt(response.headers.get("X-Retake-Ultra-Realism-Finalists") || "", 10),
+      naturalness: parseNaturalness(
+        response.headers.get("X-Retake-Naturalness"), response.headers.get("X-Retake-Naturalness-Checks")
+      ),
+      identityModel: /^[a-z0-9_]{3,40}$/.test(response.headers.get("X-Retake-Identity-Model") || "")
+        ? response.headers.get("X-Retake-Identity-Model") : ""
     };
     showProfileHealth(
       response.headers.get("X-Retake-Identity-Median-Similarity"),
@@ -2545,7 +2565,10 @@ async function runFaceFusionEdit(options = {}) {
     const qualityComparison = createQualityBaseline(compareContext,scores.diagnostics);
     addResult(delivered.blob, ultraLabel, {...scores,qualityComparison,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
-    const scoreText = describeSimilarity(scores.similarity, scores.before, scores.referenceMedian);
+    const scoreText = [
+      describeSimilarity(scores.similarity, scores.before, scores.referenceMedian),
+      describeNaturalness(scores.naturalness)
+    ].filter(Boolean).join(" · ");
     showToast(
       "Ultra sonuç hazır" +
       (Number.isInteger(winnerRound) && winnerRound > 0 ? ` · seçilen tur ${winnerRound}` : "") +

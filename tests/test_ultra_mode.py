@@ -300,6 +300,37 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class UltraNaturalnessTest(unittest.TestCase):
+    @staticmethod
+    def headers(identity, naturalness=None):
+        value = {"X-Retake-Similarity": f"{identity:.4f}"}
+        if naturalness is not None:
+            value["X-Retake-Naturalness"] = f"{naturalness:.1f}"
+        return value
+
+    def test_a_clearly_more_natural_photo_wins_a_small_identity_gap(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        natural = self.headers(0.795, 90)
+        pasted = self.headers(0.800, 78)
+        self.assertTrue(prefer_ultra_candidate(natural, pasted))
+        self.assertFalse(prefer_ultra_candidate(pasted, natural))
+
+    def test_below_the_floor_loses_to_a_natural_one_nearly_as_close(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.78, 80), self.headers(0.80, 55)))
+        self.assertFalse(prefer_ultra_candidate(self.headers(0.80, 55), self.headers(0.78, 80)))
+
+    def test_identity_still_decides_a_real_gap(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        # 0.05 ArcFace is beyond every naturalness allowance.
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.85, 70), self.headers(0.80, 92)))
+        self.assertFalse(prefer_ultra_candidate(self.headers(0.80, 92), self.headers(0.85, 70)))
+
+    def test_without_naturalness_the_old_rules_apply(self):
+        from tools.ultra_mode import prefer_ultra_candidate
+        self.assertTrue(prefer_ultra_candidate(self.headers(0.81), self.headers(0.80)))
+
+
 class FluxOutcomeTest(unittest.TestCase):
     def test_rejected_finalist_keeps_original_and_reports_real_outcome(self):
         def fake_swap(*args):

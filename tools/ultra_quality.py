@@ -186,7 +186,20 @@ def detail_gate(score, ratios):
     return True, "passed"
 
 def check_detail_gate(original_path, result_path, bounds):
-    score, ratios = check_photo_detail(original_path, result_path, bounds)
+    """(accepted, reason, score, ratios) for a result file against the original.
+
+    A soft original (slightly out of focus, re-compressed, upscaled) has no
+    region with enough texture to compare (regional_photo_detail skips
+    them); there is nothing to call blurred then, so it passes as
+    "soft-original" instead of rejecting every candidate.
+    """
+    # Measured on the delivered pixels (binary alpha), like check_photo_detail.
+    original, result = read_delivered_pair(original_path, result_path)
+    if original is None or result is None or original.shape != result.shape:
+        return False, "unreadable", None, {}
+    score, ratios = regional_photo_detail(original, result, bounds)
+    if score is None and not ratios:
+        return True, "soft-original", None, {}
     accepted, reason = detail_gate(score, ratios)
     return accepted, reason, score, ratios
 
@@ -242,10 +255,34 @@ def check_reinforcement_detail(single_path: Path, reinforced_path: Path, bounds:
     accepted, reason = reinforcement_detail_decision(ratios)
     return accepted, reason, ratios
 
-def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent):
+# A regional reference transfer (beard / full face / jaw) must earn its place:
+# either a real identity gain or no loss of photographic naturalness
+# (tools/photo_naturalness.py). A low-opacity reference beard ties ArcFace
+# but reads as a grey, ghosted shadow over the jaw and lips.
+REGIONAL_IDENTITY_GAIN = 0.006
+REGIONAL_NATURALNESS_SLACK = 1.5     # naturalness points (of 100) a regional may lose
+REGIONAL_LABELS = ("identity-beard", "identity-full", "identity-jaw")
+
+
+def _finite(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def regional_earns_place(index, current, identity_scores, naturalness_scores) -> bool:
+    if naturalness_scores is None:
+        return True   # legacy callers: identity/detail rules only
+    if identity_scores[index] >= identity_scores[current] + REGIONAL_IDENTITY_GAIN:
+        return True
+    mine, theirs = naturalness_scores[index], naturalness_scores[current]
+    return _finite(mine) and _finite(theirs) and mine >= theirs - REGIONAL_NATURALNESS_SLACK
+
+
+def select_verified_regional_candidate(identity_scores, detail_scores, labels, incumbent, naturalness_scores=None):
     """Prefer measured regional detail only within the verified identity peak."""
     if not (len(identity_scores) == len(detail_scores) == len(labels)):
         return incumbent
+    if naturalness_scores is not None and len(naturalness_scores) != len(labels):
+        naturalness_scores = None
     valid = [i for i, score in enumerate(identity_scores)
              if isinstance(score, (int, float)) and not isinstance(score, bool)
              and math.isfinite(score) and -1 <= score <= 1]
@@ -253,8 +290,11 @@ def select_verified_regional_candidate(identity_scores, detail_scores, labels, i
         return incumbent
     peak = max(valid, key=lambda i: identity_scores[i])
     eligible = [i for i in valid if identity_scores[i] >= identity_scores[peak] - .003]
-    current = incumbent if incumbent in eligible else peak
-    current = choose_detail_safe_tie(identity_scores, detail_scores, current)
+    start = incumbent if incumbent in eligible else peak
+    current = choose_detail_safe_tie(identity_scores, detail_scores, start)
+    if (current != start and labels[current] in REGIONAL_LABELS
+            and not regional_earns_place(current, start, identity_scores, naturalness_scores)):
+        current = start
     if labels[current] not in ("identity-beard", "identity-full", "identity-jaw"):
         baseline = detail_scores[current]
         if isinstance(baseline, (float, int)) and math.isfinite(baseline):
@@ -262,7 +302,8 @@ def select_verified_regional_candidate(identity_scores, detail_scores, labels, i
                         if labels[i] in ("identity-beard", "identity-full", "identity-jaw")
                         and isinstance(detail_scores[i], (float, int))
                         and math.isfinite(detail_scores[i])
-                        and detail_scores[i] >= baseline - .025]
+                        and detail_scores[i] >= baseline - .025
+                        and regional_earns_place(i, current, identity_scores, naturalness_scores)]
             if regional:
                 current = max(regional, key=lambda i: (identity_scores[i], detail_scores[i]))
     return current
@@ -301,7 +342,8 @@ def regional_edit_statistics(original_path, edited_path, bounds):
     return result
 
 
-def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold, minimum_detail_gain=0.025):
+def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold, minimum_detail_gain=0.025,
+                              naturalness_scores=None):
     """Inside one render: once identity reaches the person's photo level,
     pick the identity-sufficient candidate that keeps the most real photo
     detail (e.g. no-head-warp, photo-balance) instead of the highest cosine.
@@ -318,12 +360,59 @@ def select_sufficient_realism(identity_scores, detail_scores, chosen, threshold,
         or not valid(detail_scores[chosen], 0, 1)
     ):
         return chosen
+    if naturalness_scores is not None and len(naturalness_scores) != len(identity_scores):
+        naturalness_scores = None
     contenders = [
         index for index, score in enumerate(identity_scores)
         if valid(score, -1, 1) and score >= threshold and valid(detail_scores[index], 0, 1)
+        # More regional energy is not realism when the photo reads as edited.
+        and (naturalness_scores is None or index == chosen
+             or not (valid(naturalness_scores[index], 0, 100) and valid(naturalness_scores[chosen], 0, 100))
+             or naturalness_scores[index] >= naturalness_scores[chosen] - REGIONAL_NATURALNESS_SLACK)
     ]
     best = max(contenders, key=lambda index: (detail_scores[index], identity_scores[index]))
     return best if detail_scores[best] >= detail_scores[chosen] + minimum_detail_gain else chosen
+
+
+# The 128 px reinforcement carries identity in its coarse structure and loses
+# only the finest detail when upscaled onto a large face. Its low frequencies
+# plus the 256 px pass's own fine band keep both (classic frequency split).
+REINFORCE_RENDER_EDGE = 128.0
+REINFORCE_SPLIT_SCALE = 0.5      # sigma = scale * face width / 128 px
+REINFORCE_SPLIT_RANGE = (1.0, 4.0)
+
+
+def reinforcement_split_sigma(face_width: float) -> float:
+    low, high = REINFORCE_SPLIT_RANGE
+    if not math.isfinite(face_width) or face_width <= 0:
+        return low
+    return float(min(high, max(low, REINFORCE_SPLIT_SCALE * face_width / REINFORCE_RENDER_EDGE)))
+
+
+def fuse_reinforcement_detail(single_path: Path, reinforced_path: Path, output_path: Path,
+                              bounds: dict[str, Any]) -> float:
+    """Write reinforced low frequencies + single-pass fine detail; returns sigma.
+
+    Both are whole swapper outputs of the same untouched target, so pixels
+    the swappers left alone stay identical (same in both, same in the sum).
+    """
+    single = cv2.imread(str(single_path), cv2.IMREAD_UNCHANGED)
+    reinforced = cv2.imread(str(reinforced_path), cv2.IMREAD_UNCHANGED)
+    if single is None or reinforced is None or single.shape != reinforced.shape:
+        raise ValueError("Pekiştirme ayrıntı birleşimi için görüntüler okunamadı.")
+    try:
+        width = float(bounds["width"])
+    except (KeyError, TypeError, ValueError):
+        width = float(single.shape[1]) / 3
+    sigma = reinforcement_split_sigma(width)
+    s = single.astype(np.float32)
+    r = reinforced.astype(np.float32)
+    fused = cv2.GaussianBlur(r, (0, 0), sigma) + (s - cv2.GaussianBlur(s, (0, 0), sigma))
+    if fused.ndim == 3 and fused.shape[2] == 4:
+        fused[:, :, 3] = r[:, :, 3]
+    if not cv2.imwrite(str(output_path), np.clip(np.rint(fused), 0, 255).astype(np.uint8)):
+        raise OSError("Pekiştirme ayrıntı birleşimi yazılamadı.")
+    return sigma
 
 
 def reinforcement_wanted(single, double, threshold, minimum_gain=0.008):

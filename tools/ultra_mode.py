@@ -27,6 +27,13 @@ ULTRA_DETAIL_GAIN = 0.06
 # Require a visible 2.5-percentage-point residual halo improvement in an
 # identity near-tie before preferring a cleaner photographic boundary.
 ULTRA_RIM_GAIN = 0.025
+# Photographic naturalness (tools/photo_naturalness.py, 0-100). A candidate
+# that clearly looks less like a photograph may not win on a small ArcFace
+# lead; one below the floor loses to a natural one that is nearly as close.
+ULTRA_NATURALNESS_GAIN = 6.0         # points that count as clearly more natural
+ULTRA_NATURALNESS_BAND = 0.010       # ArcFace lead such a gain outweighs
+ULTRA_NATURALNESS_FLOOR = 65.0       # below this a result reads as edited
+ULTRA_NATURALNESS_FLOOR_BAND = 0.030 # ArcFace lead the floor outweighs
 
 
 def with_variation(parsed: tuple, variation: int) -> tuple:
@@ -73,6 +80,33 @@ def rim_from_headers(headers: dict[str, str]) -> float | None:
     except (ValueError, TypeError):
         return None
     return value if math.isfinite(value) and 0.0 <= value <= 1.0 else None
+
+
+def naturalness_from_headers(headers: dict[str, str]) -> float | None:
+    try:
+        value = float(headers.get("X-Retake-Naturalness", ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and 0.0 <= value <= 100.0 else None
+
+
+def _naturalness_decision(candidate: dict[str, str], best: dict[str, str], new: float, old: float) -> bool | None:
+    """True/False when naturalness settles the comparison, None otherwise."""
+    new_nat = naturalness_from_headers(candidate)
+    old_nat = naturalness_from_headers(best)
+    if new_nat is None or old_nat is None:
+        return None
+    floor = ULTRA_NATURALNESS_FLOOR
+    if new_nat >= floor > old_nat and new >= old - ULTRA_NATURALNESS_FLOOR_BAND:
+        return True
+    if old_nat >= floor > new_nat and old >= new - ULTRA_NATURALNESS_FLOOR_BAND:
+        return False
+    if abs(new - old) <= ULTRA_NATURALNESS_BAND:
+        if new_nat >= old_nat + ULTRA_NATURALNESS_GAIN:
+            return True
+        if old_nat >= new_nat + ULTRA_NATURALNESS_GAIN:
+            return False
+    return None
 
 
 def _photo_detail(headers: dict[str, str]) -> int:
@@ -193,6 +227,9 @@ def prefer_ultra_candidate(
     old = score_from_headers(best)
     if old is None:
         return True
+    decided = _naturalness_decision(candidate, best, new, old)
+    if decided is not None:
+        return decided
     new_sufficient = is_identity_sufficient(candidate)
     old_sufficient = is_identity_sufficient(best)
     if new_sufficient and old_sufficient:
@@ -647,7 +684,8 @@ def judge_quality_guard(candidate, incumbent):
     A missing optional metric is not evidence of an improvement. Old engine
     reports without those fields remain compatible; compare measured pairs.
     """
-    if candidate.get("X-Retake-Detail-Gate") != "passed":
+    # A soft original has nothing to compare: not a detail failure.
+    if candidate.get("X-Retake-Detail-Gate") not in ("passed", "soft-original"):
         return False, "detail-gate"
     a,b=score_from_headers(candidate),score_from_headers(incumbent)
     if a is None or b is None:
@@ -669,6 +707,10 @@ def judge_quality_guard(candidate, incumbent):
             return False,name+"-unmeasured"
         if new is not None and old is not None and new < old-JURY_MAX_QUALITY_LOSS:
             return False,name
+    # The jury may not switch to a photo Retake measures as clearly more edited.
+    new_nat, old_nat = naturalness_from_headers(candidate), naturalness_from_headers(incumbent)
+    if new_nat is not None and old_nat is not None and new_nat < old_nat - ULTRA_NATURALNESS_GAIN:
+        return False, "naturalness"
     new_rim,old_rim=rim_from_headers(candidate),rim_from_headers(incumbent)
     if old_rim is not None and new_rim is None:
         return False,"rim-unmeasured"

@@ -1279,6 +1279,8 @@ def process_swap(
 ) -> tuple[bytes, dict[str, str]]:
     """Run the full hybrid pipeline for one parsed request."""
     import cv2
+    import hashlib
+    import numpy as np
 
     caches = caches or {}
     identity_cache: IdentityReportCache | None = caches.get("identity")

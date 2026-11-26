@@ -657,9 +657,13 @@ def judge_quality_guard(candidate, incumbent):
                          ("reference-appearance",reference_appearance_from_headers),
                          ("photo-detail",detail_from_headers)):
         new,old=measure(candidate),measure(incumbent)
+        if old is not None and new is None:
+            return False,name+"-unmeasured"
         if new is not None and old is not None and new < old-JURY_MAX_QUALITY_LOSS:
             return False,name
     new_rim,old_rim=rim_from_headers(candidate),rim_from_headers(incumbent)
+    if old_rim is not None and new_rim is None:
+        return False,"rim-unmeasured"
     if new_rim is not None and old_rim is not None and new_rim > old_rim+JURY_MAX_RIM_INCREASE:
         return False,"rim"
     return True,"passed"

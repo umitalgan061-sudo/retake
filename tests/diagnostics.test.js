@@ -64,7 +64,7 @@ test("result revision is not silently replaced by a newer connected motor", asyn
   const report=buildDiagnosticReport({headers:{"x-retake-quality-revision":old,"x-retake-token":"private"},
     health:{quality_revision:EXPECTED_QUALITY_REVISION,flux_texture_alternatives:true}});
   assert.match(report,/Sonucu üreten kalite sürümü: portrait-quality-20261125-r2/);
-  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261126-r7/);
+  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261126-r8/);
   assert.match(report,/güncel motor durumu bu sonucun kanıtı değildir/);
   assert.match(report,/flux_texture_alternatives: true/);
   assert.doesNotMatch(report,/private|x-retake-token/);
@@ -78,4 +78,43 @@ test("diagnostic quality gaps use only verified numerical headers", async () => 
   assert.match(report,/arama zirvesinden fark 0,30 puan/);
   assert.match(report,/arama hedefinden fark -3,80 puan/);
   assert.equal(summarizeQualityEvidence({"x-retake-similarity":"","x-retake-ultra-peak-identity":"nan"}),"");
+});
+
+
+test("local comparison distinguishes same input from different preparation and settings", async () => {
+  const {createQualityBaseline,compareQualityBaseline,readQualityBaseline}=await import("../src/diagnostics.js");
+  const context={input:"a".repeat(64),prepared:"b".repeat(64)};
+  const headers={"x-retake-detail-gate":"passed","x-retake-similarity":".832",
+    "x-retake-detail-score":".80","x-retake-ultra-timing":"total=1560",
+    "x-retake-quality-revision":"portrait-quality-20261126-r8"};
+  const baseline=createQualityBaseline(context,headers,1000);
+  const current=createQualityBaseline({...context,prepared:"c".repeat(64)},{...headers,"x-retake-similarity":".85",
+    "x-retake-detail-score":".82","x-retake-ultra-timing":"total=1200"},2000);
+  const report=compareQualityBaseline(baseline,current);
+  assert.match(report,/Hazırlanan motor girdileri farklı/);
+  assert.match(report,/83,20 → 85,00 \(\+1,80\)/);
+  assert.match(report,/süre 1560 → 1200 sn/);
+  assert.doesNotMatch(report,/[a-f0-9]{64}/);
+  assert.match(compareQualityBaseline(baseline,{...current,input:"d".repeat(64)}),/Kıyas yapılamadı/);
+  assert.equal(createQualityBaseline(context,{...headers,"x-retake-detail-gate":"failed"}),null);
+  assert.equal(createQualityBaseline(context,{...headers,"x-retake-similarity":""}),null);
+  assert.deepEqual(readQualityBaseline({getItem:()=>JSON.stringify(baseline)}),baseline);
+  assert.equal(readQualityBaseline({getItem:()=>"{invalid"}),null);
+});
+
+test("comparison context depends on bytes, source face and settings, not filenames", async () => {
+  const {comparisonContext}=await import("../src/diagnostics.js");
+  const {webcrypto}=await import("node:crypto");
+  if(!globalThis.crypto) Object.defineProperty(globalThis,"crypto",{value:webcrypto,configurable:true});
+  const args={target:new Blob(["same photo"]),referenceKey:"f".repeat(64),faceIndex:0,
+    depth:"max",judge:true,full:false,benchmark:false,prepared:[new Blob(["crop"])],metadata:{mode:"both"}};
+  const a=await comparisonContext(args);
+  assert.ok(a);
+  assert.deepEqual(await comparisonContext({...args,target:new Blob(["same photo"])}),a);
+  assert.notEqual((await comparisonContext({...args,depth:"deep"})).input,a.input);
+  assert.notEqual((await comparisonContext({...args,faceIndex:1})).input,a.input);
+  const other=await comparisonContext({...args,prepared:[new Blob(["other crop"])]});
+  assert.equal(other.input,a.input);
+  assert.notEqual(other.prepared,a.prepared);
+  assert.equal(await comparisonContext({...args,benchmark:true}),null);
 });

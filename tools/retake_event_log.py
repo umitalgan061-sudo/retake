@@ -43,10 +43,10 @@ MAX_EVENTS_PER_MINUTE = 120
 
 CATEGORIES = (
     "start", "stop", "result", "jury", "memory", "realism", "jury_skip",
-    "identity", "skipped", "error",
+    "identity", "fallback", "detail", "skipped", "error",
 )
 # Categories that explain a weaker or missing result.
-PROBLEM_CATEGORIES = ("memory", "realism", "jury_skip", "identity", "skipped", "error")
+PROBLEM_CATEGORIES = ("memory", "realism", "jury_skip", "identity", "fallback", "detail", "skipped", "error")
 
 _DROP = re.compile(
     r"eşleştirme|eslestirme|kodu bilen|pairing|token|jeton|bearer|authorization|"
@@ -85,6 +85,10 @@ _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
         r"\[(?:Retake )?ArcFace\].*(ölçülemedi|başarısız|tutarsız|kapatılamadı|error|hata)",
         re.IGNORECASE,
     )),
+    # The default identity model could not run and the fallback model was used.
+    ("fallback", re.compile(r"kullanılamadı \(.*\); \S+ ile devam ediliyor", re.IGNORECASE)),
+    # The delivered photo (or every candidate) failed the regional detail check.
+    ("detail", re.compile(r"bölgesel ayrıntı kontrolünü geç", re.IGNORECASE)),
     ("skipped", re.compile(
         r"atlandı|skipped|kullanılamadı|uygulanamadı|oluşturulamadı|doğrulanamadı|geçersiz",
         re.IGNORECASE,

@@ -278,6 +278,66 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(any("a 8/8" in title and "b 0/4" in title for title in result["warn"]))
         self.assertTrue(any("motor jüriyi görmüyor" in title for title in result["warn"]))
 
+    def test_direct_nvidia_jury_is_recognised_without_reading_out_the_key(self):
+        (self.retake / "hafize-project-token").unlink()
+        secret = "nvapi-" + "Q" * 60
+        (self.root / ".env").write_text(f"# local\nOTHER=1\nNVIDIA_API_KEY=\"{secret}\"\n", encoding="utf-8")
+        health = {"nvidia_judge": "configured", "nvidia_judge_transport": "direct"}
+        self.runner.outputs[str(self.python)] = (0, "NVIDIA jürisi yolu: doğrudan NVIDIA (.env).\n"
+                                                    "NVIDIA jürisi çalışıyor (review-sheet): karar=winner kazanan=1 oy=3\n")
+        checks = doctor.check_jury(self.context(probe_jury=True), health)
+        self.assertEqual([check.status for check in checks], ["ok", "ok"])
+        self.assertIn("(.env;", checks[0].title)
+        self.assertIn("karar=winner", checks[1].detail)
+        report = doctor.render(checks)
+        self.assertNotIn(secret, report)
+        self.assertNotIn("Q" * 32, report)
+        # No Hafize traffic for the direct route.
+        self.assertFalse(any(call["url"].startswith(doctor.HAFIZE_URL) for call in self.net.calls))
+        self.runner.outputs[str(self.python)] = (1, "NVIDIA jüri testi başarısız: HTTP 401\n")
+        self.assertEqual(doctor.check_jury(self.context(probe_jury=True), health)[-1].status, "fail")
+        self.runner.outputs[str(self.python)] = (1, "ModuleNotFoundError: No module named 'numpy'\n")
+        self.assertEqual(doctor.check_jury(self.context(probe_jury=True), health)[-1].status, "warn")
+        stale = doctor.check_jury(self.context(), {"nvidia_judge": "not-configured", "nvidia_judge_transport": "none"})
+        self.assertTrue(any(check.status == "warn" and "görmüyor" in check.title for check in stale))
+
+    def test_direct_key_sources(self):
+        ctx = self.context()
+        self.assertIsNone(doctor.direct_key_source(ctx))
+        (self.root / ".dev.vars").write_bytes("NVIDIA_API_KEY=abc\r\n".encode("utf-16"))
+        self.assertEqual(doctor.direct_key_source(ctx), ".dev.vars")
+        (self.root / ".env").write_text("NVIDIA_API_KEY=\n", encoding="utf-8")
+        self.assertEqual(doctor.direct_key_source(ctx), ".dev.vars")
+        self.assertEqual(doctor.direct_key_source(self.context(env={"NVIDIA_API_KEY": "x"})), "ortam değişkeni")
+        self.assertIsNone(doctor.direct_key_source(self.context(env={"NVIDIA_API_KEY": "x", "RETAKE_NVIDIA_JUDGE": "off"})))
+
+    def test_identity_model_files(self):
+        (self.root / "tools" / "facefusion_local_server.py").write_text(
+            'QUALITY_PIPELINE_REVISION = "portrait-quality-test-r9"\n'
+            'IDENTITY_MODEL = "hyperswap_1b_256"\nIDENTITY_FALLBACK_MODEL = "alphaface_256"\n', encoding="utf-8")
+        models = self.home / "FaceFusion" / ".assets" / "models"
+        self.assertEqual(doctor.check_models(self.context(), None)[0].status, "info")
+        models.mkdir(parents=True)
+        self.assertIn("henüz yok", doctor.check_models(self.context(), None)[0].title)
+        (models / "alphaface_256.onnx").write_bytes(b"x" * 10)
+        warning = doctor.check_models(self.context(), None)[0]
+        self.assertEqual(warning.status, "warn")
+        self.assertIn("hyperswap_1b_256", warning.title)
+        self.assertIn("yedek alphaface_256 hazır", warning.title)
+        (models / "hyperswap_1b_256.onnx").write_bytes(b"x" * 10)
+        ready = doctor.check_models(self.context(), {"identity_model": "hyperswap_1b_256"})[0]
+        self.assertEqual(ready.status, "ok")
+        self.assertIn("2 model", ready.title)
+        self.assertEqual(doctor.check_models(self.context(), {"identity_model": "hyperswap_1c_256"})[0].status, "warn")
+
+    def test_identity_fallback_and_detail_events_warn(self):
+        log = EventLog(self.retake / EVENT_LOG_NAME, clock=lambda: 1990.0)
+        log.record_line("hyperswap_1b_256 kullanılamadı (RuntimeError: x); alphaface_256 ile devam ediliyor.")
+        log.record_line("Uyarı: son fotoğraf bölgesel ayrıntı kontrolünü geçemedi (eyes).")
+        titles = [check.title for check in doctor.check_events(self.context()) if check.status == "warn"]
+        self.assertTrue(any("yedeğe düşmesi" in title for title in titles))
+        self.assertTrue(any("bölgesel ayrıntı" in title for title in titles))
+
     def test_site_release_marker_is_compared_by_web_files(self):
         self.assertEqual(doctor.check_site(self.context())[0].title, "Yayındaki site bu depoyla aynı commit'te (7fea8d2).")
         self.runner.outputs["rev-parse HEAD"] = (0, "1" * 40 + "\n")

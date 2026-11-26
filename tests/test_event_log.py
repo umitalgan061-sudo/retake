@@ -67,6 +67,11 @@ class ClassifyTest(unittest.TestCase):
             "[Ultra] Sonuç: 19 doğrulanmış tur, kazanan 7. tur; benzerlik=0.712; süre 1510 sn.": "result",
             "RuntimeError: hyperswap işlemi başarısız (1024x1024).": "error",
             "Retake kişisel yüz profili servisi: http://127.0.0.1:8765 (profile=x)": "start",
+            "hyperswap_1b_256 kullanılamadı (RuntimeError: x); alphaface_256 ile devam ediliyor.": "fallback",
+            "Uyarı: son fotoğraf bölgesel ayrıntı kontrolünü geçemedi (eyes).": "detail",
+            "Bölgesel ayrıntı kontrolünü geçen aday yok (3 aday).": "detail",
+            "Gerçeklik ölçümü atlandı: ValueError": "skipped",
+            "NVIDIA görsel jürisi kapalı: NVIDIA_API_KEY (ortam ya da Retake klasöründeki .env) yok.": None,
         }
         for line, expected in cases.items():
             self.assertEqual(classify(line), expected, line)

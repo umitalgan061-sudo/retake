@@ -186,8 +186,11 @@ depo sürümü ve `origin/main` farkı, çalışan motorun kalite sürümü (dep
 açılış görevinin doğru klasörü çalıştırıp çalıştırmadığı, 8765'i başka bir programın
 tutup tutmadığı, CUDA, yüz çözünürlüğü (1024x1024 değilse uyarır), ArcFace/önbellek
 durumu, ekran belleğini kullanan diğer uygulamalar (ör. ArcGIS Pro), boş disk,
-motor ortamındaki paket çakışmaları (`onnxruntime` + `onnxruntime-gpu`), jüri jetonu
-ve Hafize jürisinin model sağlığı, yayındaki sitenin sürümü ve motor olay kaydı.
+motor ortamındaki paket çakışmaları (`onnxruntime` + `onnxruntime-gpu`), kimlik modeli dosyaları
+(`hyperswap_1b_256` ve yedeği hazır mı), jüri yolu (Hafize jetonu ya da `.env` içindeki
+`NVIDIA_API_KEY` ile doğrudan; anahtarın değeri okunmaz, yazılmaz) ve Hafize jürisinin model
+sağlığı, yayındaki sitenin sürümü ve motor olay kaydı (yedek kimlik modeline düşme ve bölgesel
+ayrıntı uyarıları dahil). `-ProbeJury` doğrudan yolda motorun kendi öz testini çalıştırır.
 Hiçbir ayarı değiştirmez, hiçbir şey indirmez veya kurmaz.
 
 **Gizlilik:** rapor fotoğraf, dosya adı, eşleştirme kodu, Hafize jetonu, anahtar,

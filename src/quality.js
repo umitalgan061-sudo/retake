@@ -116,10 +116,11 @@ export function describeFluxStatus(value) {
 
 // NVIDIA görsel jürisi (Hafize üzerinden) yalnız kimliği eşit finalistler arasında seçer.
 // Bu bir fotoğraf gerçekliği oylamasıdır; kimlik veya gerçeklik yüzdesi değildir.
-export function describeNvidiaJudge(outcome, votes = null, agreement = null) {
+export function describeNvidiaJudge(outcome, votes = null, agreement = null, layout = "") {
   const count = Number.isInteger(votes) && votes > 0 ? votes : null;
   const share = Number.isFinite(agreement) && agreement > 0 && agreement <= 1 ? Math.round(agreement * 100) : null;
-  const detail = count && share !== null ? ` (${count} oy, %${share} uzlaşı)` : "";
+  const sheet = layout === "review-sheet" && (outcome === "switched" || outcome === "kept") ? ", göz ve ağız yakın planlarıyla" : "";
+  const detail = count && share !== null ? ` (${count} oy, %${share} uzlaşı${sheet})` : sheet ? ` (${sheet.slice(2)})` : "";
   return ({
     "switched": "NVIDIA jürisi daha doğal görünen finalisti seçti" + detail,
     "kept": "NVIDIA jürisi yerel seçimi onayladı" + detail,

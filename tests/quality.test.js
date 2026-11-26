@@ -146,3 +146,14 @@ test("describes the finest-feature finishing step", () => {
   assert.equal(describeFineFeatures("no-mesh"), "");
   assert.equal(describeFineFeatures(""), "");
 });
+
+test("the jury badge says when close-ups were used", async () => {
+  const {describeNvidiaJudge} = await import("../src/quality.js");
+  assert.equal(
+    describeNvidiaJudge("switched", 8, 0.75, "review-sheet"),
+    "NVIDIA jürisi daha doğal görünen finalisti seçti (8 oy, %75 uzlaşı, göz ve ağız yakın planlarıyla)"
+  );
+  assert.equal(describeNvidiaJudge("kept", null, null, "review-sheet"), "NVIDIA jürisi yerel seçimi onayladı (göz ve ağız yakın planlarıyla)");
+  assert.equal(describeNvidiaJudge("abstain", 6, 0.5, "review-sheet"), "NVIDIA jürisi kararsız kaldı; yerel seçim korundu");
+  assert.equal(describeNvidiaJudge("kept", 6, 1, "face"), "NVIDIA jürisi yerel seçimi onayladı (6 oy, %100 uzlaşı)");
+});

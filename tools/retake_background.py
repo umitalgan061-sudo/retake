@@ -9,6 +9,11 @@ import sys
 import time
 from pathlib import Path
 
+try:
+    from .retake_event_log import EVENT_LOG_NAME, EventLog, EventLogSink
+except ImportError:  # Task Scheduler runs this file directly from tools/.
+    from retake_event_log import EVENT_LOG_NAME, EventLog, EventLogSink
+
 def write_status(path, state, **details):
     try:
         tmp=path.with_suffix(".tmp")
@@ -36,11 +41,18 @@ def build_args(cfg):
         args.extend(["--realism-python",marker.read_text(encoding="utf-8-sig").strip(),"--realism-models",str(realism/"models")])
     return args
 
+def open_event_log(config_path):
+    """Scrubbed operational log next to the config; RETAKE_EVENT_LOG=off disables."""
+    if os.environ.get("RETAKE_EVENT_LOG","").strip().lower() in {"0","off","false","no"}:
+        return None
+    return EventLog(Path(config_path).with_name(EVENT_LOG_NAME))
+
 def main():
     parser=argparse.ArgumentParser()
     parser.add_argument("--config",type=Path,required=True)
     args=parser.parse_args()
     status=args.config.with_name("background-status.json")
+    events=open_event_log(args.config)
     try:
         cfg=json.loads(args.config.read_text(encoding="utf-8-sig"))
         if not (Path(cfg["facefusion_dir"])/"facefusion.py").is_file():
@@ -63,14 +75,21 @@ def main():
         while port_open():
             write_status(status,"waiting_for_port")
             time.sleep(5)
-        from facefusion_local_server import main as serve
+        import facefusion_local_server as engine
+        serve=engine.main
         sys.argv=[str(Path(__file__).with_name("facefusion_local_server.py")),*build_args(cfg)]
         write_status(status,"starting")
+        if events:
+            events.record("start","Gizli motor başlatıldı",
+                          revision=str(getattr(engine,"QUALITY_PIPELINE_REVISION","")),
+                          boost=str(cfg.get("pixel_boost","1024x1024")))
         # Raw logs may include a pairing token, temporary photo paths and
-        # diagnostics. Keep them out of persistent logs; status contains only
-        # operational metadata. Health provides live details.
+        # diagnostics. Never persist them: only scrubbed operational lines
+        # (memory fallbacks, skipped steps, jury and job summaries) reach
+        # engine-events.jsonl; everything else is discarded as before.
         original_stdout,original_stderr=sys.stdout,sys.stderr
-        with open(os.devnull,"w",encoding="utf-8") as sink:
+        sink=EventLogSink(events) if events else open(os.devnull,"w",encoding="utf-8")
+        with sink:
             sys.stdout=sys.stderr=sink
             try:
                 write_status(status,"running")
@@ -78,9 +97,14 @@ def main():
             finally:
                 sys.stdout,sys.stderr=original_stdout,original_stderr
         write_status(status,"stopped",exit_code=code)
+        if events:
+            events.record("stop","Gizli motor durdu",code=int(code or 0))
         return code if code else 1
     except Exception as error:
         write_status(status,"failed",error_type=type(error).__name__)
+        if events:
+            # Exception type only: messages can contain local paths.
+            events.record("error",f"Gizli motor çalışamadı: {type(error).__name__}")
         return 1
 
 if __name__=="__main__":

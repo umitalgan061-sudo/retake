@@ -165,6 +165,35 @@ Servis sağlık kontrolü: `http://127.0.0.1:8765/health`
 
 Ayrıntılı kurulum ve sorun giderme: [docs/LOCAL_FACEFUSION_SETUP.md](docs/LOCAL_FACEFUSION_SETUP.md).
 
+### Tek komutla tanı raporu (doctor)
+
+Kalite beklenenden düşükse veya motor yanıt vermiyorsa önce bunu çalıştır:
+
+```powershell
+.\tools\retake_doctor.ps1              # tam denetim, rapor panoya kopyalanır
+.\tools\retake_doctor.ps1 -ProbeJury   # + Hafize jürisine iki sentetik renk kartı (fotoğraf değil)
+.\tools\retake_doctor.ps1 -Offline     # yalnız bu bilgisayar (GitHub/Hafize/site yok)
+```
+
+Rapor tek metinde şunları denetler ve önem sırasıyla yapılacak adımları yazar:
+depo sürümü ve `origin/main` farkı, çalışan motorun kalite sürümü (depoyla aynı mı),
+açılış görevinin doğru klasörü çalıştırıp çalıştırmadığı, 8765'i başka bir programın
+tutup tutmadığı, CUDA, yüz çözünürlüğü (1024x1024 değilse uyarır), ArcFace/önbellek
+durumu, ekran belleğini kullanan diğer uygulamalar (ör. ArcGIS Pro), boş disk,
+motor ortamındaki paket çakışmaları (`onnxruntime` + `onnxruntime-gpu`), jüri jetonu
+ve Hafize jürisinin model sağlığı, yayındaki sitenin sürümü ve motor olay kaydı.
+Hiçbir ayarı değiştirmez, hiçbir şey indirmez veya kurmaz.
+
+**Gizlilik:** rapor fotoğraf, dosya adı, eşleştirme kodu, Hafize jetonu, anahtar,
+Windows kullanıcı/bilgisayar adı ve yerel yol içermez (testlerle doğrulanır).
+
+**Motor olay kaydı:** gizli (açılış görevi) motor ham çıktısını yine saklamaz; yalnız
+kaliteyi açıklayan satırlar — GPU bellek hatasıyla çözünürlüğe inme, gerçekçilik
+aşaması hatası, atlanan jüri veya ince adım, iş sonucu (tur, benzerlik, süre) —
+yolları, adresleri ve uzun dizgeleri temizlenmiş olarak `%USERPROFILE%\.retake\engine-events.jsonl`
+dosyasına yazılır (256 KB'ta döner; eşleştirme kodu/jeton içeren satırlar hiç yazılmaz).
+Kapatmak için: `RETAKE_EVENT_LOG=off`.
+
 ### Fotoğraf gerçekçiliği katmanı (önerilir, tek seferlik kurulum)
 
 FaceFusion'ın yüz modelleri yüzü 256 px'te çizer: cilt mumsu, dudak düz ve parlak, gözler bulanık kalır. Bu katman, yüzü gerçek fotoğraflarla eğitilmiş bir difüzyon modeliyle (Realistic Vision 6, SD 1.5 inpainting) yeniden işler. Model **kişinin kendi ArcFace kimliğiyle** (25 referansın kimlik merkezi, IP-Adapter FaceID) yönlendirilir; böylece gerçekçilik yüzü "genel bir insana" çekmez. Sonuç sahnenin ışığını ve rengini FaceFusion'dan alır, gözenek, kıl, dudak kıvrımı ve göz parıltısı gibi ince dokuyu modelden.

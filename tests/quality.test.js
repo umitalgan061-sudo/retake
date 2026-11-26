@@ -54,8 +54,8 @@ test("the result is compared with the person's own photos", async () => {
 });
 
 test("original cosine below zero is not silently displayed as zero", () => {
-  assert.match(describeSimilarity(.87, -.12), /orijinal -12,00 \(kosinüs\)/);
-  assert.match(describeSimilarity(.87, .001), /orijinal 0,10 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, -.12), /orijinal -0,1200 \(kosinüs\)/);
+  assert.match(describeSimilarity(.87, .001), /orijinal 0,0010 \(kosinüs\)/);
 });
 test("FLUX configuration is not evidence of a selected candidate", async () => {
   const {describeFluxStatus} = await import("../src/quality.js");
@@ -156,4 +156,48 @@ test("the jury badge says when close-ups were used", async () => {
   assert.equal(describeNvidiaJudge("kept", null, null, "review-sheet"), "NVIDIA jürisi yerel seçimi onayladı (göz ve ağız yakın planlarıyla)");
   assert.equal(describeNvidiaJudge("abstain", 6, 0.5, "review-sheet"), "NVIDIA jürisi kararsız kaldı; yerel seçim korundu");
   assert.equal(describeNvidiaJudge("kept", 6, 1, "face"), "NVIDIA jürisi yerel seçimi onayladı (6 oy, %100 uzlaşı)");
+});
+
+
+test("lower-face measurements are distinguished from identity and malformed evidence is omitted", async () => {
+  const {describePortraitEvidence,describeFluxMetrics}=await import("../src/quality.js");
+  assert.match(describePortraitEvidence("chin:0.00>3.10/0.000>0.120","0.8"), /çene 0,00→3,10/);
+  assert.match(describePortraitEvidence("chin:0.00>3.10/0.000>0.120","0.8"), /doku\/kontrast/);
+  assert.equal(describePortraitEvidence("chin:0.00>3.10/0.000>2.0",""),"");
+  assert.equal(describePortraitEvidence("",""),"");
+  assert.match(describeFluxMetrics(-.005,.009,.025), /karışım %2,5/);
+});
+
+
+test("portrait geometry requires a measured mesh and respects pixel aspect ratio", async () => {
+  const {portraitGeometry,describePortraitGeometry}=await import("../src/quality.js");
+  const points=Array.from({length:478},()=>({x:.5,y:.5}));
+  const positions={234:[.25,.5],454:[.75,.5],10:[.5,.2],152:[.5,.8],33:[.3,.4],133:[.4,.4],362:[.6,.4],263:[.7,.4],159:[.35,.39],145:[.35,.41],386:[.65,.39],374:[.65,.41],61:[.4,.65],291:[.6,.65],13:[.5,.64],14:[.5,.66],98:[.45,.55],327:[.55,.55],172:[.3,.7],397:[.7,.7]};
+  for(const [i,[x,y]] of Object.entries(positions))points[i]={x,y};
+  const source=portraitGeometry(points,400,200);
+  assert.equal(source.width,200);
+  assert.equal(source.height,120);
+  assert.ok(Math.abs(source.values.rightEye-.1)<1e-9);
+  const edited=points.map(p=>({...p}));edited[159].y-=.01;
+  const delivered=portraitGeometry(edited,400,200);
+  assert.ok(delivered.values.rightEye>source.values.rightEye);
+  assert.match(describePortraitGeometry({source,delivered}),/sağ göz açıklığı 0,10→0,15/);
+  assert.match(describePortraitGeometry({source,delivered:null}),/ölçülemedi/);
+  assert.equal(portraitGeometry(points.slice(0,100),400,200),null);
+  assert.equal(portraitGeometry(points,20,20),null);
+});
+
+
+test("native input evidence does not mistake a larger smooth image for texture", async () => {
+  const {sourcePortraitQuality,describeSourcePortraitQuality}=await import("../src/quality.js");
+  const size=64, flat=new Uint8ClampedArray(size*size*4).fill(120);
+  const bounds={x:0,y:0,width:64,height:64};
+  const a=sourcePortraitQuality(flat,size,size,bounds);
+  assert.ok(a.edgeEnergy<1e-9);
+  assert.equal(a.clippedFraction,0);
+  assert.match(describeSourcePortraitQuality(a),/gerçek giriş ayrıntısı sınırlı/);
+  const striped=flat.slice();
+  for(let y=0;y<size;y++)for(let x=0;x<size;x++)if(x%2===0)striped.fill(80,(y*size+x)*4,(y*size+x)*4+3);
+  assert.ok(sourcePortraitQuality(striped,size,size,bounds).edgeEnergy>a.edgeEnergy);
+  assert.equal(sourcePortraitQuality(flat,size,size,{...bounds,width:3}),null);
 });

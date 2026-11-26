@@ -74,6 +74,9 @@ def choose_and_transfer_lower_face(
     face_width: float,
     *,
     strength: float = 0.90,
+    moustache_scale: float = 1.0,
+    jaw_scale: float = 1.0,
+    alternate: bool = False,
 ) -> tuple[np.ndarray, int, list[dict[str, float]]]:
     """Return an additional lower-face candidate using real photo structure.
 
@@ -84,7 +87,7 @@ def choose_and_transfer_lower_face(
     The final candidate must pass ArcFace and seam screening upstream.
     Unmodelled hands over the beard remain a limitation.
     """
-    if not candidates or not 0.0 < strength <= 1.0:
+    if not candidates or not 0.0 < strength <= 1.0 or not all(0.75 <= value <= 1.25 for value in (moustache_scale, jaw_scale)):
         raise ValueError("Alt yüz aktarma adayı veya gücü geçersiz.")
     if swapped.shape != target.shape or swapped.ndim != 3 or swapped.shape[2] != 3:
         raise ValueError("Hedef ve aktarım görseli aynı BGR boyutunda olmalı.")
@@ -94,7 +97,7 @@ def choose_and_transfer_lower_face(
 
     allowed = _changed_mask(swapped, target, face_width)
     fits: list[dict[str, float]] = []
-    best = None
+    ranked = []
     for index, candidate in enumerate(candidates):
         reference, reference_points = candidate
         source_points = np.asarray(reference_points, np.float32)
@@ -119,12 +122,28 @@ def choose_and_transfer_lower_face(
         fit = candidate_fit(filled, weight, swapped, target, face_width)
         fit["score"] -= 0.025 * index  # prefer the best pose from the browser on close fits
         fits.append(fit)
-        if best is None or fit["score"] > best[0]:
-            best = (fit["score"], index, warped, weight, fit["structure"])
-    if best is None or best[4] < MIN_LOWER_FIT:
+        if fit["structure"] >= MIN_LOWER_FIT:
+            ranked.append((fit["score"], index, warped, weight, fit["structure"]))
+    if not ranked:
         raise ValueError("Referans sakal/çene pozları hedefle yeterince uyuşmuyor.")
+    ranked.sort(key=lambda row: row[0], reverse=True)
+    best = ranked[0]
+    if alternate and len(ranked)>1 and ranked[1][0] >= best[0]-.08:
+        best=ranked[1]
     _, selected, warped, weight, _ = best
     warped = match_broad_light(warped, swapped, weight, face_width)
-    amount = np.clip(weight * strength, 0.0, 1.0)
+    # Independent moustache vs jaw strengths, with a soft transition and
+    # the existing lip-exclusion and face-coverage masks still enforced.
+    amount = zoned_transfer_amount(weight, points, face_width, strength, moustache_scale, jaw_scale)
     merged = swapped.astype(np.float32) * (1.0 - amount[:, :, None]) + warped * amount[:, :, None]
     return np.clip(np.rint(merged), 0, 255).astype(np.uint8), selected, fits
+
+
+def zoned_transfer_amount(weight, points, face_width, strength, moustache_scale=1., jaw_scale=1.):
+    if moustache_scale == jaw_scale:
+        return np.clip(weight*strength*jaw_scale,0.,1.)
+    region=np.zeros(weight.shape,np.uint8)
+    cv2.fillPoly(region,[np.round(points[list(MOUSTACHE)]).astype(np.int32)],255)
+    zone=cv2.GaussianBlur(region.astype(np.float32)/255.,(0,0),max(1.,face_width*.018))
+    scale=jaw_scale+(moustache_scale-jaw_scale)*zone
+    return np.clip(weight*strength*scale,0.,1.)

@@ -104,6 +104,8 @@ def harmonize_neck(original, composite, bounds, landmarks):
     roi=output[y0:y1,x0:x1]
     roi[changed,:3]=adjusted[changed]
     roi[changed,3]=255
+    if not neck_transition_safe(src,dst,roi,changed):
+        return None,"quality-rejected",0
     return output,"applied",int(np.count_nonzero(changed))
 
 
@@ -114,3 +116,35 @@ def neck_candidate_file(original_path, composite_path, output_path, bounds, land
     if result is not None and not cv2.imwrite(str(output_path),result):
         raise OSError("Neck candidate write failed")
     return status,count
+
+
+def neck_transition_safe(original, base, edited, changed):
+    """Check local texture/shadow continuity and exact protection of base pixels.
+
+    This is a conservative pixel guard, not a semantic neck or collar detector.
+    """
+    if changed.shape != original.shape[:2] or not np.any(changed):
+        return False
+    if np.any(changed & (base[:,:,3]!=0)):
+        return False
+    if not np.array_equal(edited[~changed],base[~changed]):
+        return False
+    delta=edited[:,:,:3].astype(np.float32)-original.astype(np.float32)
+    delta[~changed]=0
+    if float(np.max(np.abs(delta)))>18:
+        return False
+    # A slowly varying color correction should not introduce abrupt local
+    # jumps in the existing shadow or a new visible band around the mask.
+    if max(float(np.max(np.abs(np.diff(delta,axis=axis)))) for axis in (0,1))>9:
+        return False
+    old=cv2.cvtColor(original,cv2.COLOR_BGR2GRAY).astype(np.float32)
+    new=cv2.cvtColor(edited[:,:,:3],cv2.COLOR_BGR2GRAY).astype(np.float32)
+    core=cv2.erode(changed.astype(np.uint8),np.ones((5,5),np.uint8))>0
+    if np.count_nonzero(core)>20:
+        old_high=old-cv2.GaussianBlur(old,(0,0),1.)
+        new_high=new-cv2.GaussianBlur(new,(0,0),1.)
+        old_energy=float(np.sqrt(np.mean(old_high[core]**2)))
+        new_energy=float(np.sqrt(np.mean(new_high[core]**2)))
+        if old_energy>=1.5 and not .78<=new_energy/old_energy<=1.30:
+            return False
+    return True

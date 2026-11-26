@@ -2581,7 +2581,11 @@ def run_ultra_search(
             judge_started = clock()
             try:
                 bounds = parsed[6]["faceBounds"]
-                verdict = judge([face_crop_jpeg(item[0], bounds) for item in pool])
+                if getattr(judge, "accepts_images", False):
+                    # v28: review sheets (face + eye/mouth close-ups) from the delivered pixels.
+                    verdict = judge([item[0] for item in pool], bounds, metadata.get("targetLandmarks"))
+                else:
+                    verdict = judge([face_crop_jpeg(item[0], bounds) for item in pool])
                 judge_seconds = clock() - judge_started
                 pick = judged_winner(verdict, len(pool))
                 if pick is None:
@@ -2927,7 +2931,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
             "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined, "
             "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera, "
-            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats"
+            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats, X-Retake-NVIDIA-Judge-Layout"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")

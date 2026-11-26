@@ -234,6 +234,21 @@ class UltraJuryTest(unittest.TestCase):
         self.assertNotEqual(photo, images[0])
         self.assertGreaterEqual(float(headers["X-Retake-Similarity"]), .800 - srv.ULTRA_REALISM_TIE_LOSS)
 
+    def test_an_image_judge_gets_the_delivered_pixels_and_the_face_box(self):
+        calls = []
+
+        def judge(images, bounds, landmarks=None):
+            calls.append((images, bounds, landmarks))
+            return {"decision": "winner", "winner": 1, "votes": 6, "agreement": 1.0, "models": [], "layout": "review-sheet"}
+
+        judge.accepts_images = True
+        photo, headers, images = self.run_search(judge)
+        self.assertEqual(len(calls), 1)
+        sent, bounds, _ = calls[0]
+        self.assertTrue(all(image in images.values() for image in sent), "full candidate PNGs, the sheet is made inside")
+        self.assertIn("width", bounds)
+        self.assertEqual(headers["X-Retake-NVIDIA-Judge-Layout"], "review-sheet")
+
     def test_agreeing_split_and_failing_juries_keep_the_local_winner(self):
         for verdict, outcome in (
             ({"decision": "winner", "winner": 0, "votes": 6, "agreement": 1.0, "models": []}, "kept"),
@@ -320,3 +335,83 @@ class NeckMetadataTest(unittest.TestCase):
         for invalid in ("true",1,None):
             with self.assertRaises(ValueError):
                 srv._validate_metadata({**base,"neckHarmonize":invalid},25)
+
+
+class ReviewSheetTest(unittest.TestCase):
+    """v28: one JPEG per finalist with eye/brow and mouth close-ups."""
+
+    def painted_png(self):
+        image = np.full((1000, 800, 4), 255, np.uint8)
+        image[:, :, :3] = (120, 130, 140)
+        # Eyes band red, mouth band blue (BGR), inside the face box.
+        image[350 + 60:350 + 120, 310:510, :3] = (0, 0, 255)
+        image[350 + 190:350 + 240, 360:460, :3] = (255, 0, 0)
+        ok, encoded = cv2.imencode(".png", image)
+        return encoded.tobytes()
+
+    def test_sheet_shows_the_face_and_enlarged_close_ups(self):
+        sheet = nj.review_sheet_jpeg(self.painted_png(), BOUNDS)
+        self.assertTrue(sheet.startswith(b"\xff\xd8\xff"))
+        self.assertLessEqual(len(sheet), nj.MAX_CROP_BYTES)
+        decoded = cv2.imdecode(np.frombuffer(sheet, np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(decoded.shape[0], nj.SHEET_HEIGHT)
+        right = decoded[:, decoded.shape[1] - nj.SHEET_CLOSEUP_WIDTH:]
+        half = (nj.SHEET_HEIGHT - nj.SHEET_GAP) // 2
+        eyes, mouth = right[:half], right[nj.SHEET_HEIGHT - half:]
+        red = lambda panel: float(((panel[:, :, 2] > 200) & (panel[:, :, 0] < 60)).mean())
+        blue = lambda panel: float(((panel[:, :, 0] > 200) & (panel[:, :, 2] < 60)).mean())
+        self.assertGreater(red(eyes), 0.15, "the eye close-up shows the eye band")
+        self.assertGreater(blue(mouth), 0.10, "the mouth close-up shows the mouth")
+        self.assertLess(blue(eyes), 0.02)
+
+    def test_mesh_boxes_follow_the_landmarks(self):
+        from tests.test_fine_features import synthetic_mesh
+        mesh = synthetic_mesh()
+        boxes = nj.closeup_boxes({"x": 90, "y": 100, "width": 220, "height": 260}, mesh.tolist(), (420, 400))
+        x0, y0, x1, y1 = boxes["eyes"]
+        self.assertTrue(x0 < 112 and x1 > 288 and y0 < 138 and y1 > 182)
+        mx0, my0, mx1, my1 = boxes["mouth"]
+        self.assertTrue(mx0 < 155 and mx1 > 245 and my0 < 274 and my1 > 306)
+        fallback = nj.closeup_boxes({"x": 90, "y": 100, "width": 220, "height": 260}, None, (420, 400))
+        self.assertEqual(set(fallback), {"eyes", "mouth"})
+
+    def test_judge_sends_sheets_and_falls_back_for_an_older_hafize(self):
+        judge = nj.build_judge({"RETAKE_HAFIZE_PROJECT_TOKEN": TOKEN})
+        self.assertTrue(getattr(judge, "accepts_images", False))
+        images = [synthetic_png(seed) for seed in (1, 2)]
+        ok = RecordingOpener({"decision": "abstain", "winner": None, "votes": 2, "agreement": 0.5, "models": []})
+        verdict = judge(images, BOUNDS, None, opener=ok)
+        self.assertEqual(verdict["layout"], "review-sheet")
+        body = json.loads(ok.requests[0][0].data)
+        self.assertEqual(body["layout"], "review-sheet")
+        self.assertEqual(set(body), {"task", "candidates", "layout"})
+        self.assertEqual(nj.judge_headers("abstain", 2, verdict)["X-Retake-NVIDIA-Judge-Layout"], "review-sheet")
+
+        class OldHafize(RecordingOpener):
+            def open(self, request, timeout=None):
+                self.requests.append((request, timeout))
+                if "layout" in json.loads(request.data):
+                    raise urllib.error.HTTPError(request.full_url, 400, "bad", {}, io.BytesIO(b'{"error":"PROJECT_AI_INVALID_INPUT"}'))
+                return FakeResponse(json.dumps(self.payload).encode("utf-8"))
+
+        old = OldHafize({"decision": "winner", "winner": 1, "votes": 4, "agreement": 1, "models": []})
+        verdict = judge(images, BOUNDS, None, opener=old)
+        self.assertEqual(verdict["layout"], "face")
+        self.assertEqual(verdict["winner"], 1)
+        self.assertEqual(len(old.requests), 2)
+        self.assertNotIn("layout", json.loads(old.requests[1][0].data))
+
+        class Down(RecordingOpener):
+            def open(self, request, timeout=None):
+                self.requests.append((request, timeout))
+                raise urllib.error.HTTPError(request.full_url, 503, "down", {}, io.BytesIO(b'{"error":"PROJECT_AI_UPSTREAM_FAILED"}'))
+
+        down = Down()
+        with self.assertRaises(nj.JudgeError):
+            judge(images, BOUNDS, None, opener=down)
+        self.assertEqual(len(down.requests), 1, "only a layout refusal is retried")
+
+    def test_bad_layout_is_refused_before_network(self):
+        with self.assertRaises(ValueError):
+            nj.request_judgement(nj.JudgeConfig(nj.DEFAULT_URL, TOKEN), [nj.face_crop_jpeg(synthetic_png(1), BOUNDS)] * 2,
+                                 opener=RecordingOpener({}), layout="poster")

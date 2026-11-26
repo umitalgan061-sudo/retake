@@ -481,7 +481,11 @@ def accept_fine_refinement(report: dict[str, Any], refined_score: float | None,
         return False, "identity-unmeasured"
     if refined_score < current_score - FINE_IDENTITY_TOLERANCE:
         return False, "identity-loss"
+    if not fine_regions_preserved(report):
+        return False, "region-regression"
     gain = float(report.get("quality_after", 0.0)) - float(report.get("quality_before", 0.0))
+    if not math.isfinite(gain):
+        return False, "unmeasured"
     if (gain < FINE_MIN_QUALITY_GAIN and int(report.get("catchlights_restored", 0)) == 0
             and int(report.get("sclera_corrected", 0)) == 0):
         return False, "no-gain"
@@ -495,3 +499,37 @@ def describe_report(report: dict[str, Any]) -> str:
         f"{name}:{item['before']:.3f}>{item['after']:.3f}" for name, item in features.items()
         if isinstance(item, dict) and name in FEATURES
     )
+
+
+def fine_regions_preserved(report):
+    """A mean gain cannot hide a pronounced loss in either eye or lips."""
+    for name,item in (report.get("features") or {}).items():
+        if name not in FEATURES or not isinstance(item,dict):
+            continue
+        try:
+            before,after=float(item["before"]),float(item["after"])
+        except (TypeError,ValueError,KeyError):
+            return False
+        if not all(math.isfinite(v) and v>0 for v in (before,after)):
+            return False
+        tolerance=.08 if _kind(name) in ("eye","lips","mouth") else .12
+        if _quality(after)<_quality(before)-tolerance:
+            return False
+    return True
+
+
+def delivered_fine_report(report, accepted):
+    """Report proposed corrections only when those pixels were committed."""
+    if accepted:
+        return report
+    result=dict(report)
+    result["features"]={name:{**item,"after":item.get("before"),"action":"keep"}
+                        for name,item in (report.get("features") or {}).items()}
+    for key,success in (("catchlights","restored"),("sclera","corrected")):
+        outcomes=report.get(key)
+        if isinstance(outcomes,dict):
+            result[key]={eye:("not-applied" if status==success else status)
+                         for eye,status in outcomes.items()}
+    result["catchlights_restored"]=0
+    result["sclera_corrected"]=0
+    return result

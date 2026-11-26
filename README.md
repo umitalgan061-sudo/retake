@@ -86,6 +86,15 @@ Sonuç kalitesi süreden daha önemliyse sitede **Kalite derinliği** seçilir (
 - Sonuç rozeti ne yapıldığını yazar: "Derin arama · ince ayar sonucu 1 adımda iyileştirdi (3 denendi) · 2 gerçekçilik finalisti karşılaştırıldı". Yanıt başlıkları: `X-Retake-Ultra-Depth`, `X-Retake-Ultra-Refinements`, `X-Retake-Ultra-Realism-Finalists`, `X-Retake-Variation-Params`.
 - Eski tarayıcılar derinlik göndermez; motor onlar için Standart çalışır. Motor derinliği desteklemiyorsa site seçimi gizler ve Standart gönderir.
 
+### Kalıcı ArcFace ölçümü (v25)
+
+Her kimlik ölçümü eskiden yeni bir Python süreci açıp FaceFusion'ı içe aktarıyor, YOLO yüz algılayıcısını ve ArcFace ONNX oturumunu (CUDA kurulumu dahil) sıfırdan yüklüyordu. Bir render 5–7 kez ölçüm yaptığı için (havuz seçimi, pekiştirme, karışımlar, son adaylar, ince bölge ve kontur adımları), geçiş önbelleği devreye girdikten sonra turun büyük kısmı aynı iki modeli yüklemekle geçiyordu.
+
+- Motor artık iş boyunca tek bir ArcFace çalışanını modeller yüklü halde tutar ve stdin/stdout üzerinden satır satır JSON ile konuşur (`tools/identity_scorer.py`, çalışanın `--serve` kipi). Ölçüm sonuçları aynı modelden ve aynı kodla gelir; yalnız yükleme tekrarlanmaz.
+- Yalnız hızlandırıcıdır: başlatma hatası, çökme, zaman aşımı veya bozuk yanıtta çalışan kapatılır ve o ölçüm eski tek seferlik yolla yapılır. Art arda 3 hatada kalıcı yol motor yeniden başlayana kadar kapanır.
+- GPU belleği: çalışan her işten sonra ve difüzyon gerçekçilik geçişinden önce kapatılır. Bir FaceFusion geçişi bellek hatası verirse, kaliteyi (pixel boost) düşürmeden önce ArcFace çalışanı kapatılıp aynı ayarla yeniden denenir.
+- Kapatmak için: `RETAKE_PERSISTENT_ARCFACE=off`. `/health` → `identity_scorer` başlatma, ölçüm, hata sayısını ve ortalama ölçüm süresini gösterir.
+
 ### İnce bölgeler: göz, kirpik, kaş, dudak, burun ucu, diş, göz ışığı ve göz akı (v24)
 
 Yüz genelindeki doku eşleştirmesi tek bir keskinlik oranı kullanır: yanakları keskinleştirirken gözler yumuşak kalabilir. Bir yüz değişiminin "yapay" görünmesinin en sık nedeni de tam bu küçük yerlerdir — kirpik ve göz kapağı çizgisi silinir, kaş kılı mumlaşır, dudak çizgileri kaybolur, gözbebeğindeki ışık yansıması (catchlight) söner, göz akı griye/sarıya kayar. Motor artık her adayda, tarayıcının 478 noktalı yüz ağıyla bu bölgeleri tek tek ölçer (`tools/fine_features.py`):

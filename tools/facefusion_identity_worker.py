@@ -13,6 +13,7 @@ from identity_consistency import (
 )
 
 REPORT_PREFIX = "RETAKE_IDENTITY_REPORT="
+READY_PREFIX = "RETAKE_IDENTITY_READY="
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,7 +23,11 @@ def parse_args() -> argparse.Namespace:
     # Probe mode: score images against a stored identity centroid.
     parser.add_argument("--centroid-file", type=Path)
     parser.add_argument("--probe-paths", nargs="+", type=Path)
+    # Serve mode: load the models once, answer JSON lines on stdin (v25).
+    parser.add_argument("--serve", action="store_true")
     args = parser.parse_args()
+    if args.serve:
+        return args
     if bool(args.centroid_file) != bool(args.probe_paths):
         parser.error("--centroid-file ve --probe-paths birlikte verilmeli.")
     if not args.reference_paths and not args.probe_paths:
@@ -139,10 +144,7 @@ def run(facefusion_dir: Path, reference_paths: list[Path]) -> dict[str, object]:
     return report
 
 
-def probe(facefusion_dir: Path, centroid_file: Path, probe_paths: list[Path]) -> dict[str, object]:
-    """Similarity of each probe image's largest face to the stored centroid."""
-    centroid = json.loads(centroid_file.read_text(encoding="utf-8"))
-    models = load_models(facefusion_dir)
+def probe_with_models(models, centroid: list[float], probe_paths: list[Path]) -> list[float | None]:
     similarities: list[float | None] = []
     for probe_path in probe_paths:
         try:
@@ -150,11 +152,74 @@ def probe(facefusion_dir: Path, centroid_file: Path, probe_paths: list[Path]) ->
         except RuntimeError as error:
             print(f"[ArcFace] {error}", flush=True)
             similarities.append(None)
-    return {"ok": True, "similarities": similarities}
+    return similarities
+
+
+def probe(facefusion_dir: Path, centroid_file: Path, probe_paths: list[Path]) -> dict[str, object]:
+    """Similarity of each probe image's largest face to the stored centroid."""
+    centroid = json.loads(centroid_file.read_text(encoding="utf-8"))
+    models = load_models(facefusion_dir)
+    return {"ok": True, "similarities": probe_with_models(models, centroid, probe_paths)}
+
+
+def _valid_request(request: Any) -> tuple[list[float], list[Path]]:
+    if not isinstance(request, dict):
+        raise ValueError("istek bir nesne olmalı")
+    centroid, probes = request.get("centroid"), request.get("probes")
+    if not isinstance(centroid, list) or not 64 <= len(centroid) <= 4096 or not all(
+            type(value) in (int, float) for value in centroid):
+        raise ValueError("centroid geçersiz")
+    if not isinstance(probes, list) or not 1 <= len(probes) <= 64 or not all(isinstance(path, str) for path in probes):
+        raise ValueError("probes geçersiz")
+    return [float(value) for value in centroid], [Path(path) for path in probes]
+
+
+def serve(facefusion_dir: Path, models=None, stdin=None, stdout=None) -> int:
+    """Answer one JSON request per line with the models loaded once.
+
+    Only the engine that started this process writes to its stdin; paths are
+    the engine's own temporary files.
+    """
+    if stdin is None and stdout is None:
+        # The engine reads and writes UTF-8 whatever the Windows code page.
+        for stream in (sys.stdin, sys.stdout, sys.stderr):
+            if hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+    stdin = stdin or sys.stdin
+    stdout = stdout or sys.stdout
+
+    def emit(prefix: str, payload: dict[str, object]) -> None:
+        stdout.write(prefix + json.dumps(payload, ensure_ascii=True) + "\n")
+        stdout.flush()
+
+    try:
+        models = models or load_models(facefusion_dir)
+    except Exception as error:
+        emit(READY_PREFIX, {"ok": False, "error": f"{type(error).__name__}: {error}"})
+        return 2
+    emit(READY_PREFIX, {"ok": True})
+    for line in stdin:
+        line = line.strip()
+        if not line:
+            continue
+        request_id = None
+        try:
+            request = json.loads(line)
+            if isinstance(request, dict) and request.get("op") == "quit":
+                break
+            request_id = request.get("id") if isinstance(request, dict) else None
+            centroid, probes = _valid_request(request)
+            emit(REPORT_PREFIX, {"id": request_id, "ok": True, "similarities": probe_with_models(models, centroid, probes)})
+        except Exception as error:
+            emit(REPORT_PREFIX, {"id": request_id, "ok": False, "error": f"{type(error).__name__}: {error}"})
+    return 0
 
 
 def main() -> int:
     args = parse_args()
+    if args.serve:
+        facefusion_dir = args.facefusion_dir.expanduser().resolve()
+        return serve(facefusion_dir)
     stage = "FaceFusion ArcFace worker başlatılıyor"
     try:
         stage = "FaceFusion dizini doğrulanıyor"

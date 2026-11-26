@@ -161,3 +161,37 @@ class VisibleIdentityProbeTest(unittest.TestCase):
             cv2.imwrite(str(b),np.zeros((81,81,4),np.uint8))
             with self.assertRaises(ValueError):
                 prepare_visible_identity_probe(a,b,root)
+
+
+    def test_final_checkpoint_rejects_pixel_mutation_but_ignores_hidden_rgb(self):
+        from tools.retake_output_transport import prepare_visible_identity_probe,verify_visible_checkpoint
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            a,b,final=(root/name for name in ("target.png","candidate.png","final.png"))
+            target=np.full((80,80,3),120,np.uint8)
+            composite=cv2.cvtColor(target,cv2.COLOR_BGR2BGRA)
+            composite[:,:,3]=0
+            composite[25:55,25:55]=[100,130,160,255]
+            cv2.imwrite(str(a),target);cv2.imwrite(str(b),composite)
+            checkpoint=prepare_visible_identity_probe(a,b,root)
+            composite[0,0,:3]=0
+            cv2.imwrite(str(final),composite)
+            self.assertTrue(verify_visible_checkpoint(a,final,checkpoint,root))
+            composite[30,30,0]+=1
+            cv2.imwrite(str(final),composite)
+            self.assertFalse(verify_visible_checkpoint(a,final,checkpoint,root))
+            self.assertFalse(verify_visible_checkpoint(a,final,None,root))
+
+    def test_opaque_candidate_has_immutable_probe_even_if_original_path_is_overwritten(self):
+        from tools.retake_output_transport import prepare_visible_identity_probe
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);a,b=root/"target.png",root/"render.png"
+            cv2.imwrite(str(a),np.zeros((80,80,3),np.uint8))
+            cv2.imwrite(str(b),np.full((80,80,3),50,np.uint8))
+            first=prepare_visible_identity_probe(a,b,root)
+            cv2.imwrite(str(b),np.full((80,80,3),80,np.uint8))
+            second=prepare_visible_identity_probe(a,b,root)
+            self.assertEqual(first.name,second.name)
+            self.assertNotEqual(first,second)
+            self.assertTrue(np.all(cv2.imread(str(first))==50))
+            self.assertTrue(np.all(cv2.imread(str(second))==80))

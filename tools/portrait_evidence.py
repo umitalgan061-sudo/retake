@@ -81,7 +81,14 @@ def describe_regions(gray):
         high=patch-smooth
         # Local dark-detail fraction is a contrast proxy: a beard, shadow,
         # compression and other texture may all contribute.
+        gx=cv2.Sobel(patch,cv2.CV_32F,1,0,ksize=3)/8.0
+        gy=cv2.Sobel(patch,cv2.CV_32F,0,1,ksize=3)/8.0
+        xx,yy,xy=float(np.mean(gx*gx)),float(np.mean(gy*gy)),float(np.mean(gx*gy))
+        # Texture orientation coherence, not proof of facial hair. Only use
+        # it where the native image actually contains sufficient gradients.
+        coherence=math.hypot(xx-yy,2*xy)/(xx+yy) if xx+yy>=4 else None
         result[name]={
+            "coherence":coherence,
             "energy":float(np.sqrt(np.mean(high**2))),
             "edge":float(np.mean(np.abs(high)>=3)),
             "dark":float(np.mean((smooth-patch)>=3)),
@@ -124,7 +131,8 @@ def reference_evidence(original, edited, bounds, landmarks=None, references=()):
     distances=[]
     for name in ("moustache","chin","jaw_l","jaw_r"):
         if name not in measured or any(name not in row for row in rows): continue
-        for metric,floor in (("energy",2.0),("edge",.10),("dark",.08),("contrast",12.0)):
+        for metric,floor in (("energy",2.0),("edge",.10),("dark",.08),("contrast",12.0),("coherence",.20)):
+            if measured[name][metric] is None or any(row[name][metric] is None for row in rows): continue
             values=np.array([row[name][metric] for row in rows],np.float32)
             low,high=float(np.min(values)),float(np.max(values))
             value=measured[name][metric]
@@ -135,7 +143,11 @@ def reference_evidence(original, edited, bounds, landmarks=None, references=()):
 
 def reference_evidence_file(original_path, edited_path, bounds, landmarks, real_face):
     original=cv2.imread(str(original_path),cv2.IMREAD_COLOR)
-    edited=cv2.imread(str(edited_path),cv2.IMREAD_COLOR)
+    edited=cv2.imread(str(edited_path),cv2.IMREAD_UNCHANGED)
+    # Measure the RGB actually delivered by binary-alpha transport, not
+    # undefined RGB hidden outside the authorized edit extent.
+    if original is not None and edited is not None and edited.ndim==3 and edited.shape[2]==4 and original.shape[:2]==edited.shape[:2]:
+        edited=np.where(edited[:,:,3:4]>0,edited[:,:,:3],original)
     refs=[]
     if real_face:
         for payload,ref in zip(real_face.get("images",()),real_face.get("references",())):

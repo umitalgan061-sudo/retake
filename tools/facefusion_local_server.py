@@ -28,6 +28,7 @@ try:
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from .identity_scorer import PersistentIdentityScorer
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
     from .ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
@@ -53,6 +54,7 @@ except ImportError:
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
     from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from identity_scorer import PersistentIdentityScorer
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
     from ultra_quality import check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
@@ -428,6 +430,21 @@ def validate_reference_count(reference_count: int) -> None:
         raise ValueError(f"Retake hibrit profil işlemi için tam olarak {MAX_REFERENCES} referans fotoğrafı gerekli.")
 
 
+# v25: one ArcFace worker with loaded models per job (see identity_scorer).
+# None (tests, RETAKE_PERSISTENT_ARCFACE=off) means a process per measurement.
+IDENTITY_SCORER: "PersistentIdentityScorer | None" = None
+
+
+def release_identity_scorer() -> None:
+    """Free the persistent scorer's GPU memory (job end, before diffusion)."""
+    scorer = IDENTITY_SCORER
+    if scorer is not None:
+        try:
+            scorer.close()
+        except Exception as error:
+            print(f"[ArcFace] Kalıcı ölçüm sunucusu kapatılamadı: {error}", flush=True)
+
+
 def score_identity(
     facefusion_dir: Path,
     centroid: list[float] | None,
@@ -442,6 +459,12 @@ def score_identity(
     worker_path = Path(__file__).with_name("facefusion_identity_worker.py")
     if not centroid or not worker_path.is_file():
         return empty
+    scorer = IDENTITY_SCORER
+    if scorer is not None and probe_paths and Path(scorer.facefusion_dir) == Path(facefusion_dir):
+        values = scorer.score(centroid, probe_paths)
+        if values is not None:
+            return values
+        # Any persistent-path problem: measure this once the original way.
     centroid_file = probe_paths[0].with_name("retake-identity-centroid.json")
     centroid_file.write_text(json.dumps(centroid), encoding="utf-8")
     command = [
@@ -677,7 +700,10 @@ def run_with_memory_fallback(
 ) -> str:
     attempts = (preferred_pixel_boost, *PIXEL_BOOST_FALLBACKS.get(preferred_pixel_boost, ()))
     last_detail = ""
-    for index, pixel_boost in enumerate(attempts):
+    released_scorer = False
+    index = 0
+    while index < len(attempts):
+        pixel_boost = attempts[index]
         try:
             ok, detail = run_facefusion(
                 facefusion_dir, target_path, source_paths, output_path, model, pixel_boost,
@@ -695,11 +721,19 @@ def run_with_memory_fallback(
             "out of memory", "cuda error: out of memory", "failed to allocate",
             "cudnn_status_alloc_failed", "cublas_status_alloc_failed"
         ))
+        scorer = IDENTITY_SCORER
+        if is_memory_error and not released_scorer and scorer is not None and scorer.describe().get("running"):
+            # Free the ArcFace server's GPU memory before giving up quality.
+            released_scorer = True
+            release_identity_scorer()
+            print(f"{model}: {pixel_boost} bellek hatası; ArcFace sunucusu kapatılıp aynı ayarla yeniden deneniyor.", flush=True)
+            continue
         has_fallback = index + 1 < len(attempts)
         if not is_memory_error or not has_fallback:
             raise RuntimeError(f"{model} işlemi başarısız ({pixel_boost}). {detail}")
         next_boost = attempts[index + 1]
         print(f"{model}: {pixel_boost} bellek hatası; {next_boost} ayarına düşülüyor.", flush=True)
+        index += 1
 
     raise RuntimeError(f"{model} işlemi tamamlanamadı. {last_detail}")
 
@@ -942,6 +976,9 @@ def run_realism(
     if isinstance(seed_base, int) and not isinstance(seed_base, bool) and seed_base != REALISM_SEED_BASE:
         # Another finalist: different diffusion seeds, same plans and gates.
         command += ["--seed-base", str(seed_base)]
+    # Diffusion needs the GPU memory the ArcFace server holds; it restarts
+    # on the next measurement.
+    release_identity_scorer()
     try:
         completed = subprocess.run(
             command, cwd=str(worker.parent), capture_output=True, text=True,
@@ -2588,6 +2625,10 @@ def cleanup_after_job(server: Any) -> dict[str, Any]:
     except Exception:
         stats["ok"] = False
     try:
+        release_identity_scorer()
+    except Exception:
+        stats["ok"] = False
+    try:
         stats["objects_collected"] = gc.collect()
     except Exception:
         stats["ok"] = False
@@ -2916,6 +2957,8 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             # v24: mesh-guided finishing of eyes, brows, lips, nose tip,
             # teeth, catchlights and eye whites (verified per candidate).
             "fine_features": True,
+            # v25: models loaded once per job for ArcFace measurements.
+            "identity_scorer": IDENTITY_SCORER.describe() if IDENTITY_SCORER is not None else {"enabled": False},
             "ultra_depths": depth_summary(),
             "ultra_default_depth": ULTRA_DEFAULT_DEPTH,
             "pass_cache": (
@@ -3131,6 +3174,9 @@ def main() -> int:
     server.pairing_token = load_pairing_token(args.pairing_token_file) if args.enable_pairing else ""  # type: ignore[attr-defined]
     server.identity_cache = IdentityReportCache()  # type: ignore[attr-defined]
     server.pass_cache = PassCache.from_environment()  # type: ignore[attr-defined]
+    global IDENTITY_SCORER
+    if os.environ.get("RETAKE_PERSISTENT_ARCFACE", "").strip().lower() not in {"0", "off", "false", "no"}:
+        IDENTITY_SCORER = PersistentIdentityScorer(facefusion_dir, popen_options=subprocess_options())
     server.stage_timings = StageTimings()  # type: ignore[attr-defined]
     server.calibration = CalibrationStore(  # type: ignore[attr-defined]
         signature=schedule_signature(HYBRID_PROFILE_VERSION, ULTRA_VARIATIONS),

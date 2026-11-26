@@ -41,6 +41,7 @@ import {
 import { mountSculpture, placeWideSculpture } from "./src/forma-sculpture.js";
 import { buildBenchmarkReport, pickBenchmarkReferences, runBenchmark, summarizeBenchmark, fidelityScore } from "./src/benchmark.js";
 import { descriptorDistance, meshToPixels, poseDescriptor, rankRealReferences, referenceCrop } from "./src/real-face.js";
+import { FACE_SHAPE_VERSION, describeShapePlan, mapShapeSample, planShapeWarp, shapeSampleFromMesh, summarizeFaceShape3d } from "./src/face-shape.js";
 import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
@@ -475,6 +476,8 @@ function faceFromLandmarks(landmarks, sourceWidth, sourceHeight) {
     shapeRatio: measureFaceShapeRatio(landmarks, sourceWidth, sourceHeight),
     // Jaw contour and fixed points in full-image pixels, for the jawline warp.
     jaw: jawPointsFromMesh(landmarks, sourceWidth, sourceHeight),
+    // Rigid, jaw and lip points with depth, for the pose-free 3D shape plan.
+    shape3d: shapeSampleFromMesh(landmarks, sourceWidth, sourceHeight),
     // Full mesh (normalized) and pose signature, for the real-photo face.
     mesh: landmarks.map((point) => ({ x: point.x, y: point.y })),
     pose: poseDescriptor(landmarks, sourceWidth, sourceHeight)
@@ -552,7 +555,7 @@ async function detectFaces(image) {
         same.forEach((face) => { face.confirmed = true; });
         if (same.length) continue;
         faces.push({
-          ...(refined || { ...candidate.bounds, shapeRatio: null, jaw: null, mesh: null, pose: null }),
+          ...(refined || { ...candidate.bounds, shapeRatio: null, jaw: null, shape3d: null, mesh: null, pose: null }),
           confirmed: true
         });
       }
@@ -1350,7 +1353,7 @@ async function clearReferenceData() {
     : "Fotoğraflar kaldırıldı ancak yerel profil önbelleği silinemedi; tekrar deneyin.");
 }
 
-const PROFILE_PIPELINE_VERSION = "retake-25-reference-realface-v7";
+const PROFILE_PIPELINE_VERSION = "retake-25-reference-realface-v8"; // v8: pose-free 3D jaw/chin/cheek shape
 const FACEFUSION_REFERENCE_WIDTH = 512;
 const FACEFUSION_REFERENCE_HEIGHT = 682;
 
@@ -1567,6 +1570,7 @@ function buildReferenceFaceCandidate(reference, detected, sourceWidth, sourceHei
       ? measureFaceShapeRatio(detected.landmarks, sourceWidth, sourceHeight)
       : null,
     jaw: detectionMethod === "FaceLandmarker" ? canonicalJaw(detected.landmarks, sourceWidth, sourceHeight) : null,
+    shape3d: detectionMethod === "FaceLandmarker" ? shapeSampleFromMesh(detected.landmarks, sourceWidth, sourceHeight) : null,
     jawFrontalness: detectionMethod === "FaceLandmarker" ? meshFrontalness(detected.landmarks, sourceWidth, sourceHeight) : 0,
     pose: detectionMethod === "FaceLandmarker" ? poseDescriptor(detected.landmarks, sourceWidth, sourceHeight) : null,
     profilePixels: quality.imageData.data,
@@ -1730,6 +1734,7 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
         totalWeight: cached.totalWeight,
         shapeRatio: Number.isFinite(cached.shapeRatio) ? cached.shapeRatio : null,
         jawContour: Array.isArray(cached.jawContour) ? cached.jawContour : null,
+        faceShape3d: cached.faceShape3d?.version === FACE_SHAPE_VERSION ? cached.faceShape3d : null,
         poseDescriptors: Array.isArray(cached.poseDescriptors) ? cached.poseDescriptors : null
       };
       state.profileIsBuilding = false;
@@ -1810,6 +1815,11 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
         jawContour: summarizeReferenceJaw(candidates
           .filter((candidate) => candidate.jaw && candidate.jawFrontalness >= 0.6)
           .map((candidate) => ({ points: candidate.jaw, weight: candidate.jawFrontalness * candidate.weight }))),
+        // Pose-free 3D jaw/chin/cheek shape: every FaceLandmarker reference
+        // counts (3D alignment removes the pose); frontal ones weigh more.
+        faceShape3d: summarizeFaceShape3d(candidates
+          .filter((candidate) => candidate.shape3d)
+          .map((candidate) => ({ sample: candidate.shape3d, weight: candidate.weight * (0.5 + 0.5 * (candidate.jawFrontalness || 0)) }))),
         // Pose/expression signature of each reference, in reference order, to
         // pick the photo whose real face can be warped onto the target.
         poseDescriptors: candidates.map((candidate) => candidate.pose),
@@ -1854,7 +1864,15 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
   const headFit = estimateHeadFit(profile.shapeRatio, face.shapeRatio);
   // Move the photo's jaw/chin contour towards the reference person's.
   const toCanvas = (point) => ({ x: (point.x - crop.x) * scaleX, y: (point.y - crop.y) * scaleY });
-  const jawWarp = face.jaw && profile.jawContour
+  // Pose-free 3D plan first: jaw, chin and cheeks follow the person in this
+  // photo's own pose (turned heads too), the mandible follows the mouth.
+  const shapePlan = face.shape3d && profile.faceShape3d
+    ? planShapeWarp(mapShapeSample(face.shape3d, toCanvas, scaleX), profile.faceShape3d, {
+      bounds: { width: targetCanvas.width, height: targetCanvas.height }
+    })
+    : null;
+  // The 2D contour plan only when no trustworthy 3D fit exists.
+  const flatPlan = !shapePlan && face.jaw && profile.jawContour
     ? planJawWarp({
       jaw: face.jaw.jaw.map(toCanvas),
       anchors: face.jaw.anchors.map(toCanvas),
@@ -1862,6 +1880,10 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
       frontalness: face.jaw.frontalness
     }, profile.jawContour, { strength: 1.0, maxShift: 0.10 })
     : null;
+  const jawWarp = shapePlan
+    ? (shapePlan.controls.length ? { controls: shapePlan.controls, anchors: shapePlan.anchors } : null)
+    : flatPlan;
+  const shapeSummary = shapePlan ? describeShapePlan(shapePlan) : (flatPlan ? describeShapePlan({ method: "2d" }) : "");
   // Always prepare pose-matched real-reference crops for the lower-face-only
   // candidate. This does NOT activate the full-face transplant switch.
   // If the mesh/pose is unreliable, the FaceFusion identity path continues.
@@ -1893,6 +1915,7 @@ async function buildLocalFaceFusionInputs(exactReference=null) {
     targetSize: { width: targetCanvas.width, height: targetCanvas.height },
     headFit,
     jawWarp,
+    shapeSummary,
     realFace,
     targetLandmarks,
     crop
@@ -2401,6 +2424,7 @@ async function runFaceFusionEdit(options = {}) {
       targetSize,
       headFit,
       jawWarp,
+      shapeSummary,
       realFace,
       targetLandmarks,
       crop
@@ -2516,7 +2540,7 @@ async function runFaceFusionEdit(options = {}) {
       fineFeatures: response.headers.get("X-Retake-Fine-Features") || "",
       ultraTiming: response.headers.get("X-Retake-Ultra-Timing") || "",
       // Measurements only (no image, name or path) for the copied report.
-      diagnostics: collectDiagnosticHeaders(response.headers),
+      diagnostics: { ...collectDiagnosticHeaders(response.headers), ...(shapeSummary ? { "retake-face-shape": shapeSummary } : {}) },
       fineDetail: response.headers.get("X-Retake-Fine-Detail") || "",
       catchlights: response.headers.get("X-Retake-Catchlights") || "",
       sclera: response.headers.get("X-Retake-Sclera") || "",

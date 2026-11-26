@@ -504,6 +504,24 @@ def finalist_specs(records: list, best_spec: tuple, peak_identity: float, count:
         if spec != best_spec and score_from_headers(headers) is not None
         and identity_acceptable(headers, peak_identity)
     ]
+    # Spend a limited expensive realism pass on a genuinely distinct
+    # regional/fine-detail peak as well as the default identity winner.
+    # An already sufficient winner cannot be replaced by a sublevel spec.
+    incumbent = next((headers for spec,headers in records if spec == best_spec), {})
+    if is_identity_sufficient(incumbent):
+        remaining = [(spec,h) for spec,h in remaining if is_identity_sufficient(h)]
+    for measure in (reference_appearance_from_headers, fine_quality_from_headers):
+        if len(specs) >= count or not remaining:
+            break
+        baseline = measure(incumbent)
+        if baseline is None:
+            continue
+        measured = [(measure(h),spec) for spec,h in remaining if measure(h) is not None]
+        if measured:
+            value,spec = max(measured,key=lambda row:row[0])
+            if value > baseline + .075:
+                specs.append(spec)
+                remaining = [item for item in remaining if item[0]!=spec]
     while remaining and len(specs) < count:
         chosen_index = 0
         for index in range(1, len(remaining)):

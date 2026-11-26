@@ -277,9 +277,8 @@ def identity_gain(headers):
     return None if after is None or before is None else after - before
 
 def needs_extra_finalist(headers):
-    # At the person's own photo level there is nothing left to chase.
-    if is_identity_sufficient(headers):
-        return False
+    # A strong original may exceed the reference sufficiency level.
+    # Respect the higher aspiration even for an otherwise sufficient result.
     target = identity_aspiration(headers)
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS
@@ -597,3 +596,33 @@ def finishing_identity_floor(anchor, reference_level):
     """One loss allowance for the whole finishing pipeline."""
     level=sufficiency_from_level(reference_level)
     return max(anchor-.004,level) if level is not None and anchor>=level else anchor-.004
+
+
+def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_attempted,
+                    schedule, local_only, has_editor):
+    """Choose genuinely new work; distinguish an editor pass from a local pass.
+
+    First spend local-only time on an unseen grid or refinement. An editor
+    can improve a measured candidate, but do not rerun the same spec with
+    the same editor. All resulting pixels must pass the ordinary gates.
+    """
+    winner,params=winner_spec
+    if not local_only and has_editor:
+        order=choose_extra_variations(round_scores, winner+1, count=len(ULTRA_VARIATIONS), fallback=schedule)
+        for variation in order:
+            spec=(variation,None)
+            if spec not in editor_attempted and spec not in attempted:
+                return spec,False
+    # If the editor was disabled or all its useful candidates were tried,
+    # prefer a fresh local grid spec over a repeated deterministic render.
+    for variation in schedule:
+        spec=(variation,None)
+        if variation not in round_scores and spec not in attempted:
+            return spec,True
+    seen=[grid[v] if p is None else p for (v,p),_ in records if v==winner]
+    seen.extend(grid[v] if p is None else p for v,p in attempted if v==winner)
+    planner=RefinePlanner(params or grid[winner],tried=seen,budget=1)
+    next_params=planner.next()
+    if next_params is None:
+        return None
+    return (winner,next_params),True

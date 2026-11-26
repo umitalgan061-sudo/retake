@@ -41,7 +41,7 @@ try:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -68,7 +68,7 @@ except ImportError:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
+        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -2546,11 +2546,14 @@ def run_ultra_search(
     flux_diagnostics = {}
     finalist_attempts = 0
     realism_finalists = 0
+    editor_attempted = set()
     if has_realism or has_nim:
         specs = finalist_specs(records, best_spec, peak_identity, max(1, depth.realism_finalists))
         for position, spec in enumerate(specs):
             finalist_attempts += 1
             realism_finalists += 1
+            if has_nim:
+                editor_attempted.add(spec)
             # Another finalist also gets other diffusion seeds.
             seed = None if position == 0 else REALISM_SEED_BASE + REALISM_SEED_STRIDE * position
             step_started = clock()
@@ -2599,27 +2602,27 @@ def run_ultra_search(
     extra_started = clock()
     skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
     extra_attempts = 0
+    extra_specs = set()
     if needs_extra_finalist(best_headers):
-        untried = [v for v in schedule if v not in round_scores]
-        if has_nim:
-            extra_variations = choose_extra_variations(
-                round_scores, best_round, count=depth.extra_finalists, fallback=untried
-            )
-        else:
-            # Without a local editor an extra pass of a measured variant is
-            # the same deterministic image again: spend it on new variants.
-            extra_variations = untried[:depth.extra_finalists]
-        for variation in extra_variations:
+        for _ in range(depth.extra_finalists):
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= depth.extra_start_seconds:
                 break
+            plan = plan_extra_spec(round_scores,best_spec,FACE_SWAP_VARIATIONS,records,
+                                   extra_specs,editor_attempted,schedule,skip_flux_once,has_nim)
+            if plan is None:
+                break
+            spec,local_only=plan
+            variation,params=spec
+            extra_specs.add(spec)
+            if not local_only:
+                editor_attempted.add(spec)
             finalist_attempts += 1
             extra_attempts += 1
-            local_only = skip_flux_once
             skip_flux_once = False
             extra_caches = {**(caches or {}), "realism": None}
             if local_only:
                 extra_caches["nim_editors"] = None
-                print("[Ultra] Poor diffusion result: first extra finalist is identity-only.", flush=True)
+                print("[Ultra] New local grid/refinement candidate; editor skipped.", flush=True)
             try:
                 if on_finalist is not None:
                     on_finalist()
@@ -2628,7 +2631,7 @@ def run_ultra_search(
                 try:
                     candidate_image, candidate_headers = process_swap(
                         facefusion_dir, pixel_boost, enhancer_enabled,
-                        with_variation(parsed, variation), lambda *_a, **_k: None,
+                        with_refinement(parsed, variation, params), lambda *_a, **_k: None,
                         extra_caches
                     )
                 finally:
@@ -2636,14 +2639,16 @@ def run_ultra_search(
                 candidate_score = score_from_headers(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") != "passed":
                     continue
-                observations.append((variation, candidate_headers))
+                # Only original grid results teach the next job the grid order.
+                # An editor/refinement score does not describe its base variant.
+                records.append((spec,candidate_headers))
                 if candidate_score > peak_identity:
                     peak_identity = candidate_score
-                    strongest = (candidate_image, candidate_headers, round_of((variation,None)), (variation,None))
+                    strongest = (candidate_image, candidate_headers, round_of(spec), spec)
                 if identity_acceptable(candidate_headers, peak_identity) and prefer_ultra_candidate(candidate_headers, best_headers):
                     best_result, best_headers = candidate_image, candidate_headers
                     best_round = ULTRA_VARIATIONS.index(variation) + 1
-                    best_spec = (variation, None)
+                    best_spec = spec
                     peak_identity = max(peak_identity, candidate_score)
                     if not local_only:
                         flux_outcome = candidate_headers.get("X-Retake-FLUX-Status", flux_outcome)
@@ -2715,6 +2720,12 @@ def run_ultra_search(
     if on_hold is not None:
         on_hold(0.0)
 
+    # Final bytes, not the most recent editor attempt, determine acceptance.
+    if best_headers.get("X-Retake-NIM-Editor") == "retake-local/flux2-klein-4b":
+        flux_outcome = "accepted"
+        flux_diagnostics = {k:v for k,v in best_headers.items() if k.startswith("X-Retake-FLUX-") and k != "X-Retake-FLUX-Status"}
+    elif flux_outcome == "accepted" and best_headers.get("X-Retake-FLUX-Status") != "accepted":
+        flux_outcome = "finalist-not-selected"
     target = identity_aspiration(best_headers)
     gain = identity_gain(best_headers)
     final = {

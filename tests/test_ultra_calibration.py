@@ -197,3 +197,18 @@ class SelfTestModeTest(unittest.TestCase):
         for bad in ({"selfTest": True}, {"selfTest": "yes", "exactReferenceIndex": 4}):
             with self.assertRaises(ValueError):
                 srv._validate_metadata({**base, **bad}, 25)
+
+
+class GridObservationIntegrityTest(unittest.TestCase):
+    def test_repeated_trials_and_invalid_metrics_do_not_inflate_learning(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="test")
+            good={**proxy(.8),"X-Retake-Similarity":".82","X-Retake-Detail-Gate":"passed"}
+            invalid={**good,"X-Retake-Similarity":"nan"}
+            bad_gate={**good,"X-Retake-Detail-Gate":"failed"}
+            self.assertEqual(store.record("bank",[(0,good),(0,proxy(.99)),(1,invalid),
+                (2,bad_gate),(24,good),(3,good)]),2)
+            stats=store.summary("bank")["banks"]["bank"]["variants"]
+            self.assertEqual(set(stats),{"0","3"})
+            self.assertEqual(stats["0"]["proxy"]["n"],1)
+            self.assertAlmostEqual(stats["0"]["proxy"]["mean"],.8)

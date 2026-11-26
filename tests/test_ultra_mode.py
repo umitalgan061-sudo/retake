@@ -417,3 +417,69 @@ class FinishingIdentityFloorTest(unittest.TestCase):
         floor=finishing_identity_floor(.832,.89)
         self.assertGreaterEqual(.829,floor)
         self.assertLess(.826,floor)
+
+
+class DistinctExtraWorkTest(unittest.TestCase):
+    def test_full_grid_local_retry_uses_new_refinement(self):
+        from tools.ultra_mode import plan_extra_spec
+        grid=srv.FACE_SWAP_VARIATIONS
+        scores={i:.80 for i in ULTRA_VARIATIONS}
+        records=[((i,None),score(.80)) for i in ULTRA_VARIATIONS]
+        plan=plan_extra_spec(scores,(0,None),grid,records,set(),{(0,None)},
+                             ULTRA_VARIATIONS,True,True)
+        spec,local_only=plan
+        self.assertTrue(local_only)
+        self.assertEqual(spec[0],0)
+        self.assertIsNotNone(spec[1])
+        self.assertNotEqual(spec[1],grid[0])
+        second=plan_extra_spec(scores,(0,None),grid,records,{spec},{(0,None)},
+                               ULTRA_VARIATIONS,True,True)
+        self.assertNotEqual(second[0],spec)
+
+    def test_editor_retry_skips_previously_edited_spec(self):
+        from tools.ultra_mode import plan_extra_spec
+        grid=srv.FACE_SWAP_VARIATIONS
+        scores={0:.82,3:.81,1:.80}
+        records=[((i,None),score(s)) for i,s in scores.items()]
+        spec,local_only=plan_extra_spec(scores,(0,None),grid,records,set(),{(0,None),(3,None)},
+                                        ULTRA_VARIATIONS,False,True)
+        self.assertEqual(spec,(1,None))
+        self.assertFalse(local_only)
+
+    def test_without_editor_uses_untried_grid_then_refines(self):
+        from tools.ultra_mode import plan_extra_spec
+        spec,local_only=plan_extra_spec({0:.8},(0,None),srv.FACE_SWAP_VARIATIONS,
+            [((0,None),score(.8))],set(),set(),ULTRA_VARIATIONS,False,False)
+        self.assertEqual(spec,(1,None))
+        self.assertTrue(local_only)
+
+    def test_severe_diffusion_failure_does_not_repeat_deterministic_grid(self):
+        calls=[]
+        def fake_swap(*args):
+            metadata=args[3][6];editor=bool((args[5] or {}).get("nim_editors"))
+            variation=metadata["variation"];params=metadata.get("variationParams")
+            calls.append((variation,params,editor))
+            value=.87 if params is not None else .80 if variation==0 else .77
+            return repr((variation,params,editor)).encode(), {
+                **score(value),"X-Retake-Detail-Gate":"passed",
+                "X-Retake-Identity-Photo-Level":".89",
+                "X-Retake-FLUX-Status":"identity-loss" if editor else "not-configured",
+                "X-Retake-FLUX-Identity-Delta":"-.076" if editor else "",
+                "X-Retake-FLUX-Detail-Delta":"-.11" if editor else ""}
+        with patch.object(srv,"process_swap",fake_swap):
+            image,headers=srv.run_ultra_search(Path("."),"1024x1024",False,fake_request(),
+                lambda *_a,**_k:None,caches={"nim_editors":{"retake-local/flux2-klein-4b":0}},
+                min_duration_seconds=0)
+        self.assertEqual(len(calls),26)
+        self.assertTrue(calls[24][2])
+        self.assertFalse(calls[25][2])
+        self.assertIsNotNone(calls[25][1])
+        self.assertAlmostEqual(float(headers["X-Retake-Similarity"]),.87)
+        self.assertEqual(headers["X-Retake-FLUX-Status"],"identity-loss")
+
+
+    def test_stronger_original_is_not_ignored_by_photo_level_sufficiency(self):
+        from tools.ultra_mode import needs_extra_finalist
+        headers={**score(.88),"X-Retake-Identity-Photo-Level":".89","X-Retake-Similarity-Before":".90"}
+        self.assertTrue(needs_extra_finalist(headers))
+        self.assertFalse(needs_extra_finalist({**headers,"X-Retake-Similarity":".90"}))

@@ -306,3 +306,30 @@ export function describePortraitGeometry(report) {
   }).filter(Boolean);
   return [size,rows.length?"Giriş→çıktı geometri oranları: "+rows.join(", "):""].filter(Boolean).join(" · ");
 }
+
+
+// Native input evidence: no synthetic upscale is counted as real detail.
+export function sourcePortraitQuality(rgba,width,height,bounds) {
+  if (!rgba||rgba.length!==width*height*4||!Number.isInteger(width)||!Number.isInteger(height)||
+      !bounds||![bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)||Math.min(bounds.width,bounds.height)<16) return null;
+  const x0=Math.max(1,Math.ceil(bounds.x+bounds.width*.15)),x1=Math.min(width-1,Math.floor(bounds.x+bounds.width*.85));
+  const y0=Math.max(1,Math.ceil(bounds.y+bounds.height*.15)),y1=Math.min(height-1,Math.floor(bounds.y+bounds.height*.90));
+  if(x1-x0<8||y1-y0<8)return null;
+  const stride=Math.max(1,Math.floor(Math.max(x1-x0,y1-y0)/300));
+  const luma=i=>.2126*rgba[i]+.7152*rgba[i+1]+.0722*rgba[i+2];
+  let count=0,squared=0,dark=0,bright=0;
+  for(let y=y0;y<y1;y+=stride)for(let x=x0;x<x1;x+=stride){
+    const i=(y*width+x)*4, v=luma(i);
+    const high=4*v-luma(i-4)-luma(i+4)-luma(i-width*4)-luma(i+width*4);
+    squared+=high*high; dark+=v<20?1:0;bright+=v>245?1:0;count++;
+  }
+  return count?{width:Math.round(bounds.width),height:Math.round(bounds.height),edgeEnergy:Math.sqrt(squared/count),clippedFraction:(dark+bright)/count}:null;
+}
+
+export function describeSourcePortraitQuality(value) {
+  if(!value||![value.width,value.height,value.edgeEnergy,value.clippedFraction].every(Number.isFinite))return "";
+  return ["yerel giriş yüzü "+value.width+"×"+value.height+" px",
+    "giriş kenar enerjisi "+value.edgeEnergy.toFixed(1).replace(".",","),
+    "çok koyu/açık piksel %"+(100*value.clippedFraction).toFixed(1).replace(".",","),
+    Math.min(value.width,value.height)<96?"küçük yüz: gerçek giriş ayrıntısı sınırlı":""].filter(Boolean).join(" · ");
+}

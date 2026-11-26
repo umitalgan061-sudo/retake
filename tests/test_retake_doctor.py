@@ -16,6 +16,7 @@ from tools.retake_event_log import EVENT_LOG_NAME, EventLog
 PAIRING = "pairQ8Zr2vX0b9yTq8Zr2vX0b9yTq8Zr2vX0b9yT"
 PROJECT = "projQ8Zr2vX0b9yTq8Zr2vX0b9yTq8Zr2vX0b9yTxyz"
 Usage = namedtuple("Usage", "total used free")
+RELEASE = "7fea8d25e452e7ea87b6fa66ad3ab33b8ddbd16f"
 
 
 class FakeNet:
@@ -63,6 +64,7 @@ def healthy_routes(revision="portrait-quality-test-r9"):
         doctor.HAFIZE_URL + "/api/health": (200, {"projectAiGateway": {"enabled": True, "visionJudge": {
             "models": ["nvidia/a", "meta/b", "google/c", "mistralai/d"], "reserveModels": ["x/e"],
             "layouts": ["face", "review-sheet"], "projects": ["retake"]}}}),
+        doctor.SITE_URL + "/retake-release.json": (200, {"commit": RELEASE, "site": "retake06-ua"}),
         doctor.SITE_URL + "/sw.js": (200, b'const SHELL_CACHE = "retake-shell-v38";'),
     }
 
@@ -96,6 +98,7 @@ class DoctorTest(unittest.TestCase):
         self.runner = FakeRun({
             "rev-parse --short HEAD": (0, "abc1234\n"),
             "rev-parse --abbrev-ref HEAD": (0, "main\n"),
+            "rev-parse HEAD": (0, RELEASE + "\n"),
             "status --porcelain": (0, ""),
             "fetch --quiet origin main": (0, ""),
             "rev-list --left-right --count HEAD...origin/main": (0, "0\t0\n"),
@@ -275,9 +278,32 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(any("a 8/8" in title and "b 0/4" in title for title in result["warn"]))
         self.assertTrue(any("motor jüriyi görmüyor" in title for title in result["warn"]))
 
-    def test_site_version_comparison(self):
-        self.assertEqual(doctor.check_site(self.context())[0].status, "ok")
+    def test_site_release_marker_is_compared_by_web_files(self):
+        self.assertEqual(doctor.check_site(self.context())[0].title, "Yayındaki site bu depoyla aynı commit'te (7fea8d2).")
+        self.runner.outputs["rev-parse HEAD"] = (0, "1" * 40 + "\n")
+        self.runner.outputs[f"cat-file -e {RELEASE}^{{commit}}"] = (0, "")
+        self.runner.outputs[f"diff --quiet {RELEASE} HEAD --"] = (0, "")
+        same = doctor.check_site(self.context())[0]
+        self.assertEqual(same.status, "ok")
+        self.assertIn("aynı web dosyalarını", same.title)
+        diff_args = [args for args in self.runner.calls if "diff" in args][-1]
+        self.assertEqual(diff_args[-len(doctor.WEB_PATHS):], list(doctor.WEB_PATHS))
+        self.runner.outputs[f"diff --quiet {RELEASE} HEAD --"] = (1, "")
+        self.runner.outputs[f"merge-base --is-ancestor {RELEASE} HEAD"] = (0, "")
+        older = doctor.check_site(self.context())[0]
+        self.assertEqual(older.status, "warn")
+        self.assertIn("eski web dosyaları", older.title)
+        self.runner.outputs[f"merge-base --is-ancestor {RELEASE} HEAD"] = (1, "")
+        self.assertIn("daha yeni", doctor.check_site(self.context())[0].title)
+        self.runner.outputs[f"cat-file -e {RELEASE}^{{commit}}"] = (1, "")
+        self.assertEqual(doctor.check_site(self.context())[0].status, "info")
+
+    def test_site_falls_back_to_the_cache_name_without_a_marker(self):
+        self.net.routes[doctor.SITE_URL + "/retake-release.json"] = (404, b"Not Found")
+        self.assertEqual(doctor.check_site(self.context())[0].status, "info")
         self.net.routes[doctor.SITE_URL + "/sw.js"] = (200, b'const SHELL_CACHE = "retake-shell-v37";')
+        self.assertEqual(doctor.check_site(self.context())[0].status, "warn")
+        self.net.routes[doctor.SITE_URL + "/retake-release.json"] = (200, {"commit": "not-a-sha"})
         self.assertEqual(doctor.check_site(self.context())[0].status, "warn")
 
     def test_disk_thresholds(self):

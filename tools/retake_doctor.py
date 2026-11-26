@@ -572,9 +572,50 @@ def check_jury(ctx: Context, health: dict | None) -> list[Check]:
     return checks
 
 
+WEB_PATHS = ("index.html", "app.js", "styles.css", "sw.js", "manifest.webmanifest", "src")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
+
 def check_site(ctx: Context) -> list[Check]:
+    """Compare the published web app with this worktree's web files.
+
+    The release workflow verifies that the live bytes match the commit in
+    ``retake-release.json``; engine-only commits need no new release, so only
+    differences in the web files count.
+    """
     if ctx.offline:
         return []
+    try:
+        status, _, body = ctx.opener(SITE_URL + "/retake-release.json", timeout=20, headers={"Cache-Control": "no-cache"})
+    except Exception as error:
+        return [Check("Site", "warn", f"Yayındaki siteye ulaşılamadı ({redact(type(error).__name__, ctx.env)}).")]
+    marker = _json(body) if status == 200 else None
+    commit = marker.get("commit") if isinstance(marker, dict) else None
+    if not isinstance(commit, str) or not COMMIT.match(commit):
+        return _check_site_shell(ctx)
+    short = commit[:7]
+    git = ["git", "-C", str(ctx.root)]
+    code, head = ctx.run([*git, "rev-parse", "HEAD"], 15)
+    if code == 0 and head.strip() == commit:
+        return [Check("Site", "ok", f"Yayındaki site bu depoyla aynı commit'te ({short}).")]
+    known, _ = ctx.run([*git, "cat-file", "-e", commit + "^{commit}"], 15)
+    if known != 0:
+        return [Check("Site", "info", f"Yayındaki site {short} commit'inde; bu commit yerel depoda yok.",
+                      fix="git fetch origin ; ardından tanı aracını yeniden çalıştırın.")]
+    same, _ = ctx.run([*git, "diff", "--quiet", commit, "HEAD", "--", *WEB_PATHS], 30)
+    if same == 0:
+        return [Check("Site", "ok", f"Yayındaki site ({short}) bu depoyla aynı web dosyalarını sunuyor.")]
+    older, _ = ctx.run([*git, "merge-base", "--is-ancestor", commit, "HEAD"], 15)
+    if older == 0:
+        return [Check("Site", "warn", f"Yayındaki site ({short}) bu depodan eski web dosyaları sunuyor.",
+                      detail="Yeni arayüz ayarları ve tanı ekranı sitede henüz görünmeyebilir.",
+                      fix="Yeni site yayınını bekleyin; yayından sonra sayfayı Ctrl+F5 ile yenileyin.")]
+    return [Check("Site", "warn", f"Yayındaki site ({short}) bu depodan daha yeni veya farklı bir dalda.",
+                  fix="git pull --ff-only origin main ; .\\tools\\update_retake_ultra.ps1 -SkipPull -SkipDeploy")]
+
+
+def _check_site_shell(ctx: Context) -> list[Check]:
+    """Fallback without a release marker: compare the service-worker cache name."""
     try:
         local = SHELL_CACHE_LINE.search((ctx.root / "sw.js").read_text(encoding="utf-8"))
     except OSError:
@@ -587,7 +628,7 @@ def check_site(ctx: Context) -> list[Check]:
     if not remote or not local:
         return [Check("Site", "warn", f"Site sürümü okunamadı (HTTP {status}).")]
     if remote.group(1) == local.group(1):
-        return [Check("Site", "ok", f"Yayındaki site bu depoyla aynı sürümde ({local.group(1)}).")]
+        return [Check("Site", "info", f"Yayın etiketi okunamadı; site önbellek adı depoyla aynı ({local.group(1)}).")]
     return [Check("Site", "warn", f"Yayındaki site {remote.group(1)}, bu depo {local.group(1)}.",
                   detail="Site ile motor farklı sürümdeyse yeni ayarlar görünmeyebilir.",
                   fix="Depo geride ise güncelleyin; site gerideyse yeni yayını bekleyin ve sayfayı yenileyin (Ctrl+F5).")]

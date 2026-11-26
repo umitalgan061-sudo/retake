@@ -40,7 +40,7 @@ try:
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
@@ -67,7 +67,7 @@ except ImportError:
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
         identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
@@ -1957,9 +1957,7 @@ def process_swap(
         # ArcFace and the regional detail gate verify the delivered pixels.
         # Do not allow a chain of optional finishing steps to each spend an
         # independent identity loss allowance.
-        finish_anchor = result_similarity
-        finish_level = sufficiency_from_level(identity_report.get("photo_level_similarity"))
-        finish_floor = max(finish_anchor-.004,finish_level) if finish_level is not None and finish_anchor>=finish_level else finish_anchor-.004
+        finish_floor = finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
         fine_report: dict[str, Any] = {"status": "no-mesh"}
         fine_decision = "no-mesh"
         if metadata.get("targetLandmarks") and centroid:

@@ -322,6 +322,15 @@ class CachedPipelineTest(unittest.TestCase):
 
     def fake_score(self, facefusion_dir, centroid, probes):
         names = [path.name for path in probes]
+        if names == ["retake-verified-realism.png"]:
+            # The merged realism candidate is measured independently.
+            # In this fixture its visible centre is the render's shade.
+            image=cv2.imread(str(probes[0]),cv2.IMREAD_UNCHANGED)
+            self.assertEqual(image.shape[2],3,"verifier receives opaque pixels")
+            shade=int(image[250,195,0])
+            if self.candidate_scores and names[0] in self.candidate_scores:
+                return [self.candidate_scores[names[0]]]
+            return [self.render_scores[{40:0,60:1}[shade]]]
         if names == ["retake-rim-clean.png"]:
             # The optional post-render cleanup uses a second score probe.
             # Keep the preceding full-rescue probe available to existing tests.
@@ -523,6 +532,14 @@ class CachedPipelineTest(unittest.TestCase):
             headers = self.run_swap(0, [])
         self.assertEqual(headers["X-Retake-Fine-Features"], "no-mesh")
         self.assertEqual(getattr(self, "fine_calls", 0), 0)
+
+    def test_realism_merge_that_loses_identity_is_not_used(self):
+        self.render_scores=[.70,.79]
+        self.candidate_scores={"retake-verified-realism.png":.69}
+        headers=self.run_swap(0,[],realism={"python":Path("py"),"models":Path("m")})
+        self.assertEqual(headers["X-Retake-Realism"],"off")
+        self.assertEqual(headers["X-Retake-Similarity"],"0.7400")
+        self.assertFalse(np.all(self.last_result[250,195,:3]==60))
 
     def test_realism_render_that_loses_the_person_is_not_used(self):
         self.render_scores = [0.61, 0.70]

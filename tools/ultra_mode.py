@@ -719,6 +719,20 @@ def finishing_identity_floor(anchor, reference_level):
     return max(anchor-.004,level) if level is not None and anchor>=level else anchor-.004
 
 
+def advance_finishing_floor(previous, accepted, reference_level, original=None):
+    """An accepted improvement raises the shared floor; no stage can lower it.
+
+    Preserve an attained original-photo baseline using the existing near-tie
+    band, without requiring an unachievable original score from every input.
+    """
+    floor=finishing_identity_floor(accepted,reference_level)
+    if original is not None and math.isfinite(original) and -1<=original<=1:
+        threshold=original-ULTRA_REALISM_TIE_LOSS
+        if accepted>=threshold-1e-9:
+            floor=max(floor,threshold)
+    return floor if previous is None else max(previous,floor)
+
+
 def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_attempted,
                     schedule, local_only, has_editor, local_attempted=None):
     """Choose genuinely new work; distinguish an editor pass from a local pass.

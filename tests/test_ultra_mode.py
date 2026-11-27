@@ -532,3 +532,13 @@ class JobLocalScoreReuseTest(unittest.TestCase):
                 self.assertEqual(len(measured),2)
                 self.assertEqual(first["X-Retake-Similarity"],second["X-Retake-Similarity"])
                 self.assertEqual(original_caches,{})
+
+
+class NoGainFluxRetryTest(unittest.TestCase):
+    def test_measured_zero_gain_defers_only_the_next_editor_retry(self):
+        from tools.ultra_mode import defer_flux_retry
+        base={"X-Retake-FLUX-Identity-Delta":"0.0","X-Retake-FLUX-Detail-Delta":"0.0","X-Retake-FLUX-Skin-Gain":"0.0"}
+        self.assertTrue(defer_flux_retry("detail-gain-insufficient",base))
+        self.assertFalse(defer_flux_retry("accepted",base))
+        for field,value in (("Identity-Delta",".01"),("Detail-Delta",".07"),("Skin-Gain",".06"),("Skin-Gain",""),("Skin-Gain","nan")):
+            self.assertFalse(defer_flux_retry("detail-gain-insufficient",{**base,"X-Retake-FLUX-"+field:value}))

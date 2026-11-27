@@ -349,6 +349,27 @@ def needs_extra_finalist(headers):
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS
 
+def naturalness_checks(headers):
+    """Only validated measured components; conflicting duplicates are unknown."""
+    values, invalid = {}, set()
+    for part in str(headers.get("X-Retake-Naturalness-Checks", "")).split(","):
+        name, sep, raw = part.partition("=")
+        if not sep or name not in ("border", "tone", "grain", "detail", "light"):
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            invalid.add(name)
+            continue
+        if not math.isfinite(value) or not 0 <= value <= 100:
+            invalid.add(name)
+            continue
+        if name in values and values[name] != value:
+            invalid.add(name)
+        values[name] = value
+    return {name:value for name,value in values.items() if name not in invalid}
+
+
 def extra_search_reason(headers, depth_name):
     """Aspirations schedule work; they never override candidate acceptance."""
     if verified_candidate_score(headers) is None:
@@ -360,17 +381,7 @@ def extra_search_reason(headers, depth_name):
     # Treat missing evidence as unknown, not an artificial quality deficit.
     natural = naturalness_from_headers(headers)
     if natural is not None and natural < 85:
-        checks = {}
-        for part in str(headers.get("X-Retake-Naturalness-Checks", "")).split(","):
-            name, sep, raw = part.partition("=")
-            if not sep or name not in ("border", "tone", "grain", "detail", "light"):
-                continue
-            try:
-                value = float(raw)
-            except ValueError:
-                continue
-            if math.isfinite(value) and 0 <= value <= 100:
-                checks[name] = value
+        checks = naturalness_checks(headers)
         if checks:
             weakest = min(checks, key=checks.get)
             if checks[weakest] < 70:
@@ -786,8 +797,20 @@ def judge_quality_guard(candidate, incumbent):
             return False,name
     # The jury may not switch to a photo Retake measures as clearly more edited.
     new_nat, old_nat = naturalness_from_headers(candidate), naturalness_from_headers(incumbent)
+    if old_nat is not None and new_nat is None:
+        return False, "naturalness-unmeasured"
     if new_nat is not None and old_nat is not None and new_nat < old_nat - ULTRA_NATURALNESS_GAIN:
         return False, "naturalness"
+    # The weighted aggregate can hide an obvious seam or a lighting failure.
+    # Require measured dimensions to remain available and reject major
+    # regressions even when gains elsewhere preserve the aggregate.
+    old_checks, new_checks = naturalness_checks(incumbent), naturalness_checks(candidate)
+    for name, old_value in old_checks.items():
+        new_value = new_checks.get(name)
+        if new_value is None:
+            return False, "naturalness-"+name+"-unmeasured"
+        if old_value-new_value > (10 if name == "border" else 15):
+            return False, "naturalness-"+name
     new_rim,old_rim=rim_from_headers(candidate),rim_from_headers(incumbent)
     if old_rim is not None and new_rim is None:
         return False,"rim-unmeasured"

@@ -290,6 +290,9 @@ def match_broad_light(warped: np.ndarray, swapped: np.ndarray, weight: np.ndarra
 
 def _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed):
     image, reference_points = candidate
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3 or image.size == 0:
+        raise ValueError("Referans görseli geçersiz.")
+    reference_points = validate_mesh(reference_points, image.shape[1], image.shape[0], max(image.shape[:2])*.1)
     shape = target.shape[:2]
     warped, coverage = warp_piecewise_affine(image, reference_points, target_points, shape)
     skin = reference_skin(warped, target_points, coverage, face_width)
@@ -318,7 +321,7 @@ def choose_and_transplant(
     Candidates arrive best pose match first; a later one must fit clearly
     better to win. If even the best one's features do not line up with the
     photo (`min_fit`), ValueError: the AI swap is better than a wrong face.
-    Returns (uint8 BGR result, chosen index, per-candidate fit).
+    Returns (uint8 BGR result, chosen index, fit for each successfully measured candidate).
     """
     if not candidates:
         raise ValueError("gerçek fotoğraf adayı yok")
@@ -335,19 +338,29 @@ def choose_and_transplant(
     best = None
     fits = []
     for index, candidate in enumerate(candidates):
-        warped, coverage, weight = _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed)
-        # Outside the warped mesh use the swap, so the mesh border does not
-        # count as a feature.
-        filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
-        fit = candidate_fit(filled, weight, swapped, target, face_width)
+        try:
+            warped, coverage, weight = _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed)
+            # Outside the warped mesh use the swap, so the mesh border does not
+            # count as a feature.
+            filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
+            fit = candidate_fit(filled, weight, swapped, target, face_width)
+            if not all(math.isfinite(fit[key]) for key in ("structure", "light", "score")):
+                raise ValueError("Referans uyum ölçümü geçersiz.")
+        except (ValueError, TypeError, cv2.error) as error:
+            print(f"[Retake] Tam yüz referans adayı {index+1} atlandı: {type(error).__name__}.", flush=True)
+            continue
         fit["score"] -= 0.03 * index
         fits.append(fit)
+        # Screen structural eligibility BEFORE ranking. Good illumination
+        # cannot rescue a failed structural fit or disqualify a valid runner-up.
+        if min_fit is not None and fit["structure"] < min_fit:
+            continue
         if best is None or fit["score"] > best[0]:
             best = (fit["score"], index, warped, weight)
-    _, index, warped, weight = best
-    if min_fit is not None and fits[index]["structure"] < min_fit:
+    if best is None:
         scores = ", ".join(f"{fit['structure']:.2f}" for fit in fits)
         raise ValueError(f"hiçbir aday yüze yeterince oturmadı (uyum {scores})")
+    _, index, warped, weight = best
     warped = match_broad_light(warped, swapped, weight, face_width)
     amount = np.clip(weight * strength, 0.0, 1.0)
     blended = swapped.astype(np.float32) * (1.0 - amount[:, :, None]) + warped * amount[:, :, None]

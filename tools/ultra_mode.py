@@ -330,9 +330,11 @@ def needs_extra_finalist(headers):
 
 def extra_search_reason(headers, depth_name):
     """Aspirations schedule work; they never override candidate acceptance."""
+    if verified_candidate_score(headers) is None:
+        return ""
     if needs_extra_finalist(headers):
         return "identity"
-    if depth_name not in ("deep", "max") or verified_candidate_score(headers) is None:
+    if depth_name not in ("deep", "max"):
         return ""
     # Treat missing evidence as unknown, not an artificial quality deficit.
     natural = naturalness_from_headers(headers)

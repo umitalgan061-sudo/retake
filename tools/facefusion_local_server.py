@@ -153,7 +153,7 @@ HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 # r10: on top of main's r9 — HyperSwap 1b identity model (alternating with
 # AlphaFace), naturalness guard on regional transfers, detail-fused
 # reinforcement; resets the learned variant order of the AlphaFace era.
-QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r11"
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261127-r12"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -2853,7 +2853,7 @@ def run_ultra_search(
                     )
                 finally:
                     timing["extra"].append(clock() - step_started)
-                candidate_score = score_from_headers(candidate_headers)
+                candidate_score = verified_candidate_score(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
                     continue
                 # Only original grid results teach the next job the grid order.
@@ -2881,8 +2881,55 @@ def run_ultra_search(
             except Exception as error:
                 print(f"[Ultra] Ek finalist atlandı: {type(error).__name__}", flush=True)
     judge_result = judge_headers("off" if judge is None else "not-consented")
+    jury_retry_attempts = 0
     if collect_finalists:
         pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
+        # Deep/max may spend a small additional budget on unseen local settings
+        # when the jury has no meaningful alternative. Never widen the identity
+        # band, repeat an exact spec, send a weak candidate, or require a switch.
+        jury_retry_limit = {"deep": 1, "max": 2}.get(depth.name, 0)
+        jury_retry_started = clock()
+        jury_seen = {spec for spec, _ in records} | extra_specs | editor_attempted | {best_spec}
+        while (len(pool) < 2 and jury_retry_attempts < jury_retry_limit
+               and clock() - jury_retry_started < 240
+               and clock() - started < depth.client_timeout_seconds - 300):
+            plan = plan_extra_spec(round_scores, best_spec, FACE_SWAP_VARIATIONS, records,
+                                   jury_seen, editor_attempted, schedule, True, False)
+            if plan is None:
+                break
+            spec, _ = plan
+            if spec in jury_seen:
+                break
+            jury_seen.add(spec)
+            jury_retry_attempts += 1
+            finalist_attempts += 1
+            if on_finalist is not None:
+                on_finalist()
+            phase("extra", jury_retry_attempts, jury_retry_limit)
+            step_started = clock()
+            try:
+                retry_image, retry_headers = process_swap(
+                    facefusion_dir, pixel_boost, enhancer_enabled,
+                    with_refinement(parsed, spec[0], spec[1]), lambda *_a, **_k: None,
+                    {**(caches or {}), "realism": None, "nim_editors": None}
+                )
+                retry_score = verified_candidate_score(retry_headers)
+                if retry_score is None or retry_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
+                    continue
+                records.append((spec, retry_headers))
+                if retry_score > peak_identity:
+                    peak_identity = retry_score
+                    strongest = (retry_image, retry_headers, round_of(spec), spec)
+                if identity_acceptable(retry_headers, peak_identity) and prefer_ultra_candidate(retry_headers, best_headers):
+                    best_result, best_headers, best_round, best_spec = retry_image, retry_headers, round_of(spec), spec
+                keep_identity_anchor()
+                finalists = retain_judge_finalists(finalists, (retry_image, retry_headers, round_of(spec)), peak_identity)
+                pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
+            except Exception as error:
+                print(f"[Ultra] Jüri alternatif araması atlandı: {type(error).__name__}", flush=True)
+            finally:
+                timing["extra"].append(clock() - step_started)
+        print(f"[NVIDIA jüri] Yerel ek arama: {jury_retry_attempts}; uygun farklı aday: {len(pool)}.", flush=True)
         if len(pool) < 2:
             judge_result = judge_headers("single-finalist", len(pool))
         else:
@@ -2958,6 +3005,7 @@ def run_ultra_search(
             else "yes" if is_identity_sufficient(best_headers) else "no"
         ),
         **judge_result,
+        "X-Retake-NVIDIA-Judge-Retry-Attempts": str(jury_retry_attempts),
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),

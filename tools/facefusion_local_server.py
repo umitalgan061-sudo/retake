@@ -35,7 +35,7 @@ try:
     from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
-    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
+    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence, reference_appearance_keeps
     from .fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -62,7 +62,7 @@ except ImportError:
     from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
     from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
-    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
+    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence, reference_appearance_keeps
     from fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -2093,6 +2093,12 @@ def process_swap(
                 base_detail, _ = check_photo_detail(target_path, final_output, metadata['faceBounds'])
             except Exception:
                 base_detail = None
+            base_appearance = None
+            if real_face:
+                try:
+                    _, base_appearance = reference_evidence_file(target_path, final_output, metadata["faceBounds"], metadata.get("targetLandmarks"), real_face)
+                except Exception as error:
+                    print(f"[NIM] Alt yüz referans ölçümü kullanılamadı: {type(error).__name__}", flush=True)
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png",
@@ -2118,6 +2124,14 @@ def process_swap(
                         acceptable, reason = check_render_file(final_output, candidate, metadata["faceBounds"])
                         if not acceptable or not check_detail_gate(target_path, candidate, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, candidate, metadata["faceBounds"])["meaningful"]:
                             continue
+                        if base_appearance is not None:
+                            try:
+                                _, candidate_appearance = reference_evidence_file(target_path, candidate, metadata["faceBounds"], metadata.get("targetLandmarks"), real_face)
+                            except Exception:
+                                candidate_appearance = None
+                            if not reference_appearance_keeps(base_appearance, candidate_appearance):
+                                print(f"[NIM] {model}: referans alt yüz uyumu korunamadı; aday elendi.", flush=True)
+                                continue
                         detail, _ = check_photo_detail(target_path, candidate, metadata["faceBounds"])
                         skin_gain = interior_texture_gain(target_path,final_output,candidate,metadata["faceBounds"]) if blend_mode == "texture" else None
                         measured.append((candidate, strength, detail, blend_mode, skin_gain))

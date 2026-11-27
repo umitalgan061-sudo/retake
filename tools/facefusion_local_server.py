@@ -40,7 +40,7 @@ try:
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor, advance_finishing_floor,
         identity_aspiration, identity_gain, needs_extra_finalist, extra_search_reason, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
@@ -67,7 +67,7 @@ except ImportError:
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
-        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
+        identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor, advance_finishing_floor,
         identity_aspiration, identity_gain, needs_extra_finalist, extra_search_reason, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
@@ -2030,6 +2030,8 @@ def process_swap(
             shutil.copyfile(rescue_candidates[chosen_index][1], final_output)
         verified_probe = visible_probes.get(rescue_candidates[chosen_index][1])
         result_similarity = best_score
+        reference_level=identity_report.get("photo_level_similarity")
+        finish_floor=advance_finishing_floor(None,result_similarity,reference_level,before_similarity)
         used_realism = False
         render_scores = scores[len(rescue_candidates):-1]
         # ArcFace alone can reward an uncanny, waxy, over-sharpened or clipped
@@ -2060,12 +2062,13 @@ def process_swap(
                 apply_realism_render(merged_render,render_path)
                 merged_score=score_visible([merged_render])[0]
                 if (merged_score is not None
-                        and merged_score>=finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
+                        and merged_score>=finish_floor
                         and check_detail_gate(target_path,merged_render,metadata["faceBounds"])[0]
                         and measure_final_face_edit(target_path,merged_render,metadata["faceBounds"])["meaningful"]):
                     shutil.copyfile(merged_render,final_output)
                     print(f"Fotoğraf gerçekçiliği doğrulandı: {result_similarity:.3f} → {merged_score:.3f}.",flush=True)
                     result_similarity=merged_score
+                    finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                     verified_probe=visible_probes.get(merged_render)
                     used_realism=True
                 else:
@@ -2150,7 +2153,7 @@ def process_swap(
                             continue
                         delta = value - result_similarity
                         detail_delta = detail - base_detail if detail is not None and base_detail is not None else None
-                        identity_ok = (value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
+                        identity_ok = (value >= finish_floor
                                        and delta >= -ULTRA_REALISM_TIE_LOSS)
                         diagnostic_rank = (identity_ok, editor_quality_rank(delta, detail_delta, skin_gain))
                         if model == flux_model and (flux_diagnostic_rank is None or diagnostic_rank > flux_diagnostic_rank):
@@ -2158,7 +2161,7 @@ def process_swap(
                             flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
                             flux_blend_mode = blend_mode
                             flux_skin_gain = skin_gain
-                            flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS or value < finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) else "detail-gain-insufficient"
+                            flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS or value < finish_floor else "detail-gain-insufficient"
                         if identity_ok and (
                             delta > .001 or (detail_delta is not None and detail_delta > .06)
                             or (skin_gain is not None and skin_gain > .05 and detail_delta is not None and detail_delta >= -.01)
@@ -2174,6 +2177,7 @@ def process_swap(
                 result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = select_editor_candidate(nim_candidates, ULTRA_REALISM_TIE_LOSS)
                 shutil.copyfile(path, final_output)
                 verified_probe=visible_probes.get(path)
+                finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                 if nim_used == flux_model:
                     flux_status = "accepted"
                     flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
@@ -2189,7 +2193,6 @@ def process_swap(
         # ArcFace and the regional detail gate verify the delivered pixels.
         # Do not allow a chain of optional finishing steps to each spend an
         # independent identity loss allowance.
-        finish_floor = finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
         fine_report: dict[str, Any] = {"status": "no-mesh"}
         fine_decision = "no-mesh"
         if metadata.get("targetLandmarks") and centroid:
@@ -2212,6 +2215,7 @@ def process_swap(
                 if accepted_fine:
                     shutil.copyfile(fine_path, final_output)
                     result_similarity = fine_score
+                    finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                     verified_probe=visible_probes.get(fine_path)
                     fine_report["delivered_quality"] = fine_report.get("quality_after")
                 elif fine_report.get("quality_before") is not None:
@@ -2256,6 +2260,7 @@ def process_swap(
                 if corrected_score is not None and corrected_score >= max(result_similarity - 0.004,finish_floor) and check_detail_gate(target_path, rim_candidate, metadata["faceBounds"])[0]:
                     shutil.copyfile(rim_candidate, final_output)
                     result_similarity = corrected_score
+                    finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                     verified_probe=visible_probes.get(rim_candidate)
                     rim_cleaned = True
                     print(
@@ -2290,6 +2295,7 @@ def process_swap(
                                 and check_detail_gate(target_path, seam_path, metadata["faceBounds"])[0]):
                             shutil.copyfile(seam_path, final_output)
                             result_similarity = seam_score
+                            finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                             verified_probe = visible_probes.get(seam_path)
                             upper_seam_status = "applied"
                             upper_seam_gain = float(after_seam["checks"]["border"]) - float(border)
@@ -2312,11 +2318,13 @@ def process_swap(
                         neck_evidence = neck_delivery_evidence(target_path,final_output,neck_path,metadata["faceBounds"])
                         shutil.copyfile(neck_path, final_output)
                         result_similarity = neck_score
+                        finish_floor=advance_finishing_floor(finish_floor,result_similarity,reference_level,before_similarity)
                         verified_probe=visible_probes.get(neck_path)
                     else:
                         neck_status, neck_pixels = 'quality-rejected', 0
             except Exception as error:
                 neck_status, neck_pixels = 'error', 0
+                neck_evidence = ''
                 print(f'[Retake] Neck candidate skipped: {type(error).__name__}', flush=True)
 
         # Measure the FINAL delivered pixels, not the pre-repair proposal.
@@ -2412,6 +2420,7 @@ def process_swap(
             "X-Retake-Naturalness-Checks": ",".join(f"{name}={value:.0f}" for name, value in natural.get("checks", {}).items()),
             "X-Retake-Quality-Revision": QUALITY_PIPELINE_REVISION,
             "X-Retake-Identity-Pixel-Scope": "visible-engine-crop",
+            "X-Retake-Finishing-Floor": f"{finish_floor:.4f}",
             'X-Retake-Self-Fidelity': (f"ssim:{self_test['ssim']:.4f},deltaE:{self_test['delta_e']:.3f}" if self_test else ""),
             'X-Retake-Neck-Status': neck_status,
             'X-Retake-Neck-Pixels': str(neck_pixels),
@@ -3364,7 +3373,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Variation, X-Retake-Similarity, X-Retake-Similarity-Before, X-Retake-Real-Face, "
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
-            "X-Retake-Quality-Revision, X-Retake-Identity-Pixel-Scope, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
+            "X-Retake-Quality-Revision, X-Retake-Identity-Pixel-Scope, X-Retake-Finishing-Floor, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
             "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, X-Retake-Upper-Seam, X-Retake-Upper-Seam-Border-Gain, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
@@ -3440,6 +3449,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "visible_identity_verification": True,
             "job_local_identity_score_cache": True,
             "finishing_identity_guard": True,
+            "cumulative_finishing_guard": True,
             "flux_texture_alternatives": True,
             "distinct_extra_search": True,
             "jury_local_quality_guard": True,

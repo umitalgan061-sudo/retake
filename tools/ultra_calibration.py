@@ -124,7 +124,7 @@ def _empty_stats() -> dict[str, float]:
 
 def _valid_stats(value: Any) -> bool:
     if not (isinstance(value, dict) and type(value.get("n")) is int and 0 <= value["n"] <= 1_000_000
-            and all(type(value.get(k)) in (int,float) and math.isfinite(value[k]) for k in ("sum","sq"))):
+            and all(type(value.get(k)) in (int,float) and 0<=value[k]<=1_000_001 for k in ("sum","sq"))):
         return False
     n,total,squares=value["n"],value["sum"],value["sq"]
     eps=1e-7*max(1,n)
@@ -151,7 +151,7 @@ def _clean_banks(banks):
                  if kind in EXPLORATION and _valid_stats(stats) and stats["n"]>0}
             if row: variants[variant]=row
         updated=entry.get("updated",0)
-        if type(updated) not in (int,float) or not math.isfinite(updated) or updated<0:
+        if type(updated) not in (int,float) or not 0<=updated<=1e12:
             updated=0
         clean[key]={"variants":variants,"jobs":_counter(entry.get("jobs")),
                     "self_tests":_counter(entry.get("self_tests")),"updated":updated}
@@ -170,6 +170,9 @@ class CalibrationStore:
     # ---- persistence -------------------------------------------------
     def _load(self) -> dict[str, Any]:
         try:
+            # The bounded numeric store is tiny; ignore unexpectedly large files.
+            if self.path.stat().st_size>2*1024*1024:
+                raise ValueError("calibration store too large")
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {"version": STORE_VERSION, "signature": self.signature, "banks": {}}

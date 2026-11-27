@@ -33,7 +33,7 @@ try:
     from .photo_realism_gate import check_render_file
     from .ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
-    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from .fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
@@ -60,7 +60,7 @@ except ImportError:
     from photo_realism_gate import check_render_file
     from ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
-    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
     from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
     from fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
@@ -2244,6 +2244,35 @@ def process_swap(
         except Exception as error:
             print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
 
+        # A dark rim repair does not address every low-frequency colour step.
+        # Only attempt the separate upper-face proposal when border quality
+        # is actually weak; reject any loss of verified detail or identity.
+        upper_seam_status = "not-needed"
+        upper_seam_gain = None
+        try:
+            before_seam = final_naturalness(target_path, final_output, metadata["faceBounds"])
+            border = before_seam.get("checks", {}).get("border")
+            if centroid and isinstance(border, (float, int)) and border < 70:
+                seam_path = temp_dir / "retake-upper-seam.png"
+                seam_report = upper_seam_candidate_file(target_path, final_output, seam_path, metadata["faceBounds"])
+                upper_seam_status = seam_report.get("stage", "not-examined")
+                if upper_seam_status == "candidate":
+                    after_seam = final_naturalness(target_path, seam_path, metadata["faceBounds"])
+                    upper_seam_status = "quality-rejected"
+                    if upper_seam_quality_guard(before_seam, after_seam):
+                        seam_score = score_visible([seam_path])[0]
+                        if (seam_score is not None and seam_score >= max(result_similarity - .002, finish_floor)
+                                and check_detail_gate(target_path, seam_path, metadata["faceBounds"])[0]):
+                            shutil.copyfile(seam_path, final_output)
+                            result_similarity = seam_score
+                            verified_probe = visible_probes.get(seam_path)
+                            upper_seam_status = "applied"
+                            upper_seam_gain = float(after_seam["checks"]["border"]) - float(border)
+                print(f"[Retake] Üst yüz geçişi: {upper_seam_status}; kenar kazanımı={upper_seam_gain}.", flush=True)
+        except Exception as error:
+            upper_seam_status = "error"
+            print(f"[Retake] Üst yüz geçişi atlandı: {type(error).__name__}", flush=True)
+
         # Neck is a separate optional native-pixel candidate. Require a mesh,
         # connected skin evidence, and a fresh identity/detail verification.
         neck_status, neck_pixels = 'off', 0
@@ -2272,7 +2301,7 @@ def process_swap(
         try:
             residual = (
                 inspect_dark_rim_file(target_path, final_output, metadata["faceBounds"])
-                if rim_cleaned else rim_stats
+                if rim_cleaned or upper_seam_status == 'applied' or neck_status == 'applied' else rim_stats
             )
             if isinstance(residual, dict) and residual.get("stage") != "not_examined":
                 measure = float(residual["dark_line_fraction"])
@@ -2396,6 +2425,8 @@ def process_swap(
                 if isinstance(fine_report.get("sclera"), dict) else ""
             ),
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
+            "X-Retake-Upper-Seam": upper_seam_status,
+            "X-Retake-Upper-Seam-Border-Gain": "" if upper_seam_gain is None else f"{upper_seam_gain:.2f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -3287,7 +3318,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Quality-Revision, X-Retake-Identity-Pixel-Scope, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, X-Retake-Upper-Seam, X-Retake-Upper-Seam-Border-Gain, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "

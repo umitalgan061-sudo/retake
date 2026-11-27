@@ -98,17 +98,31 @@ try {
     }
 
     if (-not $SkipDeploy) {
-        if (Get-Command firebase -ErrorAction SilentlyContinue) {
-            Write-Host "Firebase Hosting retake06-ua yayinlaniyor..." -ForegroundColor Cyan
-            firebase deploy --only "hosting:retake06" --project "projelerim-8fecd"
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "Firebase yayini basarisiz. firebase login ile oturum acin, komutu tekrar calistirin."
-            } else {
-                Write-Host "Firebase Hosting yayini tamamlandi." -ForegroundColor Green
-            }
-        } else {
-            Write-Warning "Firebase CLI bulunamadi; web yayini ATLANDI. npm install -g firebase-tools; firebase login"
+        if (-not (Get-Command firebase -ErrorAction SilentlyContinue)) {
+            throw "Firebase CLI bulunamadi; web yayini yapilmadi."
         }
+        Write-Host "Firebase Hosting retake06-ua yayinlaniyor..." -ForegroundColor Cyan
+        firebase deploy --only "hosting:retake06" --project "projelerim-8fecd"
+        if ($LASTEXITCODE -ne 0) { throw "Firebase yayini basarisiz; web yayini dogrulanmadi." }
+        # Verify the actual delivered bytes, not the CLI success message.
+        # Never send local pairing headers or secrets to the public host.
+        $temp = [System.IO.Path]::GetTempFileName()
+        try {
+            foreach ($file in @("app.js", "src/diagnostics.js", "sw.js")) {
+                $localHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $Root $file)).Hash
+                $verified = $false
+                for ($attempt = 0; $attempt -lt 3; $attempt++) {
+                    $nonce = [Guid]::NewGuid().ToString("N")
+                    try {
+                        Invoke-WebRequest -UseBasicParsing -Uri ("https://retake06-ua.web.app/" + $file + "?verify=" + $nonce) -Headers @{"Cache-Control"="no-cache"} -TimeoutSec 20 -OutFile $temp
+                        if ((Get-FileHash -Algorithm SHA256 -LiteralPath $temp).Hash -eq $localHash) { $verified = $true; break }
+                    } catch { }
+                    if ($attempt -lt 2) { Start-Sleep -Seconds 3 }
+                }
+                if (-not $verified) { throw "Firebase komutu basarili fakat yayindaki $file yerel dosyayla eslesmiyor." }
+            }
+            Write-Host "Firebase yayini dogrulandi: app.js, diagnostics.js, sw.js (SHA256)." -ForegroundColor Green
+        } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
     }
 
     if ($managedTask) {
@@ -142,17 +156,36 @@ try {
     # Stop just the Python command with the Retake bridge, not arbitrary
     # applications using Python, CUDA or port 8765.
     $bridges = @(
-        Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+        Get-CimInstance Win32_Process -ErrorAction Stop |
         Where-Object {
-            $_.CommandLine -and $_.CommandLine -match 'facefusion_local_server\.py'
+            $_.CommandLine -and $_.CommandLine -match 'facefusion_local_server\.py' -and $_.Name -match '^python(?:w)?\.exe$'
         }
     )
+    if ($bridges.Count -gt 0) {
+        $serverPath = Join-Path $PSScriptRoot "facefusion_local_server.py"
+        foreach ($bridge in $bridges) {
+            if ($bridge.CommandLine.IndexOf($serverPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                throw "Another or unidentified Retake worktree is running; no process was stopped."
+            }
+        }
+        if ($bridges.Count -ne 1) { throw "Multiple Retake engines found; no process was stopped." }
+        $manualHeaders = @{}
+        $tokenPath = Join-Path $HOME ".retake\pairing-token"
+        if (Test-Path $tokenPath) { $manualHeaders["X-Retake-Token"] = (Get-Content $tokenPath -Raw).Trim() }
+        try { $manualHealth = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $manualHeaders -TimeoutSec 5 }
+        catch { throw "Manual engine state cannot be verified. Close it explicitly before restarting." }
+        if ($manualHealth.background_mode -eq $true) { throw "Unexpected managed engine; no process was stopped." }
+        if ($manualHealth.busy -ne $false -and -not $Force) { throw "Manual engine is processing a photo or busy state is unknown. Retry when idle." }
+        if ($manualHealth.busy -ne $false) { Write-Warning "-Force: manual photo processing may be interrupted." }
+    }
     $pairFromPrevious = $false
     foreach ($bridge in $bridges) {
         if ($bridge.CommandLine -match '--enable-pairing') {
             $pairFromPrevious = $true
         }
         Write-Host ("Onceki Retake motoru durduruluyor (PID " + $bridge.ProcessId + ")...") -ForegroundColor Yellow
+        $same = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $bridge.ProcessId) -ErrorAction Stop
+        if (-not $same -or $same.CreationDate -ne $bridge.CreationDate -or $same.CommandLine -ne $bridge.CommandLine) { throw "Manual engine changed during update; no process was stopped." }
         Stop-Process -Id $bridge.ProcessId -ErrorAction Stop
     }
     if ($bridges.Count -gt 0) {

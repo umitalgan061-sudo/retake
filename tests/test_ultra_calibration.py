@@ -212,3 +212,26 @@ class GridObservationIntegrityTest(unittest.TestCase):
             self.assertEqual(set(stats),{"0","3"})
             self.assertEqual(stats["0"]["proxy"]["n"],1)
             self.assertAlmostEqual(stats["0"]["proxy"]["mean"],.8)
+
+
+class BalancedLearningTest(unittest.TestCase):
+    def test_identity_deficit_cannot_be_hidden_by_sharp_texture(self):
+        def measured(identity, natural, detail):
+            return {**proxy(detail), "X-Retake-Similarity":str(identity),
+                    "X-Retake-Naturalness":str(natural), "X-Retake-Identity-Photo-Level":".89"}
+        weak=measured(.66,95,.98)
+        strong=measured(.88,84,.85)
+        self.assertEqual(uc.round_quality(strong)[0],"balanced")
+        self.assertGreater(uc.round_quality(strong)[1],uc.round_quality(weak)[1])
+        self.assertEqual(uc.round_quality({**strong,"X-Retake-Naturalness":"nan"})[0],"proxy")
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="balanced")
+            for _ in range(3):
+                store.record("bank",[(0,weak),(1,strong)])
+            order,mode,total=store.schedule("bank",range(2))
+            self.assertEqual((order,mode,total),([1,0],"learned-balanced",6))
+            self.assertIn("balanced",store.summary("bank")["banks"]["bank"]["variants"]["1"])
+            for _ in range(3):
+                store.record("bank",[(0,fid(.97,1)),(1,fid(.6,8))],self_test=True)
+            self.assertEqual(store.schedule("bank",range(2))[1],"learned-fidelity")
+            self.assertEqual(store.schedule("bank",range(2))[0][0],0)

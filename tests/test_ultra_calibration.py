@@ -279,3 +279,47 @@ class LearningRobustnessTest(unittest.TestCase):
                     {"n":2,"sum":float("inf"),"sq":1}):
             self.assertFalse(uc._valid_stats(bad))
         self.assertTrue(uc._valid_stats({"n":2,"sum":1.6,"sq":1.28}))
+
+
+class PoseContextLearningTest(unittest.TestCase):
+    def test_coverage_uses_third_nearest_excluding_exact_and_invalid(self):
+        self.assertIsNone(uc.pose_learning_context({}))
+        self.assertIsNone(uc.pose_learning_context({"poseDistances":[0,.01]+[None]*23}))
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.07]+[.4]*22}),"near")
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.12]+[.4]*22}),"workable")
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.12]+[.4]*22,"exactReferenceIndex":0}),"sparse")
+        self.assertIsNone(uc.pose_learning_context({"poseDistances":[True,.01,float("nan"),.02]+[None]*21}))
+
+    def test_context_can_learn_different_winners_without_erasing_general_history(self):
+        def measured(value):
+            return {**proxy(value),"X-Retake-Similarity":str(value),
+                    "X-Retake-Naturalness":str(value*100),"X-Retake-Detail-Gate":"passed"}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"c.json"
+            store=uc.CalibrationStore(path,signature="context")
+            for _ in range(3):
+                store.record("bank",[(0,measured(.91)),(1,measured(.65))],context="near")
+            self.assertEqual(store.schedule("bank",range(2),context="near"),([0,1],"learned-context-balanced",6))
+            self.assertEqual(store.schedule("bank",range(2),context="sparse")[1],"learned-balanced")
+            for _ in range(3):
+                store.record("bank",[(0,measured(.62)),(1,measured(.94))],context="sparse")
+            self.assertEqual(store.schedule("bank",range(2),context="sparse"),([1,0],"learned-context-balanced",6))
+            again=uc.CalibrationStore(path,signature="context")
+            self.assertEqual(again.schedule("bank",range(2),context="near")[0],[0,1])
+            summary=again.summary("bank")["banks"]["bank"]
+            self.assertEqual(summary["jobs"],6)
+            self.assertEqual(summary["contexts"]["near"]["jobs"],3)
+            self.assertEqual(summary["contexts"]["sparse"]["measured_variants"],2)
+            self.assertEqual(summary["variants"]["0"]["balanced"]["n"],6)
+            store.record("bank",[(0,measured(.8))],context="unknown")
+            self.assertNotIn("unknown",store.summary("bank")["banks"]["bank"]["contexts"])
+            self.assertNotIn("poseDistances",path.read_text())
+
+    def test_context_requires_multiple_jobs_and_validated_measurements(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="context")
+            for _ in range(3):
+                store.record("bank",[(0,proxy(.95)),(1,proxy(.5))],context="near")
+            self.assertEqual(store.schedule("bank",range(2),context="near")[1],"learned-proxy")
+            store.record("bank",[(0,fid(.9,1)),(1,fid(.8,1))],self_test=True,context="sparse")
+            self.assertNotIn("context",store.schedule("bank",range(2),context="sparse")[1])

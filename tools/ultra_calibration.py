@@ -46,6 +46,8 @@ MIN_PROXY_SAMPLES = 6
 MIN_BALANCED_SAMPLES = 6
 EXPLORATION = {"fidelity": 0.06, "balanced": 0.04, "proxy": 0.04}
 MAX_BANKS = 8
+POSE_CONTEXTS = ("near", "workable", "sparse")
+MIN_CONTEXT_JOBS = 3
 _SELF_FIDELITY = re.compile(r"^ssim:(-?\d+(?:\.\d+)?),deltaE:(\d+(?:\.\d+)?)$")
 
 
@@ -53,6 +55,24 @@ def bank_key(reference_bytes: Iterable[bytes], weights: Sequence[int] | None = N
     """Stable identifier of the person's reference bank (never stored in reverse)."""
     return digest("retake-ultra-calibration", *(bytes(item) for item in reference_bytes),
                   ",".join(str(int(w)) for w in (weights or ())))[:32]
+
+
+def pose_learning_context(metadata):
+    """Coarse reference coverage, not a pose or identity estimate.
+
+    Use the third nearest usable reference, excluding the exact target.
+    Threshold .18 matches the existing reference-warp eligibility limit.
+    No raw distances or geometry are persisted.
+    """
+    distances=metadata.get("poseDistances")
+    if not isinstance(distances,list) or len(distances)!=25:
+        return None
+    exact=metadata.get("exactReferenceIndex")
+    valid=sorted(v for i,v in enumerate(distances) if i!=exact
+                 and type(v) in (int,float) and 0<=v<=10)
+    if len(valid)<3:
+        return None
+    return "near" if valid[2]<=.09 else "workable" if valid[2]<=.18 else "sparse"
 
 
 def schedule_signature(profile_version: str, variations: Sequence[int]) -> str:
@@ -137,25 +157,53 @@ def _counter(value):
     return value if type(value) is int and 0<=value<=1_000_000 else 0
 
 
+def _clean_entry(entry):
+    if not isinstance(entry,dict) or not isinstance(entry.get("variants"),dict):
+        return None
+    variants={}
+    for variant,slot in entry["variants"].items():
+        if variant not in {str(i) for i in range(24)} or not isinstance(slot,dict):
+            continue
+        row={kind:{k:stats[k] for k in ("n","sum","sq")} for kind,stats in slot.items()
+             if kind in EXPLORATION and _valid_stats(stats) and stats["n"]>0}
+        if row: variants[variant]=row
+    updated=entry.get("updated",0)
+    if type(updated) not in (int,float) or not 0<=updated<=1e12:
+        updated=0
+    return {"variants":variants,"jobs":_counter(entry.get("jobs")),
+            "self_tests":_counter(entry.get("self_tests")),"updated":updated}
+
+
 def _clean_banks(banks):
-    """Reject malformed nested slots, not the valid statistics beside them."""
+    """Reject malformed nested slots without dropping valid sibling statistics."""
     clean={}
     for key,entry in banks.items():
-        if not isinstance(entry,dict) or not isinstance(entry.get("variants"),dict):
+        bank=_clean_entry(entry)
+        if bank is None:
             continue
-        variants={}
-        for variant,slot in entry["variants"].items():
-            if variant not in {str(i) for i in range(24)} or not isinstance(slot,dict):
-                continue
-            row={kind:dict(stats) for kind,stats in slot.items()
-                 if kind in EXPLORATION and _valid_stats(stats) and stats["n"]>0}
-            if row: variants[variant]=row
-        updated=entry.get("updated",0)
-        if type(updated) not in (int,float) or not 0<=updated<=1e12:
-            updated=0
-        clean[key]={"variants":variants,"jobs":_counter(entry.get("jobs")),
-                    "self_tests":_counter(entry.get("self_tests")),"updated":updated}
+        contexts=entry.get("contexts")
+        if isinstance(contexts,dict):
+            bank["contexts"]={name:valid for name in POSE_CONTEXTS
+                              if (valid:=_clean_entry(contexts.get(name))) is not None}
+        clean[key]=bank
     return clean
+
+
+def _add_rows(entry,rows,self_test):
+    for variation,(kind,value) in rows:
+        slot=entry["variants"].setdefault(str(variation),{})
+        stats=slot.get(kind)
+        if not _valid_stats(stats):
+            stats=_empty_stats()
+        if stats["n"]>=1_000_000:
+            stats={"n":500_000,"sum":stats["sum"]*.5,"sq":stats["sq"]*.5}
+        stats["n"]+=1
+        stats["sum"]+=value
+        stats["sq"]+=value*value
+        slot[kind]=stats
+    entry["jobs"]=min(1_000_000,_counter(entry.get("jobs"))+1)
+    entry["self_tests"]=min(1_000_000,_counter(entry.get("self_tests"))+(1 if self_test else 0))
+    entry["updated"]=time.time()
 
 
 class CalibrationStore:
@@ -203,7 +251,7 @@ class CalibrationStore:
             raise
 
     # ---- learning ----------------------------------------------------
-    def record(self, bank: str, observations: Sequence[tuple[int, Mapping[str, str]]], self_test: bool = False) -> int:
+    def record(self, bank: str, observations: Sequence[tuple[int, Mapping[str, str]]], self_test: bool = False, context: str | None = None) -> int:
         """Add verified rounds of one job; returns how many were usable."""
         if not self.enabled or not bank:
             return 0
@@ -235,21 +283,10 @@ class CalibrationStore:
             entry = data["banks"].setdefault(bank, {"variants": {}, "jobs": 0, "self_tests": 0})
             if not isinstance(entry.get("variants"), dict):
                 entry["variants"] = {}
-            for variation, (kind, value) in rows:
-                slot = entry["variants"].setdefault(str(variation), {})
-                stats = slot.get(kind)
-                if not _valid_stats(stats):
-                    stats = _empty_stats()
-                if stats["n"]>=1_000_000:
-                    # Keep the running mean while preventing counter overflow.
-                    stats={"n":500_000,"sum":stats["sum"]*.5,"sq":stats["sq"]*.5}
-                stats["n"] += 1
-                stats["sum"] += value
-                stats["sq"] += value * value
-                slot[kind] = stats
-            entry["jobs"] = min(1_000_000,_counter(entry.get("jobs")) + 1)
-            entry["self_tests"] = min(1_000_000,_counter(entry.get("self_tests")) + (1 if self_test else 0))
-            entry["updated"] = time.time()
+            _add_rows(entry,rows,self_test)
+            if context in POSE_CONTEXTS:
+                scoped=entry.setdefault("contexts",{}).setdefault(context,{"variants":{},"jobs":0,"self_tests":0})
+                _add_rows(scoped,rows,self_test)
             self._save(data)
         return len(rows)
 
@@ -258,12 +295,23 @@ class CalibrationStore:
             entry = self._load()["banks"].get(bank)
         return entry if isinstance(entry, dict) and isinstance(entry.get("variants"), dict) else {"variants": {}}
 
-    def schedule(self, bank: str, variations: Sequence[int]) -> tuple[list[int], str, int]:
+    def schedule(self, bank: str, variations: Sequence[int], context: str | None = None) -> tuple[list[int], str, int]:
         """(order, mode, samples). mode: learned-fidelity | learned-balanced | learned-proxy | default."""
         order = list(variations)
         if not self.enabled or not bank:
             return order, "default", 0
         entry=self._bank(bank)
+        scoped=entry.get("contexts",{}).get(context) if context in POSE_CONTEXTS else None
+        if scoped and scoped.get("jobs",0)>=MIN_CONTEXT_JOBS and len(scoped["variants"])>=2:
+            ranked,mode,total=self._rank_schedule(scoped,order)
+            # Context-specific evidence must be at least balanced. Sparse
+            # legacy detail-only observations fall back to general history.
+            if mode in ("learned-fidelity","learned-balanced"):
+                return ranked,mode.replace("learned-","learned-context-",1),total
+        return self._rank_schedule(entry,order)
+
+    @staticmethod
+    def _rank_schedule(entry,order):
         variants = entry["variants"]
         for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("balanced", MIN_BALANCED_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
             stats = {
@@ -327,6 +375,8 @@ class CalibrationStore:
             out["banks"][key] = {
                 "jobs": int(entry.get("jobs", 0) or 0), "self_tests": int(entry.get("self_tests", 0) or 0),
                 "variants": rows,
+                "contexts": {name:{"jobs":scoped["jobs"],"self_tests":scoped["self_tests"],
+                    "measured_variants":len(scoped["variants"])} for name,scoped in entry.get("contexts",{}).items()},
             }
         return out
 

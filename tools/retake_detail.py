@@ -84,8 +84,15 @@ def warp_piecewise_affine(
         dst_tri = target_points[[a, b, c]].astype(np.float32)
         src_tri = source_points[[a, b, c]].astype(np.float32)
         u, v = dst_tri[1] - dst_tri[0], dst_tri[2] - dst_tri[0]
-        area = abs(float(u[0] * v[1] - u[1] * v[0]))
-        if area < 0.5:
+        signed_dst = float(u[0] * v[1] - u[1] * v[0])
+        u, v = src_tri[1] - src_tri[0], src_tri[2] - src_tri[0]
+        signed_src = float(u[0] * v[1] - u[1] * v[0])
+        # A collapsed source triangle gives OpenCV a singular affine matrix;
+        # a folded triangle mirrors features. Neither is real texture evidence.
+        # Keep these areas uncovered so compositing retains the identity base.
+        if (not math.isfinite(signed_src) or not math.isfinite(signed_dst)
+                or abs(signed_dst) < 0.5 or abs(signed_src) < 0.5
+                or signed_src * signed_dst <= 0):
             continue
         x, y, w, h = cv2.boundingRect(dst_tri)
         x0, y0 = max(0, x), max(0, y)
@@ -109,7 +116,12 @@ def warp_piecewise_affine(
         blurred = cv2.GaussianBlur(warped * coverage[:, :, None], (0, 0), 1.0).reshape(height, width, channels)
         norm = cv2.GaussianBlur(coverage, (0, 0), 1.0)
         filled = blurred / np.maximum(norm, 1e-4)[:, :, None]
-        ok = gaps & (norm > 0.05)
+        # Repair rasterization pinholes, not large unobserved mesh regions.
+        # Limiting to an enclosed one-pixel gap avoids growing a fabricated
+        # texture field across an invalid source triangle.
+        enclosed = cv2.morphologyEx((coverage > 0).astype(np.uint8),
+                                   cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
+        ok = gaps & enclosed & (norm > 0.05)
         warped[ok] = filled[ok]
         coverage[ok] = 1.0
     return (warped[:, :, 0] if channels == 1 else warped), coverage
@@ -290,6 +302,9 @@ def match_broad_light(warped: np.ndarray, swapped: np.ndarray, weight: np.ndarra
 
 def _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed):
     image, reference_points = candidate
+    if not isinstance(image, np.ndarray) or image.ndim != 3 or image.shape[2] != 3 or image.size == 0:
+        raise ValueError("Referans görseli geçersiz.")
+    reference_points = validate_mesh(reference_points, image.shape[1], image.shape[0], max(image.shape[:2])*.1)
     shape = target.shape[:2]
     warped, coverage = warp_piecewise_affine(image, reference_points, target_points, shape)
     skin = reference_skin(warped, target_points, coverage, face_width)
@@ -318,7 +333,7 @@ def choose_and_transplant(
     Candidates arrive best pose match first; a later one must fit clearly
     better to win. If even the best one's features do not line up with the
     photo (`min_fit`), ValueError: the AI swap is better than a wrong face.
-    Returns (uint8 BGR result, chosen index, per-candidate fit).
+    Returns (uint8 BGR result, chosen index, fit for each successfully measured candidate).
     """
     if not candidates:
         raise ValueError("gerçek fotoğraf adayı yok")
@@ -335,19 +350,29 @@ def choose_and_transplant(
     best = None
     fits = []
     for index, candidate in enumerate(candidates):
-        warped, coverage, weight = _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed)
-        # Outside the warped mesh use the swap, so the mesh border does not
-        # count as a feature.
-        filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
-        fit = candidate_fit(filled, weight, swapped, target, face_width)
+        try:
+            warped, coverage, weight = _prepare_candidate(swapped, target, candidate, target_points, face_width, allowed)
+            # Outside the warped mesh use the swap, so the mesh border does not
+            # count as a feature.
+            filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
+            fit = candidate_fit(filled, weight, swapped, target, face_width)
+            if not all(math.isfinite(fit[key]) for key in ("structure", "light", "score")):
+                raise ValueError("Referans uyum ölçümü geçersiz.")
+        except (ValueError, TypeError, cv2.error) as error:
+            print(f"[Retake] Tam yüz referans adayı {index+1} atlandı: {type(error).__name__}.", flush=True)
+            continue
         fit["score"] -= 0.03 * index
         fits.append(fit)
+        # Screen structural eligibility BEFORE ranking. Good illumination
+        # cannot rescue a failed structural fit or disqualify a valid runner-up.
+        if min_fit is not None and fit["structure"] < min_fit:
+            continue
         if best is None or fit["score"] > best[0]:
             best = (fit["score"], index, warped, weight)
-    _, index, warped, weight = best
-    if min_fit is not None and fits[index]["structure"] < min_fit:
+    if best is None:
         scores = ", ".join(f"{fit['structure']:.2f}" for fit in fits)
         raise ValueError(f"hiçbir aday yüze yeterince oturmadı (uyum {scores})")
+    _, index, warped, weight = best
     warped = match_broad_light(warped, swapped, weight, face_width)
     amount = np.clip(weight * strength, 0.0, 1.0)
     blended = swapped.astype(np.float32) * (1.0 - amount[:, :, None]) + warped * amount[:, :, None]

@@ -102,27 +102,33 @@ def choose_and_transfer_lower_face(
     fits: list[dict[str, float]] = []
     ranked = []
     for index, candidate in enumerate(candidates):
-        reference, reference_points = candidate
-        source_points = np.asarray(reference_points, np.float32)
-        if source_points.shape != (478, 2):
+        try:
+            reference, reference_points = candidate
+            source_points = np.asarray(reference_points, np.float32)
+            if source_points.shape != (478, 2):
+                continue
+            # Do not use the swap's change mask here: FaceFusion marks only
+            # skin/eyes/nose/lips, frequently leaving original beard pixels
+            # untouched. The geometry and mouth exclusion supply the safe region.
+            warped, coverage, full_weight = _prepare_candidate(
+                swapped, target, candidate, points, face_width,
+                np.ones_like(allowed, dtype=np.float32)
+            )
+            transfer = lower_face_mask(points, source_points, target.shape[:2], face_width)
+            # Allow substantial real reference hair transfer even where the
+            # semantic swap did not edit pixels, while preserving its evidence
+            # of trusted changed pixels and retaining a feathered jaw margin.
+            confidence = 0.80 + 0.20 * np.clip(allowed, 0.0, 1.0)
+            weight = full_weight * transfer * confidence
+            if int(np.count_nonzero(weight > 0.1)) < max(64, int(face_width * face_width * 0.025)):
+                continue
+            filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
+            fit = candidate_fit(filled, weight, swapped, target, face_width)
+            if not all(np.isfinite(fit[key]) for key in ("structure", "light", "score")):
+                raise ValueError("Referans uyum ölçümü geçersiz.")
+        except (ValueError, TypeError, cv2.error) as error:
+            print(f"[Retake] Alt yüz referans adayı {index+1} atlandı: {type(error).__name__}.", flush=True)
             continue
-        # Do not use the swap's change mask here: FaceFusion marks only
-        # skin/eyes/nose/lips, frequently leaving original beard pixels
-        # untouched. The geometry and mouth exclusion supply the safe region.
-        warped, coverage, full_weight = _prepare_candidate(
-            swapped, target, candidate, points, face_width,
-            np.ones_like(allowed, dtype=np.float32)
-        )
-        transfer = lower_face_mask(points, source_points, target.shape[:2], face_width)
-        # Allow substantial real reference hair transfer even where the
-        # semantic swap did not edit pixels, while preserving its evidence
-        # of trusted changed pixels and retaining a feathered jaw margin.
-        confidence = 0.80 + 0.20 * np.clip(allowed, 0.0, 1.0)
-        weight = full_weight * transfer * confidence
-        if int(np.count_nonzero(weight > 0.1)) < max(64, int(face_width * face_width * 0.025)):
-            continue
-        filled = warped * coverage[:, :, None] + swapped.astype(np.float32) * (1.0 - coverage[:, :, None])
-        fit = candidate_fit(filled, weight, swapped, target, face_width)
         fit["score"] -= 0.025 * index  # prefer the best pose from the browser on close fits
         fits.append(fit)
         if fit["structure"] >= MIN_LOWER_FIT:

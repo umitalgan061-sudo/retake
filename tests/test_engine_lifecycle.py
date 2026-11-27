@@ -70,3 +70,26 @@ class EngineLifecycleTest(unittest.TestCase):
             import json
             self.assertEqual(json.loads(status.read_text())["state"],"waiting_for_port")
             self.assertFalse(status.with_suffix(".tmp").exists())
+
+
+class UpdateScriptContractTest(unittest.TestCase):
+    def test_update_checks_manual_job_before_pull_and_again_before_stop(self):
+        script=(Path(__file__).resolve().parents[1]/"tools"/"update_retake_ultra.ps1").read_text(encoding="utf-8-sig")
+        start=script.index("$manualHealth = Invoke-RestMethod")
+        self.assertLess(start,script.index("git pull --ff-only origin main"))
+        stop=script.index("Stop-Process -Id $bridge.ProcessId")
+        self.assertLess(script.index("Manual engine state changed"),stop)
+        self.assertLess(script.index("$same.CreationDate"),stop)
+        self.assertIn("Another or unidentified Retake worktree",script)
+
+    def test_deploy_verifies_live_bytes_and_managed_revision_first(self):
+        script=(Path(__file__).resolve().parents[1]/"tools"/"update_retake_ultra.ps1").read_text(encoding="utf-8-sig")
+        body=script.split("function Publish-VerifiedRetakeWeb {",1)[1].split("Push-Location $Root",1)[0]
+        self.assertIn('foreach ($file in @("app.js", "src/diagnostics.js", "sw.js"))',body)
+        self.assertIn("Get-FileHash -Algorithm SHA256",body)
+        self.assertIn("https://retake06-ua.web.app/",body)
+        self.assertNotIn("X-Retake-Token",body)
+        self.assertNotIn("pairing-token",body)
+        self.assertIn("if (-not $verified) { throw",body)
+        managed=script.split("Push-Location $Root",1)[1]
+        self.assertLess(managed.index("Managed Retake engine verified"),managed.index("Publish-VerifiedRetakeWeb"))

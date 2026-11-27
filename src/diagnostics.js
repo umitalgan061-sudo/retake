@@ -9,7 +9,7 @@ const HEALTH_KEYS = Object.freeze([
   "realism", "personal_model", "cuda", "ultra_learning", "self_test_benchmark",
   "neck_harmonization", "last_job_cleanup", "quality_revision", "regional_edit_evidence",
   "lower_face_texture_evidence", "native_input_recovery", "reference_appearance_tiebreak",
-  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard", "visible_identity_verification", "job_local_identity_score_cache"
+  "finishing_identity_guard", "cumulative_finishing_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard", "visible_identity_verification", "job_local_identity_score_cache"
 ]);
 const SECRET_NAME = /token|secret|key|pairing|auth|cookie|password/i;
 const MAX_VALUE = 300;
@@ -103,6 +103,12 @@ export function buildDiagnosticReport({ headers = {}, health = null, depth = "",
   }
   const evidence = summarizeQualityEvidence(headers);
   if (evidence) lines.push(evidence);
+  const finishingFloor=headers["x-retake-finishing-floor"];
+  if(typeof finishingFloor==="string" && /^-?\d(?:\.\d{1,4})?$/.test(finishingFloor)) {
+    const floor=Number(finishingFloor);
+    if(Number.isFinite(floor)&&floor>=-1.004&&floor<=1)
+      lines.push("Son düzenleme ortak kosinüs alt sınırı: "+floor.toFixed(4).replace(".",",")+" (yüzde değil)");
+  }
   const reuse=describeIdentityScoreCache(headers["x-retake-identity-score-cache"]);
   if(reuse)lines.push(reuse);
   const resultRevision = validQualityRevision(headers["x-retake-quality-revision"]);

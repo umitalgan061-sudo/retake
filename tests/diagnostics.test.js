@@ -153,3 +153,9 @@ test("ArcFace reuse diagnostics show actual counters and reject malformed values
   assert.equal(describeIdentityScoreCache("hits:NaN,measured:70,failed:2"),"");
   assert.match(buildDiagnosticReport({headers:{"x-retake-identity-score-cache":"hits:40,measured:70,failed:2"}}),/70 benzersiz ölçüm isteği/);
 });
+
+
+test("finishing floor diagnostic is numeric and not a calibrated percentage", () => {
+  assert.match(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"0.7360"}}),/ortak kosinüs alt sınırı: 0,7360/);
+  assert.doesNotMatch(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"NaN"}}),/ortak kosinüs alt sınırı/);
+});

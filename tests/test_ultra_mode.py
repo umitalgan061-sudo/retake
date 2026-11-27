@@ -638,3 +638,22 @@ class NaturalnessComponentGuardTest(unittest.TestCase):
         from tools.ultra_mode import naturalness_checks
         self.assertEqual(naturalness_checks({"X-Retake-Naturalness-Checks":
             "border=70,border=90,tone=nan,grain=80,grain=80,light=101,unknown=90"}),{"grain":80.0})
+
+
+class CumulativeFinishingBudgetTest(unittest.TestCase):
+    def test_one_budget_across_realism_editor_and_local_finishing(self):
+        from tools.ultra_mode import advance_finishing_floor
+        floor=advance_finishing_floor(None,.74,None,.21)
+        self.assertAlmostEqual(floor,.736)
+        floor=advance_finishing_floor(floor,.7385,None,.21)
+        self.assertAlmostEqual(floor,.736)
+        self.assertLess(.7359,floor)
+        floor=advance_finishing_floor(floor,.80,None,.21)
+        self.assertAlmostEqual(floor,.796)
+        self.assertAlmostEqual(advance_finishing_floor(floor,.797,None,.21),.796)
+
+    def test_attained_original_is_protected_without_impossible_floor(self):
+        from tools.ultra_mode import advance_finishing_floor
+        self.assertAlmostEqual(advance_finishing_floor(None,.90,.89,.90),.898)
+        self.assertAlmostEqual(advance_finishing_floor(None,.885,.89,.90),.881)
+        self.assertAlmostEqual(advance_finishing_floor(.881,.90,.89,.90),.898)

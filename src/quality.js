@@ -219,6 +219,12 @@ export function describeUltraSchedule(mode, samples) {
   if (mode === "learned-fidelity") {
     return "Öğrenilmiş sıra: öz-testlerde senin yüzünde en doğal ölçülen ayarlar önce denendi" + (count ? ` (${count} ölçüm)` : "");
   }
+  if (mode === "learned-context-fidelity" || mode === "learned-context-balanced") {
+    return "Öğrenilmiş sıra: benzer referans poz uyumundaki önceki ölçümler" + (count ? ` (${count} ölçüm)` : "");
+  }
+  if (mode === "learned-balanced") {
+    return "Öğrenilmiş sıra: kimlik ve fotoğraf kalitesi birlikte değerlendirildi" + (count ? ` (${count} ölçüm)` : "");
+  }
   if (mode === "learned-proxy") {
     return "Öğrenilmiş sıra: önceki işlemlerde fotoğraf ayrıntısını en iyi koruyan ayarlar önce denendi" + (count ? ` (${count} tur)` : "");
   }

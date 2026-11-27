@@ -21,7 +21,7 @@ from typing import Any
 
 try:
     from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
-    from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
+    from .ultra_calibration import CalibrationStore, bank_key, schedule_signature, pose_learning_context
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
         judge_status, judge_transport, judged_winner
@@ -48,7 +48,7 @@ try:
     )
 except ImportError:
     from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
-    from ultra_calibration import CalibrationStore, bank_key, schedule_signature
+    from ultra_calibration import CalibrationStore, bank_key, schedule_signature, pose_learning_context
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
         judge_status, judge_transport, judged_winner
@@ -2653,11 +2653,15 @@ def run_ultra_search(
     metadata = parsed[6] if isinstance(parsed, tuple) and len(parsed) == 7 and isinstance(parsed[6], dict) else {}
     depth = ultra_depth(metadata.get("qualityDepth"))
     bank = ""
+    learning_context=pose_learning_context(metadata)
     schedule, schedule_mode, schedule_samples = list(ULTRA_VARIATIONS), "default", 0
     if calibration is not None:
         try:
             bank = bank_key(parsed[1], metadata.get("referenceWeights"))
-            schedule, schedule_mode, schedule_samples = calibration.schedule(bank, ULTRA_VARIATIONS)
+            if learning_context is None:
+                schedule, schedule_mode, schedule_samples = calibration.schedule(bank, ULTRA_VARIATIONS)
+            else:
+                schedule, schedule_mode, schedule_samples = calibration.schedule(bank, ULTRA_VARIATIONS, context=learning_context)
         except Exception as error:  # learning is advisory
             schedule, schedule_mode, schedule_samples = list(ULTRA_VARIATIONS), "default", 0
             print(f"[Ultra] Öğrenilmiş sıra kullanılamadı: {error}", flush=True)
@@ -2675,7 +2679,9 @@ def run_ultra_search(
         if calibration is None or not bank or not observations:
             return
         try:
-            calibration.record(bank, observations, self_test=type(metadata.get("exactReferenceIndex")) is int)
+            options={"self_test":type(metadata.get("exactReferenceIndex")) is int}
+            if learning_context is not None: options["context"]=learning_context
+            calibration.record(bank, observations, **options)
         except Exception as error:
             print(f"[Ultra] Öğrenme kaydı atlandı: {error}", flush=True)
 

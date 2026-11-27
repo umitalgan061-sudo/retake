@@ -129,3 +129,21 @@ class IdentityScoreCacheTest(unittest.TestCase):
             self.assertEqual(cache.describe()["entries"],1)
             self.assertEqual(cache.score([1.0],[a],lambda _:[.81]),[.81])
             self.assertEqual(IdentityScoreCache().score([1.0],[a],lambda _:[.82]),[.82])
+
+
+    def test_mutated_duplicate_and_cached_alias_are_not_returned(self):
+        from tools.retake_cache import IdentityScoreCache
+        with tempfile.TemporaryDirectory() as directory:
+            a,b,c,d=[Path(directory)/n for n in ("a","b","c","d")]
+            a.write_bytes(b"same"); b.write_bytes(b"same")
+            c.write_bytes(b"cached"); d.write_bytes(b"cached")
+            cache=IdentityScoreCache()
+            self.assertEqual(cache.score([1.0],[c],lambda _:[.91]),[.91])
+            def measure(paths):
+                self.assertEqual(paths,[a])
+                b.write_bytes(b"mutated")
+                d.write_bytes(b"mutated again")
+                return [.81]
+            self.assertEqual(cache.score([1.0],[a,b,d],measure),[.81,None,None])
+            self.assertEqual(cache.describe()["hits"],0)
+            self.assertEqual(cache.describe()["failed"],2)

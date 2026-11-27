@@ -43,7 +43,8 @@ DELTA_E_WEIGHT = 0.02
 REINFORCED_PROXY_PENALTY = 0.05
 MIN_FIDELITY_SAMPLES = 3
 MIN_PROXY_SAMPLES = 6
-EXPLORATION = {"fidelity": 0.06, "proxy": 0.04}
+MIN_BALANCED_SAMPLES = 6
+EXPLORATION = {"fidelity": 0.06, "balanced": 0.04, "proxy": 0.04}
 MAX_BANKS = 8
 _SELF_FIDELITY = re.compile(r"^ssim:(-?\d+(?:\.\d+)?),deltaE:(\d+(?:\.\d+)?)$")
 
@@ -69,8 +70,37 @@ def parse_self_fidelity(value: Any) -> tuple[float, float] | None:
     return ssim, delta_e
 
 
+def _metric(headers, key, low, high):
+    try:
+        value = float(headers.get(key, ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and low <= value <= high else None
+
+
+def balanced_proxy(headers, detail):
+    """Scheduling heuristic only, not a biometric or acceptance score."""
+    identity = _metric(headers, "X-Retake-Similarity", -1, 1)
+    natural = _metric(headers, "X-Retake-Naturalness", 0, 100)
+    if identity is None or natural is None:
+        return None
+    identity = max(0., identity)
+    terms = [(0.55, identity), (0.20, detail), (0.25, natural/100.)]
+    appearance = _metric(headers, "X-Retake-Reference-Appearance", 0, 1)
+    if appearance is not None:
+        terms.append((0.10, appearance))
+    rim = _metric(headers, "X-Retake-Rim-Fraction", 0, 1)
+    if rim is not None:
+        terms.append((0.10, 1-rim))
+    reward = sum(w*v for w,v in terms)/sum(w for w,_ in terms)
+    level = _metric(headers, "X-Retake-Identity-Photo-Level", .40, .99)
+    if level is not None:
+        reward -= .75*max(0., min(.92, level-.02)-identity)
+    return max(0., min(1., reward))
+
+
 def round_quality(headers: Mapping[str, str]) -> tuple[str, float] | None:
-    """('fidelity'|'proxy', value in 0..1) for one verified round, or None."""
+    """(fidelity, balanced or proxy; value in 0..1) for one verified round."""
     fidelity = parse_self_fidelity(headers.get("X-Retake-Self-Fidelity"))
     if fidelity is not None:
         ssim, delta_e = fidelity
@@ -83,7 +113,9 @@ def round_quality(headers: Mapping[str, str]) -> tuple[str, float] | None:
         return None
     if headers.get("X-Retake-Identity-Reinforced") == "on":
         detail -= REINFORCED_PROXY_PENALTY
-    return "proxy", max(0.0, min(1.0, detail))
+    detail = max(0.0, min(1.0, detail))
+    balanced = balanced_proxy(headers, detail)
+    return ("balanced", balanced) if balanced is not None else ("proxy", detail)
 
 
 def _empty_stats() -> dict[str, float]:
@@ -149,7 +181,7 @@ class CalibrationStore:
         for variation, headers in observations:
             if type(variation) is not int or not 0 <= variation < 24 or variation in seen:
                 continue
-            if headers.get("X-Retake-Detail-Gate") not in (None, "passed"):
+            if headers.get("X-Retake-Detail-Gate") not in (None, "passed", "soft-original"):
                 continue
             quality = round_quality(headers)
             if quality is None:
@@ -191,12 +223,12 @@ class CalibrationStore:
         return entry if isinstance(entry, dict) and isinstance(entry.get("variants"), dict) else {"variants": {}}
 
     def schedule(self, bank: str, variations: Sequence[int]) -> tuple[list[int], str, int]:
-        """(order, mode, samples). mode: learned-fidelity | learned-proxy | default."""
+        """(order, mode, samples). mode: learned-fidelity | learned-balanced | learned-proxy | default."""
         order = list(variations)
         if not self.enabled or not bank:
             return order, "default", 0
         variants = self._bank(bank)["variants"]
-        for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
+        for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("balanced", MIN_BALANCED_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
             stats = {
                 v: variants.get(str(v), {}).get(kind) for v in order
             }
@@ -232,7 +264,7 @@ class CalibrationStore:
                 if not isinstance(slot, dict):
                     continue
                 row = {}
-                for kind in ("fidelity", "proxy"):
+                for kind in ("fidelity", "balanced", "proxy"):
                     stats = slot.get(kind)
                     if _valid_stats(stats) and stats["n"] > 0:
                         row[kind] = {"n": stats["n"], "mean": round(stats["sum"] / stats["n"], 4)}

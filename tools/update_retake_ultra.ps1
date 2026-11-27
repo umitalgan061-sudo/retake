@@ -84,6 +84,33 @@ if ($managedTask -and $managedTask.State -eq "Running") {
     Stop-ScheduledTask -TaskName $managedTask.TaskName
     $managedStopped = $true
 }
+# Preflight manual work before changing code or deploying the site.
+$bridges = @()
+if (-not $managedTask) {
+    $bridges = @(
+        Get-CimInstance Win32_Process -ErrorAction Stop |
+        Where-Object {
+            $_.CommandLine -and $_.CommandLine -match 'facefusion_local_server\.py' -and $_.Name -match '^python(?:w)?\.exe$'
+        }
+    )
+    if ($bridges.Count -gt 0) {
+        $serverPath = Join-Path $PSScriptRoot "facefusion_local_server.py"
+        foreach ($bridge in $bridges) {
+            if ($bridge.CommandLine.IndexOf($serverPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
+                throw "Another or unidentified Retake worktree is running; no process was stopped."
+            }
+        }
+        if ($bridges.Count -ne 1) { throw "Multiple Retake engines found; no process was stopped." }
+        $manualHeaders = @{}
+        $tokenPath = Join-Path $HOME ".retake\pairing-token"
+        if (Test-Path $tokenPath) { $manualHeaders["X-Retake-Token"] = (Get-Content $tokenPath -Raw).Trim() }
+        try { $manualHealth = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $manualHeaders -TimeoutSec 5 }
+        catch { throw "Manual engine state cannot be verified. Close it explicitly before restarting." }
+        if ($manualHealth.background_mode -eq $true) { throw "Unexpected managed engine; no process was stopped." }
+        if ($manualHealth.busy -ne $false -and -not $Force) { throw "Manual engine is processing a photo or busy state is unknown. Retry when idle." }
+        if ($manualHealth.busy -ne $false) { Write-Warning "-Force: manual photo processing may be interrupted." }
+    }
+}
 Push-Location $Root
 try {
     if (-not (Test-Path ".git")) {
@@ -155,35 +182,14 @@ try {
 
     # Stop just the Python command with the Retake bridge, not arbitrary
     # applications using Python, CUDA or port 8765.
-    $bridges = @(
-        Get-CimInstance Win32_Process -ErrorAction Stop |
-        Where-Object {
-            $_.CommandLine -and $_.CommandLine -match 'facefusion_local_server\.py' -and $_.Name -match '^python(?:w)?\.exe$'
-        }
-    )
-    if ($bridges.Count -gt 0) {
-        $serverPath = Join-Path $PSScriptRoot "facefusion_local_server.py"
-        foreach ($bridge in $bridges) {
-            if ($bridge.CommandLine.IndexOf($serverPath, [StringComparison]::OrdinalIgnoreCase) -lt 0) {
-                throw "Another or unidentified Retake worktree is running; no process was stopped."
-            }
-        }
-        if ($bridges.Count -ne 1) { throw "Multiple Retake engines found; no process was stopped." }
-        $manualHeaders = @{}
-        $tokenPath = Join-Path $HOME ".retake\pairing-token"
-        if (Test-Path $tokenPath) { $manualHeaders["X-Retake-Token"] = (Get-Content $tokenPath -Raw).Trim() }
-        try { $manualHealth = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $manualHeaders -TimeoutSec 5 }
-        catch { throw "Manual engine state cannot be verified. Close it explicitly before restarting." }
-        if ($manualHealth.background_mode -eq $true) { throw "Unexpected managed engine; no process was stopped." }
-        if ($manualHealth.busy -ne $false -and -not $Force) { throw "Manual engine is processing a photo or busy state is unknown. Retry when idle." }
-        if ($manualHealth.busy -ne $false) { Write-Warning "-Force: manual photo processing may be interrupted." }
-    }
     $pairFromPrevious = $false
     foreach ($bridge in $bridges) {
         if ($bridge.CommandLine -match '--enable-pairing') {
             $pairFromPrevious = $true
         }
         Write-Host ("Onceki Retake motoru durduruluyor (PID " + $bridge.ProcessId + ")...") -ForegroundColor Yellow
+        $current = Invoke-RestMethod "http://127.0.0.1:8765/health" -Headers $manualHeaders -TimeoutSec 5
+        if ($current.background_mode -eq $true -or ($current.busy -ne $false -and -not $Force)) { throw "Manual engine state changed; no process was stopped." }
         $same = Get-CimInstance Win32_Process -Filter ("ProcessId=" + $bridge.ProcessId) -ErrorAction Stop
         if (-not $same -or $same.CreationDate -ne $bridge.CreationDate -or $same.CommandLine -ne $bridge.CommandLine) { throw "Manual engine changed during update; no process was stopped." }
         Stop-Process -Id $bridge.ProcessId -ErrorAction Stop

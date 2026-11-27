@@ -542,3 +542,43 @@ class NoGainFluxRetryTest(unittest.TestCase):
         self.assertFalse(defer_flux_retry("accepted",base))
         for field,value in (("Identity-Delta",".01"),("Detail-Delta",".07"),("Skin-Gain",".06"),("Skin-Gain",""),("Skin-Gain","nan")):
             self.assertFalse(defer_flux_retry("detail-gain-insufficient",{**base,"X-Retake-FLUX-"+field:value}))
+
+
+class DistinctAttemptLedgerTest(unittest.TestCase):
+    def test_failed_grid_and_refinement_are_not_replayed(self):
+        from tools.ultra_mode import plan_extra_spec
+        grid=srv.FACE_SWAP_VARIATIONS
+        scores={0:.82}
+        records=[((0,None),score(.82))]
+        seen={(0,None),(1,None)}
+        spec,local=plan_extra_spec(scores,(0,None),grid,records,set(),set(),
+                                  ULTRA_VARIATIONS,True,False,seen)
+        self.assertEqual(spec,(2,None))
+        self.assertTrue(local)
+        seen.update((v,None) for v in ULTRA_VARIATIONS)
+        first,_=plan_extra_spec(scores,(0,None),grid,records,set(),set(),
+                                ULTRA_VARIATIONS,True,False,seen)
+        seen.add(first)
+        second,_=plan_extra_spec(scores,(0,None),grid,records,set(),set(),
+                                 ULTRA_VARIATIONS,True,False,seen)
+        self.assertNotEqual(first,second)
+        self.assertIsNotNone(second[1])
+
+    def test_exhausted_winner_explores_other_verified_base(self):
+        from tools.ultra_mode import plan_extra_spec, RefinePlanner
+        grid=srv.FACE_SWAP_VARIATIONS
+        scores={0:.83,3:.82}
+        records=[((v,None),score(s)) for v,s in scores.items()]
+        seen={(v,None) for v in ULTRA_VARIATIONS}
+        planner=RefinePlanner(grid[0],budget=40)
+        while True:
+            params=planner.next()
+            if params is None:
+                break
+            seen.add((0,params))
+            planner.feedback(params,False)
+        spec,local=plan_extra_spec(scores,(0,None),grid,records,set(),set(),
+                                  ULTRA_VARIATIONS,True,False,seen)
+        self.assertEqual(spec[0],3)
+        self.assertTrue(local)
+        self.assertNotIn(spec,seen)

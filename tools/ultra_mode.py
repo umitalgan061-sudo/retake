@@ -210,6 +210,24 @@ def prefer_sufficient_candidate(candidate: dict[str, str], best: dict[str, str])
     return (score_from_headers(candidate) or -1.0) > (score_from_headers(best) or -1.0) + ULTRA_SCORE_EPS
 
 
+def original_identity_priority(candidate, incumbent):
+    """Protect an attained original-photo score before aesthetic tie-breaks.
+
+    Compare only shared measured baselines. This is a pairwise priority,
+    not a universal threshold or an instruction to reject every edit.
+    """
+    a, b = score_from_headers(candidate), score_from_headers(incumbent)
+    before_a = _header_cosine(candidate, "X-Retake-Similarity-Before")
+    before_b = _header_cosine(incumbent, "X-Retake-Similarity-Before")
+    if None in (a, b, before_a, before_b) or abs(before_a-before_b) > ULTRA_REALISM_TIE_LOSS:
+        return None
+    threshold = max(before_a, before_b) - ULTRA_REALISM_TIE_LOSS
+    meets_a, meets_b = a >= threshold-1e-9, b >= threshold-1e-9
+    if meets_a != meets_b:
+        return meets_a
+    return None
+
+
 def prefer_ultra_candidate(
     candidate: dict[str, str], best: dict[str, str] | None
 ) -> bool:
@@ -227,6 +245,9 @@ def prefer_ultra_candidate(
     old = score_from_headers(best)
     if old is None:
         return True
+    original_priority = original_identity_priority(candidate, best)
+    if original_priority is not None:
+        return original_priority
     decided = _naturalness_decision(candidate, best, new, old)
     if decided is not None:
         return decided
@@ -712,6 +733,8 @@ def judge_quality_guard(candidate, incumbent):
     a,b=score_from_headers(candidate),score_from_headers(incumbent)
     if a is None or b is None:
         return False,"identity-unmeasured"
+    if original_identity_priority(candidate, incumbent) is False:
+        return False,"original-identity-floor"
     if is_identity_sufficient(incumbent):
         threshold=identity_sufficiency(incumbent)
         if a < threshold:

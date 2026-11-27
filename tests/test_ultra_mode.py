@@ -582,3 +582,19 @@ class DistinctAttemptLedgerTest(unittest.TestCase):
         self.assertEqual(spec[0],3)
         self.assertTrue(local)
         self.assertNotIn(spec,seen)
+
+
+class VisualSearchBudgetTest(unittest.TestCase):
+    def test_measured_deficits_trigger_only_deep_or_max_visual_search(self):
+        from tools.ultra_mode import extra_search_reason
+        good={**score(.90),"X-Retake-Detail-Gate":"passed",
+              "X-Retake-Identity-Photo-Level":".89","X-Retake-Naturalness":"81",
+              "X-Retake-Naturalness-Checks":"border=62,tone=88,grain=95"}
+        self.assertEqual(extra_search_reason(good,"max"),"border")
+        self.assertEqual(extra_search_reason(good,"deep"),"border")
+        self.assertEqual(extra_search_reason(good,"standard"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness-Checks":"border=nan"},"max"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness":"92","X-Retake-Reference-Appearance":".71"},"max"),"reference-appearance")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness":"92","X-Retake-Reference-Appearance":".90"},"max"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Similarity":".82"},"max"),"identity")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Detail-Gate":"failed"},"max"),"")

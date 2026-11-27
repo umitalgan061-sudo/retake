@@ -125,3 +125,23 @@ test("identity pixel scope is distinguished from browser export", async () => {
   assert.match(summarizeQualityEvidence({"x-retake-identity-pixel-scope":"visible-engine-crop"}), /tarayıcı ölçeklemesi öncesi/);
   assert.equal(summarizeQualityEvidence({"x-retake-identity-pixel-scope":"unverified"}),"");
 });
+
+
+test("local jury A/B compares equal prepared inputs and actual output bytes without exposing hashes", async () => {
+  const {createQualityBaseline,compareQualityBaseline,readQualityBaseline}=await import("../src/diagnostics.js");
+  const a={input:"a".repeat(64),prepared:"b".repeat(64),pair:"c".repeat(64),pairPrepared:"d".repeat(64),judge:false,output:"e".repeat(64)};
+  const b={...a,input:"f".repeat(64),prepared:"1".repeat(64),judge:true};
+  const h={"x-retake-detail-gate":"passed","x-retake-similarity":".845","x-retake-naturalness":"81","x-retake-quality-revision":"portrait-quality-20261127-r12"};
+  const first=createQualityBaseline(a,h,1000);
+  const restored=readQualityBaseline({getItem:()=>JSON.stringify(first)});
+  const second=createQualityBaseline(b,h,2000);
+  const report=compareQualityBaseline(restored,second);
+  assert.match(report,/NVIDIA jüri A\/B: kapalı → açık/);
+  assert.match(report,/Hazırlanan motor girdileri eşit/);
+  assert.match(report,/bayt düzeyinde aynı/);
+  assert.match(report,/gerçekçilik puanı 81,00 → 81,00/);
+  assert.doesNotMatch(report,/[a-f0-9]{64}/);
+  assert.match(compareQualityBaseline(restored,{...second,output:"2".repeat(64)}),/baytları farklı/);
+  assert.match(compareQualityBaseline(restored,{...second,pairPrepared:"3".repeat(64)}),/girdileri farklı/);
+  assert.match(compareQualityBaseline(restored,{...second,pair:"4".repeat(64)}),/Kıyas yapılamadı/);
+});

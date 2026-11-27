@@ -123,10 +123,39 @@ def _empty_stats() -> dict[str, float]:
 
 
 def _valid_stats(value: Any) -> bool:
-    return (
-        isinstance(value, dict) and type(value.get("n")) is int and 0 <= value["n"] <= 1_000_000
-        and all(isinstance(value.get(k), (int, float)) and math.isfinite(value[k]) for k in ("sum", "sq"))
-    )
+    if not (isinstance(value, dict) and type(value.get("n")) is int and 0 <= value["n"] <= 1_000_000
+            and all(type(value.get(k)) in (int,float) and math.isfinite(value[k]) for k in ("sum","sq"))):
+        return False
+    n,total,squares=value["n"],value["sum"],value["sq"]
+    eps=1e-7*max(1,n)
+    return (0<=total<=n+eps and 0<=squares<=total+eps
+            and (n==0 or squares+eps>=total*total/n)
+            and (n!=0 or (total==0 and squares==0)))
+
+
+def _counter(value):
+    return value if type(value) is int and 0<=value<=1_000_000 else 0
+
+
+def _clean_banks(banks):
+    """Reject malformed nested slots, not the valid statistics beside them."""
+    clean={}
+    for key,entry in banks.items():
+        if not isinstance(entry,dict) or not isinstance(entry.get("variants"),dict):
+            continue
+        variants={}
+        for variant,slot in entry["variants"].items():
+            if variant not in {str(i) for i in range(24)} or not isinstance(slot,dict):
+                continue
+            row={kind:dict(stats) for kind,stats in slot.items()
+                 if kind in EXPLORATION and _valid_stats(stats) and stats["n"]>0}
+            if row: variants[variant]=row
+        updated=entry.get("updated",0)
+        if type(updated) not in (int,float) or not math.isfinite(updated) or updated<0:
+            updated=0
+        clean[key]={"variants":variants,"jobs":_counter(entry.get("jobs")),
+                    "self_tests":_counter(entry.get("self_tests")),"updated":updated}
+    return clean
 
 
 class CalibrationStore:
@@ -149,6 +178,7 @@ class CalibrationStore:
             or data.get("signature") != self.signature or not isinstance(data.get("banks"), dict)
         ):
             return {"version": STORE_VERSION, "signature": self.signature, "banks": {}}
+        data["banks"]=_clean_banks(data["banks"])
         return data
 
     def _save(self, data: dict[str, Any]) -> None:
@@ -207,12 +237,15 @@ class CalibrationStore:
                 stats = slot.get(kind)
                 if not _valid_stats(stats):
                     stats = _empty_stats()
+                if stats["n"]>=1_000_000:
+                    # Keep the running mean while preventing counter overflow.
+                    stats={"n":500_000,"sum":stats["sum"]*.5,"sq":stats["sq"]*.5}
                 stats["n"] += 1
                 stats["sum"] += value
                 stats["sq"] += value * value
                 slot[kind] = stats
-            entry["jobs"] = int(entry.get("jobs", 0)) + 1
-            entry["self_tests"] = int(entry.get("self_tests", 0)) + (1 if self_test else 0)
+            entry["jobs"] = min(1_000_000,_counter(entry.get("jobs")) + 1)
+            entry["self_tests"] = min(1_000_000,_counter(entry.get("self_tests")) + (1 if self_test else 0))
             entry["updated"] = time.time()
             self._save(data)
         return len(rows)
@@ -227,7 +260,8 @@ class CalibrationStore:
         order = list(variations)
         if not self.enabled or not bank:
             return order, "default", 0
-        variants = self._bank(bank)["variants"]
+        entry=self._bank(bank)
+        variants = entry["variants"]
         for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("balanced", MIN_BALANCED_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
             stats = {
                 v: variants.get(str(v), {}).get(kind) for v in order
@@ -247,6 +281,17 @@ class CalibrationStore:
                 return mean + bonus * math.sqrt(log_total / (n + 1))
 
             ranked = sorted(order, key=lambda v: (-upper(v), order.index(v)))
+            # A fixed UCB bonus may never outrank a strong incumbent, even
+            # after many short jobs. Reserve only the second slot for an
+            # under-tested setting, keeping the proven best first. Rotate
+            # candidates on recorded jobs so one failing setting cannot
+            # monopolize exploration. All acceptance gates remain unchanged.
+            if len(ranked)>2:
+                under=[v for v in ranked[1:] if stats.get(v,{}).get("n",0)<2]
+                if under:
+                    challenger=under[_counter(entry.get("jobs")) % len(under)]
+                    ranked.remove(challenger)
+                    ranked.insert(1,challenger)
             return ranked, "learned-" + kind, total
         return order, "default", 0
 

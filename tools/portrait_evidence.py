@@ -147,7 +147,8 @@ def reference_evidence_file(original_path, edited_path, bounds, landmarks, real_
     # Measure the RGB actually delivered by binary-alpha transport, not
     # undefined RGB hidden outside the authorized edit extent.
     if original is not None and edited is not None and edited.ndim==3 and edited.shape[2]==4 and original.shape[:2]==edited.shape[:2]:
-        edited=np.where(edited[:,:,3:4]>0,edited[:,:,:3],original)
+        alpha=edited[:,:,3:4].astype(np.float32)/255.
+        edited=np.clip(np.rint(edited[:,:,:3]*alpha+original*(1-alpha)),0,255).astype(np.uint8)
     refs=[]
     if real_face:
         # The dict is owned by this single process_swap invocation; reuse
@@ -197,3 +198,16 @@ def choose_regional_evidence(identity, details, incumbent, scores, sufficient=No
     measured=[i for i in allowed if i in scores and isinstance(scores[i],(float,int))
               and math.isfinite(scores[i]) and 0<=scores[i]<=1 and scores[i]>=base+.075]
     return max(measured,key=lambda i:(scores[i],identity[i],details[i])) if measured else incumbent
+
+
+def reference_appearance_keeps(before, after, tolerance=.025):
+    """Do not trade measured reference lower-face fit for an editor gain.
+
+    Missing baseline is unknown (not a positive claim); once a valid fit
+    exists, the proposed candidate must retain measurable evidence.
+    """
+    def valid(value):
+        return isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=1
+    if not valid(before):
+        return True
+    return valid(after) and after>=before-tolerance-1e-9

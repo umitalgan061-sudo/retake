@@ -598,3 +598,43 @@ class VisualSearchBudgetTest(unittest.TestCase):
         self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness":"92","X-Retake-Reference-Appearance":".90"},"max"),"")
         self.assertEqual(extra_search_reason({**good,"X-Retake-Similarity":".82"},"max"),"identity")
         self.assertEqual(extra_search_reason({**good,"X-Retake-Detail-Gate":"failed"},"max"),"")
+
+
+class OriginalIdentityPriorityTest(unittest.TestCase):
+    def test_visual_preference_cannot_undo_attained_original_identity(self):
+        from tools.ultra_mode import prefer_ultra_candidate, judge_quality_guard
+        base={"X-Retake-Similarity-Before":".90","X-Retake-Identity-Photo-Level":".89",
+              "X-Retake-Detail-Gate":"passed"}
+        strong={**score(.90),**base,"X-Retake-Naturalness":"80","X-Retake-Rim-Fraction":".09"}
+        cleaner={**score(.885),**base,"X-Retake-Naturalness":"96","X-Retake-Rim-Fraction":".01"}
+        self.assertFalse(prefer_ultra_candidate(cleaner,strong))
+        self.assertTrue(prefer_ultra_candidate(strong,cleaner))
+        self.assertEqual(judge_quality_guard(cleaner,strong),(False,"original-identity-floor"))
+
+    def test_near_ties_and_unmeasured_original_keep_existing_policy(self):
+        from tools.ultra_mode import original_identity_priority
+        base={"X-Retake-Similarity-Before":".90"}
+        strong={**score(.90),**base}
+        self.assertIsNone(original_identity_priority({**score(.899),**base},strong))
+        self.assertIsNone(original_identity_priority(score(.88),strong))
+        self.assertIsNone(original_identity_priority({**score(.88),"X-Retake-Similarity-Before":".84"},strong))
+        self.assertIsNone(original_identity_priority({**score(.885),**base},{**score(.89),**base}))
+
+
+class NaturalnessComponentGuardTest(unittest.TestCase):
+    def test_jury_cannot_hide_bad_seam_with_good_aggregate(self):
+        from tools.ultra_mode import judge_quality_guard
+        base={**score(.90),"X-Retake-Detail-Gate":"passed",
+              "X-Retake-Naturalness":"84",
+              "X-Retake-Naturalness-Checks":"border=82,tone=85,grain=80"}
+        candidate={**base,"X-Retake-Naturalness":"91",
+                   "X-Retake-Naturalness-Checks":"border=65,tone=99,grain=99"}
+        self.assertEqual(judge_quality_guard(candidate,base),(False,"naturalness-border"))
+        self.assertEqual(judge_quality_guard({**candidate,"X-Retake-Naturalness-Checks":"border=78,tone=90,grain=90"},base),(True,"passed"))
+        self.assertEqual(judge_quality_guard({**base,"X-Retake-Naturalness":""},base),(False,"naturalness-unmeasured"))
+        self.assertEqual(judge_quality_guard({**base,"X-Retake-Naturalness-Checks":"tone=90,grain=90"},base),(False,"naturalness-border-unmeasured"))
+
+    def test_invalid_duplicate_components_are_not_quality_evidence(self):
+        from tools.ultra_mode import naturalness_checks
+        self.assertEqual(naturalness_checks({"X-Retake-Naturalness-Checks":
+            "border=70,border=90,tone=nan,grain=80,grain=80,light=101,unknown=90"}),{"grain":80.0})

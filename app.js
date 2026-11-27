@@ -46,7 +46,7 @@ import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
-import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision, comparisonContext, createQualityBaseline, readQualityBaseline, compareQualityBaseline, QUALITY_BASELINE_KEY } from "./src/diagnostics.js";
+import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision, comparisonContext, withComparisonOutput, createQualityBaseline, readQualityBaseline, compareQualityBaseline, QUALITY_BASELINE_KEY } from "./src/diagnostics.js";
 import { MIN_UPSCALE, describeNativeFinish, finishUpscaledFace } from "./src/grain.js";
 import {
   bestResultIndex,
@@ -2597,7 +2597,7 @@ async function runFaceFusionEdit(options = {}) {
       if (delivered.portraitGeometry) scores.diagnostics['browser-portrait-geometry'] = describePortraitGeometry(delivered.portraitGeometry);
       if (delivered.sourcePortraitQuality) scores.diagnostics['browser-source-quality'] = describeSourcePortraitQuality(delivered.sourcePortraitQuality);
     }
-    const qualityComparison = createQualityBaseline(compareContext,scores.diagnostics);
+    const qualityComparison = createQualityBaseline(await withComparisonOutput(compareContext, delivered.blob),scores.diagnostics);
     addResult(delivered.blob, ultraLabel, {...scores,qualityComparison,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = [

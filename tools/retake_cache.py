@@ -218,6 +218,12 @@ class IdentityScoreCache:
         except (ValueError,TypeError):
             return values
         groups={}
+        reused={}
+        def unchanged(index,key):
+            try:
+                return digest(scope,Path(paths[index]).read_bytes())==key
+            except OSError:
+                return False
         for index,path in enumerate(paths):
             try:
                 key=digest(scope,Path(path).read_bytes())
@@ -228,10 +234,18 @@ class IdentityScoreCache:
                 self._entries.move_to_end(key)
                 self.hits+=1
                 values[index]=self._entries[key]
+                reused[index]=key
             else:
                 groups.setdefault(key,[]).append(index)
-        if not groups:
+        def verify_reused():
+            for index,key in reused.items():
+                if not unchanged(index,key):
+                    self.hits-=1
+                    self.failed+=1
+                    values[index]=None
             return values
+        if not groups:
+            return verify_reused()
         keys=list(groups)
         probes=[paths[groups[key][0]] for key in keys]
         self.measured+=len(probes)
@@ -239,30 +253,30 @@ class IdentityScoreCache:
             scores=measure(probes)
         except Exception:
             self.failed+=len(probes)
-            return values
+            return verify_reused()
         if not isinstance(scores,(tuple,list)) or len(scores)!=len(probes):
             self.failed+=len(probes)
-            return values
+            return verify_reused()
         for key,value in zip(keys,scores):
             indices=groups[key]
             if type(value) not in (float,int) or not math.isfinite(value) or not -1<=value<=1:
                 self.failed+=len(indices)
                 continue
             # The measurement must belong to the unchanged bytes we keyed.
-            try:
-                unchanged=digest(scope,Path(paths[indices[0]]).read_bytes())==key
-            except OSError:
-                unchanged=False
-            if not unchanged:
+            if not unchanged(indices[0],key):
                 self.failed+=len(indices)
                 continue
             self._entries[key]=float(value)
-            self.hits+=len(indices)-1
-            for idx in indices:
+            for position,idx in enumerate(indices):
+                if position and not unchanged(idx,key):
+                    self.failed+=1
+                    continue
+                if position:
+                    self.hits+=1
                 values[idx]=float(value)
             while len(self._entries)>self.max_entries:
                 self._entries.popitem(last=False)
-        return values
+        return verify_reused()
 
     def describe(self):
         return {"hits":self.hits,"measured":self.measured,"failed":self.failed,"entries":len(self._entries)}

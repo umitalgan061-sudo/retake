@@ -608,6 +608,9 @@ class CachedPipelineTest(unittest.TestCase):
             "retake-hybrid-profile.png": 0.35,
             "retake-pre-geometry.png": 0.36,
             "retake-identity-only.png": 0.38,
+            # Cosmetic finishing must also simulate a weak measured identity;
+            # the mock default (.74) would otherwise invent a successful rescue.
+            "retake-upper-seam.png": 0.38,
             "target.png": 0.50,
         }
         with self.assertRaisesRegex(srv.IdentityConflictError, "düşük"):

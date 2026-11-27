@@ -2696,12 +2696,14 @@ def run_ultra_search(
                 and score_from_headers(best_headers) < peak_identity - ULTRA_REALISM_TIE_LOSS):
             best_result, best_headers, best_round, best_spec = strongest
 
+    local_attempted = set()
     for index, variation in enumerate(schedule):
         if not should_continue_ultra(completed, clock() - started, budget_seconds=depth.search_seconds):
             break
         # A round is identified by its variant (variant + 1), whatever the order.
         round_number = ULTRA_VARIATIONS.index(variation) + 1
         attempted += 1
+        local_attempted.add((variation, None))
         print(
             f"[Ultra] Tur {index + 1}/{len(schedule)}: "
             f"orijinal hedef + 25 referans; varyasyon {variation}.",
@@ -2776,6 +2778,7 @@ def run_ultra_search(
             refine_attempts += 1
             phase("refine", refine_attempts, depth.refinements)
             spec = (base_variation, params)
+            local_attempted.add(spec)
             step_started = clock()
             try:
                 image, headers = process_swap(
@@ -2885,7 +2888,7 @@ def run_ultra_search(
             if not needs_extra_finalist(best_headers) or clock() - extra_started >= depth.extra_start_seconds:
                 break
             plan = plan_extra_spec(round_scores,best_spec,FACE_SWAP_VARIATIONS,records,
-                                   extra_specs,editor_attempted,schedule,skip_flux_once,has_nim)
+                                   extra_specs,editor_attempted,schedule,skip_flux_once,has_nim,local_attempted)
             if plan is None:
                 break
             spec,local_only=plan
@@ -2893,6 +2896,8 @@ def run_ultra_search(
             extra_specs.add(spec)
             if not local_only:
                 editor_attempted.add(spec)
+            else:
+                local_attempted.add(spec)
             finalist_attempts += 1
             extra_attempts += 1
             skip_flux_once = False
@@ -2949,18 +2954,19 @@ def run_ultra_search(
         # band, repeat an exact spec, send a weak candidate, or require a switch.
         jury_retry_limit = {"deep": 1, "max": 2}.get(depth.name, 0)
         jury_retry_started = clock()
-        jury_seen = {spec for spec, _ in records} | extra_specs | editor_attempted | {best_spec}
+        jury_seen = {spec for spec, _ in records} | extra_specs | editor_attempted | local_attempted | {best_spec}
         while (len(pool) < 2 and jury_retry_attempts < jury_retry_limit
                and clock() - jury_retry_started < 240
                and clock() - started < depth.client_timeout_seconds - 300):
             plan = plan_extra_spec(round_scores, best_spec, FACE_SWAP_VARIATIONS, records,
-                                   jury_seen, editor_attempted, schedule, True, False)
+                                   jury_seen, editor_attempted, schedule, True, False, local_attempted)
             if plan is None:
                 break
             spec, _ = plan
             if spec in jury_seen:
                 break
             jury_seen.add(spec)
+            local_attempted.add(spec)
             jury_retry_attempts += 1
             finalist_attempts += 1
             step_started = clock()

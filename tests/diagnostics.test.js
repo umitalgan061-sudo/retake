@@ -160,3 +160,14 @@ test("finishing floor diagnostic is numeric and not a calibrated percentage", ()
   assert.match(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"0.7360"}}),/ortak kosinüs alt sınırı: 0,7360/);
   assert.doesNotMatch(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"NaN"}}),/ortak kosinüs alt sınırı/);
 });
+
+
+test("web and local engine declare the same quality revision", async () => {
+  const {readFileSync}=await import("node:fs");
+  const {EXPECTED_QUALITY_REVISION,WEB_QUALITY_REVISION}=await import("../src/diagnostics.js");
+  const motor=readFileSync(new URL("../tools/facefusion_local_server.py",import.meta.url),"utf8");
+  const revision=motor.match(/^QUALITY_PIPELINE_REVISION = "([^"]+)"$/m)?.[1];
+  assert.ok(revision,"engine must declare an independently readable quality revision");
+  assert.equal(revision,EXPECTED_QUALITY_REVISION);
+  assert.equal(WEB_QUALITY_REVISION,revision);
+});

@@ -119,3 +119,18 @@ class LowerFaceTransferTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LowerFaceReferenceResilienceTest(unittest.TestCase):
+    setUp = LowerFaceTransferTest.setUp
+
+    def test_bad_reference_does_not_discard_valid_beard_candidate(self):
+        invalid=self.mesh.copy();invalid[10,0]=float("nan")
+        refs=[(self.reference,invalid),(self.reference,self.mesh)]
+        with patch("tools.lower_face_transfer.candidate_fit",return_value={"structure":.8,"light":.5,"score":.9}):
+            result,chosen,fits=choose_and_transfer_lower_face(
+                self.swap,self.target,refs,self.mesh,140,throat=False)
+        self.assertEqual(chosen,1)
+        self.assertEqual(len(fits),1)
+        self.assertTrue(np.array_equal(result[174,120],self.swap[174,120]))
+        self.assertGreater(np.count_nonzero(cv2.absdiff(result,self.swap)),50)

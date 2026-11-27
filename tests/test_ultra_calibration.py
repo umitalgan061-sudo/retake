@@ -235,3 +235,47 @@ class BalancedLearningTest(unittest.TestCase):
                 store.record("bank",[(0,fid(.97,1)),(1,fid(.6,8))],self_test=True)
             self.assertEqual(store.schedule("bank",range(2))[1],"learned-fidelity")
             self.assertEqual(store.schedule("bank",range(2))[0][0],0)
+
+
+class LearningRobustnessTest(unittest.TestCase):
+    def test_short_jobs_keep_best_first_and_explore_under_sampled_variants(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="explore")
+            for _ in range(6):
+                store.record("bank",[(0,proxy(.98)),(1,proxy(.15))])
+            explored=set()
+            for _ in range(12):
+                order,mode,total=store.schedule("bank",range(8))
+                self.assertEqual(mode,"learned-proxy")
+                self.assertEqual(order[0],0)
+                self.assertEqual(sorted(order),list(range(8)))
+                self.assertNotEqual(order[1],1)
+                explored.add(order[1])
+                store.record("bank",[(0,proxy(.98)),(order[1],proxy(.30))])
+            self.assertEqual(explored,set(range(2,8)))
+
+    def test_corrupt_nested_slots_do_not_block_learning_or_bias_order(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"c.json"
+            path.write_text(json.dumps({"version":1,"signature":"clean","banks":{
+                "bank":{"jobs":"broken","self_tests":None,"updated":"invalid","variants":{
+                    "0":{"proxy":{"n":6,"sum":5.4,"sq":4.86}},
+                    "1":{"proxy":{"n":6,"sum":60,"sq":600}},
+                    "2":{"balanced":{"n":8,"sum":4,"sq":0}},
+                    "3":"broken","24":{"proxy":{"n":6,"sum":5.4,"sq":4.86}}}},
+                "bad":"not a bank"}}),encoding="utf-8")
+            store=uc.CalibrationStore(path,signature="clean")
+            summary=store.summary()
+            self.assertEqual(set(summary["banks"]),{"bank"})
+            self.assertEqual(set(summary["banks"]["bank"]["variants"]),{"0"})
+            self.assertEqual(store.schedule("bank",range(4))[0][0],0)
+            self.assertEqual(store.record("bank",[(3,proxy(.8))]),1)
+            self.assertEqual(store.summary("bank")["banks"]["bank"]["jobs"],1)
+            self.assertIn("3",store.summary("bank")["banks"]["bank"]["variants"])
+
+    def test_stats_reject_inconsistent_moments(self):
+        for bad in ({"n":2,"sum":1,"sq":.1},{"n":2,"sum":1,"sq":1.2},
+                    {"n":0,"sum":.00001,"sq":0},{"n":4,"sum":True,"sq":1},
+                    {"n":2,"sum":float("inf"),"sq":1}):
+            self.assertFalse(uc._valid_stats(bad))
+        self.assertTrue(uc._valid_stats({"n":2,"sum":1.6,"sq":1.28}))

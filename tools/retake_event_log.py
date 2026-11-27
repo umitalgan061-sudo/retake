@@ -61,11 +61,22 @@ _SCRUBBERS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b[A-Za-z]:[\\/][^\s\"'<>|]*"), "<yol>"),
     (re.compile(r"(?<![\w.<:])/(?:[^\s\"'<>/]+/)+[^\s\"'<>]*"), "<yol>"),
     (re.compile(r"(?<![\w<])~[\\/][^\s\"'<>|]*"), "<yol>"),
-    (re.compile(r"[A-Za-z0-9+/_=-]{32,}"), "<gizli>"),
+    (re.compile(r"[A-Za-z0-9+/_=-]{32,}"), lambda match: "<gizli>" if _opaque(match.group(0)) else match.group(0)),
     (re.compile(r"\b(?!127\.0\.0\.1\b)(?:\d{1,3}\.){3}\d{1,3}\b"), "<ip>"),
 )
 
 _ACCESS = re.compile(r"^\[Retake FaceFusion\]")
+
+
+def _opaque(text: str) -> bool:
+    """Tokens, keys, digests, base64 - but not a readable lowercase model id.
+
+    "nemotron-3-nano-omni-30b-a3b-reasoning" is words joined by hyphens;
+    secrets.token_urlsafe tokens mix cases, digests are one unbroken run.
+    """
+    words = re.split(r"[-_.]", text)
+    readable = text == text.lower() and len(words) >= 3 and all(0 < len(word) <= 14 for word in words)
+    return not readable
 _RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("start", re.compile(r"^Retake kişisel yüz profili servisi|^Fotoğraf gerçekçiliği AÇIK", re.IGNORECASE)),
     ("memory", re.compile(

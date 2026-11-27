@@ -166,6 +166,7 @@ const COMPARISON_FIELDS = Object.freeze({
   detail:["x-retake-detail-score",0,1,100,"ayrıntı uyumu"],
   fine:["x-retake-fine-quality",0,1,100,"ince ayrıntı uyumu"],
   appearance:["x-retake-reference-appearance",0,1,100,"alt yüz doku uyumu"],
+  naturalness:["x-retake-naturalness",0,100,1,"gerçekçilik puanı"],
   rim:["x-retake-rim-fraction",0,1,100,"kontur farkı"],
 });
 const toHex=bytes=>Array.from(new Uint8Array(bytes),v=>v.toString(16).padStart(2,"0")).join("");
@@ -177,14 +178,34 @@ export async function comparisonContext({target,referenceKey,faceIndex,depth,jud
   try {
     const targetHash=await hashBuffer(await target.arrayBuffer());
     const input=await hashBuffer(new TextEncoder().encode(JSON.stringify([targetHash,referenceKey,faceIndex,depth,Boolean(judge),Boolean(full)])));
+    const pair=await hashBuffer(new TextEncoder().encode(JSON.stringify([targetHash,referenceKey,faceIndex,depth,Boolean(full)])));
     const digests=[];
     for(const blob of prepared||[]) {
       if(!blob?.arrayBuffer) return null;
       digests.push(await hashBuffer(await blob.arrayBuffer()));
     }
     const preparedHash=await hashBuffer(new TextEncoder().encode(JSON.stringify([digests,metadata])));
-    return {input,prepared:preparedHash};
+    const comparableMetadata={...metadata};
+    delete comparableMetadata.nvidiaJudge;
+    const pairPrepared=await hashBuffer(new TextEncoder().encode(JSON.stringify([digests,comparableMetadata])));
+    return {input,prepared:preparedHash,pair,pairPrepared,judge:Boolean(judge)};
   } catch { return null; }
+}
+
+// Hash the actual delivered export, locally only. No image is persisted.
+export async function withComparisonOutput(context,blob) {
+  if(!context||!blob?.arrayBuffer||!globalThis.crypto?.subtle)return context;
+  try { return {...context,output:await hashBuffer(await blob.arrayBuffer())}; }
+  catch { return context; }
+}
+
+function comparisonExtras(record) {
+  const extra={};
+  if(HEX.test(record?.pair||"")&&HEX.test(record?.pairPrepared||"")&&typeof record?.judge==="boolean") {
+    extra.pair=record.pair; extra.pairPrepared=record.pairPrepared; extra.judge=record.judge;
+  }
+  if(HEX.test(record?.output||""))extra.output=record.output;
+  return extra;
 }
 
 function measuredNumber(value,min,max) {
@@ -203,7 +224,7 @@ export function createQualityBaseline(context,headers,now=Date.now()) {
   if(metrics.similarity===undefined)return null;
   const seconds=parseUltraTiming(headers["x-retake-ultra-timing"]).total?.seconds;
   if(Number.isFinite(seconds)&&seconds>=0&&seconds<=86400)metrics.seconds=seconds;
-  return {version:1,input:context.input,prepared:context.prepared,
+  return {version:1,input:context.input,prepared:context.prepared,...comparisonExtras(context),
     revision:validQualityRevision(headers["x-retake-quality-revision"]),metrics,
     createdAt:Number.isFinite(now)?now:Date.now()};
 }
@@ -222,16 +243,21 @@ export function readQualityBaseline(storage) {
     if(metrics.similarity===undefined)return null;
     const seconds=record.metrics?.seconds;
     if(typeof seconds==="number"&&measuredNumber(seconds,0,86400)!==null)metrics.seconds=seconds;
-    return {version:1,input:record.input,prepared:record.prepared,revision:validQualityRevision(record.revision),
+    return {version:1,input:record.input,prepared:record.prepared,...comparisonExtras(record),revision:validQualityRevision(record.revision),
       metrics,createdAt:record.createdAt};
   } catch { return null; }
 }
 
 export function compareQualityBaseline(baseline,current) {
   if(!baseline||!current)return "";
-  if(baseline.input!==current.input)return "Kıyas yapılamadı: giriş, referans seti, seçilen yüz veya Ultra ayarı farklı.";
+  const paired=Boolean(baseline.pair&&baseline.pair===current.pair&&typeof baseline.judge==="boolean"&&typeof current.judge==="boolean");
+  if(baseline.input!==current.input&&!paired)return "Kıyas yapılamadı: giriş, referans seti, seçilen yüz veya Ultra ayarı farklı.";
   const lines=[];
-  if(baseline.prepared!==current.prepared)lines.push("Hazırlanan motor girdileri farklı; değişiklik tüm işlem hattına ait olabilir.");
+  if(paired&&baseline.judge!==current.judge)lines.push("NVIDIA jüri A/B: "+(baseline.judge?"açık":"kapalı")+" → "+(current.judge?"açık":"kapalı"));
+  const preparationMatches=paired?baseline.pairPrepared===current.pairPrepared:baseline.prepared===current.prepared;
+  if(!preparationMatches)lines.push("Hazırlanan motor girdileri farklı; değişiklik tüm işlem hattına ait olabilir.");
+  else if(paired&&baseline.judge!==current.judge)lines.push("Hazırlanan motor girdileri eşit (jüri tercihi dışında); öğrenilmiş sıra ve model rastlantısallığı değişebilir.");
+  if(baseline.output&&current.output)lines.push(baseline.output===current.output?"Çıktı dosyaları bayt düzeyinde aynı.":"Çıktı dosyalarının baytları farklı (tek başına görsel kazanım kanıtı değil).");
   if(baseline.revision!==current.revision)lines.push("Kalite sürümü değişti; ölçümler aynı ölçekteyse yorumlanmalı.");
   if(!baseline.revision||!current.revision)lines.push("En az bir kalite sürümü doğrulanamadı.");
   for(const [name,[,,,scale,label]] of Object.entries(COMPARISON_FIELDS)) {

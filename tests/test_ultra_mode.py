@@ -582,3 +582,24 @@ class DistinctAttemptLedgerTest(unittest.TestCase):
         self.assertEqual(spec[0],3)
         self.assertTrue(local)
         self.assertNotIn(spec,seen)
+
+
+class OriginalIdentityPriorityTest(unittest.TestCase):
+    def test_visual_preference_cannot_undo_attained_original_identity(self):
+        from tools.ultra_mode import prefer_ultra_candidate, judge_quality_guard
+        base={"X-Retake-Similarity-Before":".90","X-Retake-Identity-Photo-Level":".89",
+              "X-Retake-Detail-Gate":"passed"}
+        strong={**score(.90),**base,"X-Retake-Naturalness":"80","X-Retake-Rim-Fraction":".09"}
+        cleaner={**score(.885),**base,"X-Retake-Naturalness":"96","X-Retake-Rim-Fraction":".01"}
+        self.assertFalse(prefer_ultra_candidate(cleaner,strong))
+        self.assertTrue(prefer_ultra_candidate(strong,cleaner))
+        self.assertEqual(judge_quality_guard(cleaner,strong),(False,"original-identity-floor"))
+
+    def test_near_ties_and_unmeasured_original_keep_existing_policy(self):
+        from tools.ultra_mode import original_identity_priority
+        base={"X-Retake-Similarity-Before":".90"}
+        strong={**score(.90),**base}
+        self.assertIsNone(original_identity_priority({**score(.899),**base},strong))
+        self.assertIsNone(original_identity_priority(score(.88),strong))
+        self.assertIsNone(original_identity_priority({**score(.88),"X-Retake-Similarity-Before":".84"},strong))
+        self.assertIsNone(original_identity_priority({**score(.885),**base},{**score(.89),**base}))

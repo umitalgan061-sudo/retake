@@ -656,7 +656,7 @@ def finishing_identity_floor(anchor, reference_level):
 
 
 def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_attempted,
-                    schedule, local_only, has_editor):
+                    schedule, local_only, has_editor, local_attempted=None):
     """Choose genuinely new work; distinguish an editor pass from a local pass.
 
     First spend local-only time on an unseen grid or refinement. An editor
@@ -664,25 +664,35 @@ def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_
     the same editor. All resulting pixels must pass the ordinary gates.
     """
     winner,params=winner_spec
+    local_attempted=set(local_attempted or ())
     if not local_only and has_editor:
         order=choose_extra_variations(round_scores, winner+1, count=len(ULTRA_VARIATIONS), fallback=schedule)
         for variation in order:
             spec=(variation,None)
-            if spec not in editor_attempted and spec not in attempted:
+            # A previously failed local grid does not become a promising
+            # editor candidate just because it has no verified score.
+            if (spec not in editor_attempted and spec not in attempted
+                    and (spec not in local_attempted or variation in round_scores)):
                 return spec,False
-    # If the editor was disabled or all its useful candidates were tried,
-    # prefer a fresh local grid spec over a repeated deterministic render.
+    # Keep attempted and verified work separate: failures must not recycle
+    # the same deterministic local settings in a later phase.
     for variation in schedule:
         spec=(variation,None)
-        if variation not in round_scores and spec not in attempted:
+        if variation not in round_scores and spec not in attempted and spec not in local_attempted:
             return spec,True
-    seen=[grid[v] if p is None else p for (v,p),_ in records if v==winner]
-    seen.extend(grid[v] if p is None else p for v,p in attempted if v==winner)
-    planner=RefinePlanner(params or grid[winner],tried=seen,budget=1)
-    next_params=planner.next()
-    if next_params is None:
-        return None
-    return (winner,next_params),True
+    # Exhaust the winner's neighbourhood first, then explore a different
+    # verified model/geometry base rather than stopping prematurely.
+    bases=[winner]+sorted((v for v in round_scores if v!=winner),
+                          key=lambda v: round_scores[v], reverse=True)
+    for base in bases:
+        seen=[grid[v] if p is None else p for (v,p),_ in records if v==base]
+        seen.extend(grid[v] if p is None else p for v,p in attempted | local_attempted if v==base)
+        anchor=(params or grid[base]) if base==winner else grid[base]
+        planner=RefinePlanner(anchor,tried=seen,budget=1)
+        next_params=planner.next()
+        if next_params is not None:
+            return (base,next_params),True
+    return None
 
 
 # Large, independently measured losses should not be traded for an aesthetic

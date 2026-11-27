@@ -120,6 +120,7 @@ test("learned schedule badge names its evidence", async () => {
   assert.match(describeUltraSchedule("learned-fidelity", 9), /öz-testlerde.*\(9 ölçüm\)/);
   assert.match(describeUltraSchedule("learned-proxy", 12), /\(12 tur\)/);
   assert.match(describeUltraSchedule("learned-balanced", 12), /kimlik ve fotoğraf kalitesi.*\(12 ölçüm\)/);
+  assert.match(describeUltraSchedule("learned-context-balanced", 6), /benzer referans poz uyumundaki.*\(6 ölçüm\)/);
   assert.equal(describeUltraSchedule("learned-balanced", 1.2).includes("("), false);
   assert.equal(describeUltraSchedule("learned-proxy", null).includes("("), false);
   assert.equal(describeUltraSchedule("default", 5), "");

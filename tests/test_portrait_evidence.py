@@ -118,3 +118,15 @@ class PortraitEvidenceTest(unittest.TestCase):
         self.assertEqual(choose_regional_evidence(ids,details,0,{0:.5,1:.9,2:1.,3:1.}),1)
         self.assertEqual(choose_regional_evidence(ids,details,0,{1:.9}),0)
         self.assertEqual(choose_regional_evidence(ids,details,0,{0:.5,1:.53}),0)
+
+
+class ReferenceAppearanceProtectionTest(unittest.TestCase):
+    def test_measured_lower_face_fit_is_protected(self):
+        from tools.portrait_evidence import reference_appearance_keeps
+        self.assertTrue(reference_appearance_keeps(.78,.78))
+        self.assertTrue(reference_appearance_keeps(.78,.755))
+        self.assertTrue(reference_appearance_keeps(.78,.85))
+        self.assertFalse(reference_appearance_keeps(.78,.74))
+        self.assertFalse(reference_appearance_keeps(.78,None))
+        self.assertFalse(reference_appearance_keeps(.78,float("nan")))
+        self.assertTrue(reference_appearance_keeps(None,None))

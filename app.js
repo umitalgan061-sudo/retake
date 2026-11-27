@@ -46,7 +46,7 @@ import {
   DEFAULT_QUALITY_DEPTH, QUALITY_DEPTHS, QUALITY_DEPTH_STORAGE_KEY,
   depthLabel, depthMinutes, depthTimeoutMs, describeDepthDuration, normalizeDepth, requestedDepth
 } from "./src/depth.js";
-import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision, comparisonContext, createQualityBaseline, readQualityBaseline, compareQualityBaseline, QUALITY_BASELINE_KEY } from "./src/diagnostics.js";
+import { buildDiagnosticReport, collectDiagnosticHeaders, describeUltraTiming, describeQualityCompatibility, WEB_QUALITY_REVISION, validQualityRevision, comparisonContext, withComparisonOutput, createQualityBaseline, readQualityBaseline, compareQualityBaseline, QUALITY_BASELINE_KEY } from "./src/diagnostics.js";
 import { MIN_UPSCALE, describeNativeFinish, finishUpscaledFace } from "./src/grain.js";
 import {
   bestResultIndex,
@@ -749,6 +749,8 @@ function selectResult(index) {
     item.nvidiaJudgeReason ? ({NOT_ENOUGH_VOTES:'geçerli jüri oyu yetersiz',SPLIT_VOTE:'jüri oyları ayrıştı',NARROW_MARGIN:'jüri puan farkı yetersiz',CONSENSUS:'jüri uzlaşısı'})[item.nvidiaJudgeReason] || item.nvidiaJudgeReason : '',
     item.nvidiaJudgeModels ? 'Jüri modelleri: '+item.nvidiaJudgeModels : '',
     item.nvidiaJudgeFinalists > 0 ? 'jüri finalisti: '+item.nvidiaJudgeFinalists : '',
+    item.nvidiaJudgeRetryAttempts > 0 ? 'jüri için ek yerel arama: '+item.nvidiaJudgeRetryAttempts+' deneme' : '',
+    item.nvidiaJudge === 'single-finalist' ? 'NVIDIA karşılaştırması yapılmadı; yerel sonuç korundu' : '',
     item.nimEditor && item.nimEditor !== "retake-local/flux2-klein-4b" ? 'NVIDIA yerel model: '+item.nimEditor : '',
     item.detailGate === "passed" ? "bölgesel ayrıntı kontrolü geçti" : "",
     item.detailGate.startsWith("failed:") ? "uyarı: bölgesel ayrıntı zayıf (" + ({eyes:"gözler",nose:"burun",mouth:"ağız",lower_face:"çene"}[item.detailGate.slice(7).split("-")[0]] || "yüz") + ")" : "",
@@ -770,6 +772,9 @@ function selectResult(index) {
     item.completeIdentity ? "tam yüz referans ayrıntısı" : "",
     item.jawFocused ? "çene geometrisi uyarlaması" : "",
     item.rimCleanup ? "yüz kenarı yumuşatıldı" : "",
+    item.upperSeam === "applied" ? "üst yüz renk geçişi iyileştirildi" +
+      (Number.isFinite(item.upperSeamGain) ? " (kenar +"+item.upperSeamGain.toFixed(1).replace(".",",")+" puan)" : "") :
+      item.upperSeam === "quality-rejected" ? "üst yüz geçiş adayı kalite kontrolünde elendi" : "",
     item.identitySelection === "identity-only" ? "referans sakal/çene aktarımı finalde seçilemedi" : ""
   ].filter(Boolean).join(" · ");
   elements.qualityBadge.textContent = quality;
@@ -819,6 +824,7 @@ function addResult(blob, label, scores = {}) {
     nvidiaJudgeModels: scores.nvidiaJudgeModels || "",
     nvidiaJudgeLayout: scores.nvidiaJudgeLayout || "",
     nvidiaJudgeFinalists: Number.isInteger(scores.nvidiaJudgeFinalists) ? scores.nvidiaJudgeFinalists : null,
+    nvidiaJudgeRetryAttempts: Number.isInteger(scores.nvidiaJudgeRetryAttempts) ? scores.nvidiaJudgeRetryAttempts : null,
     detailGate: scores.detailGate || "",
     detailRegions: scores.detailRegions || "",
     regionalEdit: scores.regionalEdit || "",
@@ -836,6 +842,8 @@ function addResult(blob, label, scores = {}) {
     completeIdentity: scores.completeIdentity === true,
     jawFocused: scores.jawFocused === true,
     rimCleanup: scores.rimCleanup === true,
+    upperSeam: scores.upperSeam || "",
+    upperSeamGain: Number.isFinite(scores.upperSeamGain) ? scores.upperSeamGain : null,
     identitySelection: scores.identitySelection || "",
     realism: scores.realism === true,
     texture: scores.texture || "average",
@@ -2509,6 +2517,7 @@ async function runFaceFusionEdit(options = {}) {
       nvidiaJudgeModels: response.headers.get("X-Retake-NVIDIA-Judge-Models") || "",
       nvidiaJudgeLayout: response.headers.get("X-Retake-NVIDIA-Judge-Layout") || "",
       nvidiaJudgeFinalists: Number.parseInt(response.headers.get("X-Retake-NVIDIA-Judge-Finalists") || "",10),
+      nvidiaJudgeRetryAttempts: Number.parseInt(response.headers.get("X-Retake-NVIDIA-Judge-Retry-Attempts") || "",10),
       detailGate: response.headers.get("X-Retake-Detail-Gate") || "",
       detailRegions: response.headers.get("X-Retake-Detail-Regions") || "",
       regionalEdit: response.headers.get("X-Retake-Regional-Edit") || "",
@@ -2526,6 +2535,8 @@ async function runFaceFusionEdit(options = {}) {
       completeIdentity: response.headers.get("X-Retake-Complete-Identity") === "on",
       jawFocused: response.headers.get("X-Retake-Jaw-Focused") === "on",
       rimCleanup: response.headers.get("X-Retake-Rim-Cleanup") === "on",
+      upperSeam: response.headers.get("X-Retake-Upper-Seam") || "",
+      upperSeamGain: Number.parseFloat(response.headers.get("X-Retake-Upper-Seam-Border-Gain") || ""),
       identitySelection: response.headers.get("X-Retake-Identity-Selection") || "",
       realism: response.headers.get("X-Retake-Realism") === "on",
       texture: response.headers.get("X-Retake-Texture-Source") || "average",
@@ -2586,7 +2597,7 @@ async function runFaceFusionEdit(options = {}) {
       if (delivered.portraitGeometry) scores.diagnostics['browser-portrait-geometry'] = describePortraitGeometry(delivered.portraitGeometry);
       if (delivered.sourcePortraitQuality) scores.diagnostics['browser-source-quality'] = describeSourcePortraitQuality(delivered.sourcePortraitQuality);
     }
-    const qualityComparison = createQualityBaseline(compareContext,scores.diagnostics);
+    const qualityComparison = createQualityBaseline(await withComparisonOutput(compareContext, delivered.blob),scores.diagnostics);
     addResult(delivered.blob, ultraLabel, {...scores,qualityComparison,faceEdit:delivered.faceEdit,nativeFinish:delivered.nativeFinish,portraitGeometry:delivered.portraitGeometry,sourcePortraitQuality:delivered.sourcePortraitQuality});
     elements.disabledNote.textContent = "Ultra Mod her işlemde yeni adayları karşılaştırır; yalnızca en iyi doğrulanmış fotoğraf gösterilir.";
     const scoreText = [

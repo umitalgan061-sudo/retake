@@ -104,3 +104,17 @@ class TextureOnlyCandidateTest(unittest.TestCase):
             self.assertAlmostEqual(interior_texture_gain(a,b,b,bounds),0)
             cv2.imwrite(str(a),base[:,:,:3])
             self.assertIsNone(interior_texture_gain(a,b,c,bounds))
+
+
+class EditorSelectionTest(unittest.TestCase):
+    def test_real_texture_gain_wins_only_inside_identity_band(self):
+        from tools.nim_photo_edit import select_editor_candidate, editor_quality_rank
+        def row(score, detail, skin, name):
+            return (score, .8, "test", name, .25, score-.84, detail, "texture", skin)
+        peak=row(.845, 0., 0., "peak")
+        detail=row(.844, .01, .12, "texture")
+        weak=row(.840, .4, .4, "outside")
+        self.assertEqual(select_editor_candidate([peak, detail, weak]),detail)
+        self.assertEqual(select_editor_candidate([peak, weak]),peak)
+        self.assertEqual(select_editor_candidate([]),None)
+        self.assertGreater(editor_quality_rank(0.,.02,.1),editor_quality_rank(.001,None,float("nan")))

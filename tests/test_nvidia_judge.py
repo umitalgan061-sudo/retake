@@ -412,6 +412,52 @@ class UltraJuryTest(unittest.TestCase):
                                                      item(4, "passed")], .800)
         self.assertEqual([entry[2] for entry in pool], [1, 2, 4])
 
+    def test_max_search_tries_a_fresh_local_candidate_for_single_finalist(self):
+        from tools.ultra_mode import verified_candidate_score
+
+        request = ultra_request(True)
+        request[6]["qualityDepth"] = "max"
+        original = synthetic_png(123)
+        alternate = synthetic_png(124)
+        calls = []
+        rendered_specs = []
+        planned = srv.plan_extra_spec
+
+        def fake_swap(*args):
+            metadata = args[3][6]
+            spec = (metadata["variation"], metadata.get("variationParams"))
+            rendered_specs.append(spec)
+            return (alternate if retry_planned else original), {
+                "X-Retake-Similarity": "0.8000",
+                "X-Retake-Detail-Gate": "passed",
+            }
+
+        retry_planned = False
+
+        def plan(*args):
+            nonlocal retry_planned
+            retry_planned = True
+            return planned(*args)
+
+        def judge(crops):
+            calls.append(crops)
+            return {"decision": "winner", "winner": 0, "votes": 3,
+                    "agreement": 1.0, "models": ["test"]}
+
+        with patch.object(srv, "process_swap", fake_swap), patch.object(srv, "plan_extra_spec", plan):
+            photo, headers = srv.run_ultra_search(
+                Path("."), "1024x1024", False, request, lambda *_a, **_k: None,
+                {"nvidia_judge": judge}, min_duration_seconds=0
+            )
+        self.assertEqual(headers["X-Retake-NVIDIA-Judge-Retry-Attempts"], "1")
+        self.assertEqual(headers["X-Retake-NVIDIA-Judge-Finalists"], "2")
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(photo, original)
+        self.assertEqual(verified_candidate_score({
+            "X-Retake-Similarity": "0.8", "X-Retake-Detail-Gate": "soft-original"}), .8)
+        self.assertIsNone(verified_candidate_score({
+            "X-Retake-Similarity": "0.9", "X-Retake-Detail-Gate": "failed:eyes-blur"}))
+
     def test_metadata_consent_must_be_boolean(self):
         base = {"referenceWeights": [1] * 25, "faceBounds": {"x": 10, "y": 10, "width": 100, "height": 100},
                 "targetSize": {"width": 784, "height": 1024}}

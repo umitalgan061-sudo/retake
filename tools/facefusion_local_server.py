@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
+    from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
     from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -33,9 +33,9 @@ try:
     from .photo_realism_gate import check_render_file
     from .ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from .retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
-    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from .retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from .neck_harmonization import neck_candidate_file, neck_delivery_evidence
-    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
+    from .portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence, reference_appearance_keeps
     from .fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
     from .ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -47,7 +47,7 @@ try:
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 except ImportError:
-    from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
+    from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
     from ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -60,9 +60,9 @@ except ImportError:
     from photo_realism_gate import check_render_file
     from ultra_quality import fuse_reinforcement_detail, check_photo_detail, self_fidelity, regional_edit_statistics, choose_detail_safe_tie, select_verified_regional_candidate, check_detail_gate, balance_with_original, check_reinforcement_detail, select_sufficient_realism, reinforcement_wanted
     from retake_output_transport import prepare_inference_target, encode_preblended_result, prepare_small_face_inference, prepare_visible_identity_probe, verify_visible_checkpoint
-    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file
+    from retake_rim_cleanup import inspect_dark_rim_file, repair_dark_rim_file, upper_seam_candidate_file, upper_seam_quality_guard
     from neck_harmonization import neck_candidate_file, neck_delivery_evidence
-    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence
+    from portrait_evidence import reference_evidence_file, format_evidence, regional_tie_indices, choose_regional_evidence, reference_appearance_keeps
     from fine_features import refine_fine_features_file, accept_fine_refinement, delivered_fine_report, describe_report as describe_fine_report
     from ultra_mode import (
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
@@ -153,7 +153,7 @@ HYBRID_PROFILE_VERSION = "retake_hybrid_25_reference_ultra_v22"
 # r10: on top of main's r9 — HyperSwap 1b identity model (alternating with
 # AlphaFace), naturalness guard on regional transfers, detail-fused
 # reinforcement; resets the learned variant order of the AlphaFace era.
-QUALITY_PIPELINE_REVISION = "portrait-quality-20261126-r11"
+QUALITY_PIPELINE_REVISION = "portrait-quality-20261127-r12"
 IDENTITY_VERIFIER_MODEL = "arcface_w600k_r50"
 FACE_ENHANCER_MODEL = "gfpgan_1.4"
 # FaceFusion renders a full-strength enhancer output; Retake applies the
@@ -2084,6 +2084,7 @@ def process_swap(
         flux_strength = None
         flux_blend_mode = ''
         flux_skin_gain = None
+        flux_diagnostic_rank = None
         if nim_editors and centroid:
             indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
@@ -2092,6 +2093,12 @@ def process_swap(
                 base_detail, _ = check_photo_detail(target_path, final_output, metadata['faceBounds'])
             except Exception:
                 base_detail = None
+            base_appearance = None
+            if real_face:
+                try:
+                    _, base_appearance = reference_evidence_file(target_path, final_output, metadata["faceBounds"], metadata.get("targetLandmarks"), real_face)
+                except Exception as error:
+                    print(f"[NIM] Alt yüz referans ölçümü kullanılamadı: {type(error).__name__}", flush=True)
             for index, (model, port) in enumerate(nim_editors.items()):
                 try:
                     path = candidate_from_editor(model, port, final_output, nim_refs, metadata["faceBounds"], temp_dir / f"nim-{index}.png",
@@ -2117,6 +2124,14 @@ def process_swap(
                         acceptable, reason = check_render_file(final_output, candidate, metadata["faceBounds"])
                         if not acceptable or not check_detail_gate(target_path, candidate, metadata["faceBounds"])[0] or not measure_final_face_edit(target_path, candidate, metadata["faceBounds"])["meaningful"]:
                             continue
+                        if base_appearance is not None:
+                            try:
+                                _, candidate_appearance = reference_evidence_file(target_path, candidate, metadata["faceBounds"], metadata.get("targetLandmarks"), real_face)
+                            except Exception:
+                                candidate_appearance = None
+                            if not reference_appearance_keeps(base_appearance, candidate_appearance):
+                                print(f"[NIM] {model}: referans alt yüz uyumu korunamadı; aday elendi.", flush=True)
+                                continue
                         detail, _ = check_photo_detail(target_path, candidate, metadata["faceBounds"])
                         skin_gain = interior_texture_gain(target_path,final_output,candidate,metadata["faceBounds"]) if blend_mode == "texture" else None
                         measured.append((candidate, strength, detail, blend_mode, skin_gain))
@@ -2129,12 +2144,16 @@ def process_swap(
                             continue
                         delta = value - result_similarity
                         detail_delta = detail - base_detail if detail is not None and base_detail is not None else None
-                        if model == flux_model and (flux_delta is None or delta > flux_delta):
+                        identity_ok = (value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
+                                       and delta >= -ULTRA_REALISM_TIE_LOSS)
+                        diagnostic_rank = (identity_ok, editor_quality_rank(delta, detail_delta, skin_gain))
+                        if model == flux_model and (flux_diagnostic_rank is None or diagnostic_rank > flux_diagnostic_rank):
+                            flux_diagnostic_rank = diagnostic_rank
                             flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
                             flux_blend_mode = blend_mode
                             flux_skin_gain = skin_gain
                             flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS or value < finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) else "detail-gain-insufficient"
-                        if value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) and delta >= -ULTRA_REALISM_TIE_LOSS and (
+                        if identity_ok and (
                             delta > .001 or (detail_delta is not None and detail_delta > .06)
                             or (skin_gain is not None and skin_gain > .05 and detail_delta is not None and detail_delta >= -.01)
                         ):
@@ -2146,7 +2165,7 @@ def process_swap(
                         flux_status = "worker-error"
                     print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
             if nim_candidates:
-                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = select_editor_candidate(nim_candidates, ULTRA_REALISM_TIE_LOSS)
                 shutil.copyfile(path, final_output)
                 verified_probe=visible_probes.get(path)
                 if nim_used == flux_model:
@@ -2244,6 +2263,35 @@ def process_swap(
         except Exception as error:
             print(f"[Retake] Kontur düzeltmesi atlandı: {error}", flush=True)
 
+        # A dark rim repair does not address every low-frequency colour step.
+        # Only attempt the separate upper-face proposal when border quality
+        # is actually weak; reject any loss of verified detail or identity.
+        upper_seam_status = "not-needed"
+        upper_seam_gain = None
+        try:
+            before_seam = final_naturalness(target_path, final_output, metadata["faceBounds"])
+            border = before_seam.get("checks", {}).get("border")
+            if centroid and isinstance(border, (float, int)) and border < 70:
+                seam_path = temp_dir / "retake-upper-seam.png"
+                seam_report = upper_seam_candidate_file(target_path, final_output, seam_path, metadata["faceBounds"])
+                upper_seam_status = seam_report.get("stage", "not-examined")
+                if upper_seam_status == "candidate":
+                    after_seam = final_naturalness(target_path, seam_path, metadata["faceBounds"])
+                    upper_seam_status = "quality-rejected"
+                    if upper_seam_quality_guard(before_seam, after_seam):
+                        seam_score = score_visible([seam_path])[0]
+                        if (seam_score is not None and seam_score >= max(result_similarity - .002, finish_floor)
+                                and check_detail_gate(target_path, seam_path, metadata["faceBounds"])[0]):
+                            shutil.copyfile(seam_path, final_output)
+                            result_similarity = seam_score
+                            verified_probe = visible_probes.get(seam_path)
+                            upper_seam_status = "applied"
+                            upper_seam_gain = float(after_seam["checks"]["border"]) - float(border)
+                print(f"[Retake] Üst yüz geçişi: {upper_seam_status}; kenar kazanımı={upper_seam_gain}.", flush=True)
+        except Exception as error:
+            upper_seam_status = "error"
+            print(f"[Retake] Üst yüz geçişi atlandı: {type(error).__name__}", flush=True)
+
         # Neck is a separate optional native-pixel candidate. Require a mesh,
         # connected skin evidence, and a fresh identity/detail verification.
         neck_status, neck_pixels = 'off', 0
@@ -2272,7 +2320,7 @@ def process_swap(
         try:
             residual = (
                 inspect_dark_rim_file(target_path, final_output, metadata["faceBounds"])
-                if rim_cleaned else rim_stats
+                if rim_cleaned or upper_seam_status == 'applied' or neck_status == 'applied' else rim_stats
             )
             if isinstance(residual, dict) and residual.get("stage") != "not_examined":
                 measure = float(residual["dark_line_fraction"])
@@ -2396,6 +2444,8 @@ def process_swap(
                 if isinstance(fine_report.get("sclera"), dict) else ""
             ),
             "X-Retake-Rim-Fraction": "" if rim_fraction is None else f"{rim_fraction:.5f}",
+            "X-Retake-Upper-Seam": upper_seam_status,
+            "X-Retake-Upper-Seam-Border-Gain": "" if upper_seam_gain is None else f"{upper_seam_gain:.2f}",
             "X-Retake-Similarity": "" if result_similarity is None else f"{result_similarity:.4f}",
             "X-Retake-Similarity-Before": "" if before_similarity is None else f"{before_similarity:.4f}",
             "X-Retake-Identity-Median-Similarity": str(identity_report.get("median_similarity", "")),
@@ -2853,7 +2903,7 @@ def run_ultra_search(
                     )
                 finally:
                     timing["extra"].append(clock() - step_started)
-                candidate_score = score_from_headers(candidate_headers)
+                candidate_score = verified_candidate_score(candidate_headers)
                 if candidate_score is None or candidate_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
                     continue
                 # Only original grid results teach the next job the grid order.
@@ -2881,8 +2931,55 @@ def run_ultra_search(
             except Exception as error:
                 print(f"[Ultra] Ek finalist atlandı: {type(error).__name__}", flush=True)
     judge_result = judge_headers("off" if judge is None else "not-consented")
+    jury_retry_attempts = 0
     if collect_finalists:
         pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
+        # Deep/max may spend a small additional budget on unseen local settings
+        # when the jury has no meaningful alternative. Never widen the identity
+        # band, repeat an exact spec, send a weak candidate, or require a switch.
+        jury_retry_limit = {"deep": 1, "max": 2}.get(depth.name, 0)
+        jury_retry_started = clock()
+        jury_seen = {spec for spec, _ in records} | extra_specs | editor_attempted | {best_spec}
+        while (len(pool) < 2 and jury_retry_attempts < jury_retry_limit
+               and clock() - jury_retry_started < 240
+               and clock() - started < depth.client_timeout_seconds - 300):
+            plan = plan_extra_spec(round_scores, best_spec, FACE_SWAP_VARIATIONS, records,
+                                   jury_seen, editor_attempted, schedule, True, False)
+            if plan is None:
+                break
+            spec, _ = plan
+            if spec in jury_seen:
+                break
+            jury_seen.add(spec)
+            jury_retry_attempts += 1
+            finalist_attempts += 1
+            step_started = clock()
+            try:
+                if on_finalist is not None:
+                    on_finalist()
+                phase("extra", jury_retry_attempts, jury_retry_limit)
+                retry_image, retry_headers = process_swap(
+                    facefusion_dir, pixel_boost, enhancer_enabled,
+                    with_refinement(parsed, spec[0], spec[1]), lambda *_a, **_k: None,
+                    {**(caches or {}), "realism": None, "nim_editors": None}
+                )
+                retry_score = verified_candidate_score(retry_headers)
+                if retry_score is None or retry_headers.get("X-Retake-Detail-Gate") not in DETAIL_GATE_OK:
+                    continue
+                records.append((spec, retry_headers))
+                if retry_score > peak_identity:
+                    peak_identity = retry_score
+                    strongest = (retry_image, retry_headers, round_of(spec), spec)
+                if identity_acceptable(retry_headers, peak_identity) and prefer_ultra_candidate(retry_headers, best_headers):
+                    best_result, best_headers, best_round, best_spec = retry_image, retry_headers, round_of(spec), spec
+                keep_identity_anchor()
+                finalists = retain_judge_finalists(finalists, (retry_image, retry_headers, round_of(spec)), peak_identity)
+                pool = judge_pool(best_result, best_headers, best_round, finalists, peak_identity)
+            except Exception as error:
+                print(f"[Ultra] Jüri alternatif araması atlandı: {type(error).__name__}", flush=True)
+            finally:
+                timing["extra"].append(clock() - step_started)
+        print(f"[NVIDIA jüri] Yerel ek arama: {jury_retry_attempts}; uygun farklı aday: {len(pool)}.", flush=True)
         if len(pool) < 2:
             judge_result = judge_headers("single-finalist", len(pool))
         else:
@@ -2958,6 +3055,7 @@ def run_ultra_search(
             else "yes" if is_identity_sufficient(best_headers) else "no"
         ),
         **judge_result,
+        "X-Retake-NVIDIA-Judge-Retry-Attempts": str(jury_retry_attempts),
         "X-Retake-FLUX-Status": flux_outcome,
         "X-Retake-Ultra": "on",
         "X-Retake-Ultra-Rounds": str(completed),
@@ -3239,13 +3337,13 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Realism, X-Retake-Compositing, X-Retake-Alpha-Transport, X-Retake-Identity-Selection, "
             "X-Retake-Identity-Source, X-Retake-Texture-Source, "
             "X-Retake-Quality-Revision, X-Retake-Identity-Pixel-Scope, X-Retake-Ultra, X-Retake-Ultra-Rounds, X-Retake-Ultra-Attempted, X-Retake-Ultra-Peak-Identity, X-Retake-Ultra-Winner, X-Retake-Ultra-Elapsed, "
-            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, "
+            "X-Retake-Detail-Score, X-Retake-Detail-Regions, X-Retake-Regional-Edit, X-Retake-Input-Preparation, X-Retake-Lower-Texture, X-Retake-Reference-Appearance, X-Retake-Neck-Status, X-Retake-Neck-Pixels, X-Retake-Neck-Evidence, X-Retake-Rim-Cleanup, X-Retake-Rim-Fraction, X-Retake-Upper-Seam, X-Retake-Upper-Seam-Border-Gain, "
             "X-Retake-Lower-Face-Transfer, X-Retake-Jaw-Focused, X-Retake-Complete-Identity, "
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, X-Retake-FLUX-Skin-Gain, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
-            "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
+            "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Retry-Attempts, X-Retake-NVIDIA-Judge-Votes, "
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "

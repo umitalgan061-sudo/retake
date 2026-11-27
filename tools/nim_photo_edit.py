@@ -219,7 +219,12 @@ def interior_texture_gain(original_path, base_path, candidate_path, bounds):
     def band(image):
         luma=cv2.cvtColor(image,cv2.COLOR_BGR2GRAY).astype(np.float32)
         return luma-cv2.GaussianBlur(luma,(0,0),1.25)
-    bands=[band(src),band(np.where(b[:,:,3:4]>0,b[:,:,:3],src)),band(np.where(c[:,:,3:4]>0,c[:,:,:3],src))]
+    # Measure the same visible composite delivered by the engine, including
+    # partially transparent pixels, not the uncomposited RGB payload.
+    def visible(image):
+        alpha=image[:,:,3:4].astype(np.float32)/255.
+        return np.clip(np.rint(image[:,:,:3]*alpha+src*(1-alpha)),0,255).astype(np.uint8)
+    bands=[band(src),band(visible(b)),band(visible(c))]
     gains=[]
     for cx,cy,rx,ry in TEXTURE_ZONES:
         mask=(((nx-cx)/rx)**2+((ny-cy)/ry)**2<.5)&(b[:,:,3]>180)&(c[:,:,3]>180)
@@ -230,3 +235,26 @@ def interior_texture_gain(original_path, base_path, candidate_path, bounds):
         gains.append(quality(e[2])-quality(e[1]))
     if len(gains)<2 or min(gains)<-.04: return None
     return float(np.mean(gains))
+
+
+def editor_quality_rank(delta, detail_delta, skin_gain):
+    """Rank measured gain without allowing missing/invalid values to win.
+
+    Caller must enforce identity/detail/region gates first. This ranking
+    only resolves the choice between near-tied eligible editor candidates.
+    """
+    import math
+    def measured(value):
+        return float(value) if isinstance(value,(float,int)) and math.isfinite(value) else 0.0
+    detail=measured(detail_delta)
+    skin=measured(skin_gain)
+    return (max(0.,detail,skin), detail+skin, measured(delta))
+
+
+def select_editor_candidate(candidates, identity_band=.002):
+    """Prefer visible measured detail within a strict global identity tie."""
+    if not candidates:
+        return None
+    peak=max(row[0] for row in candidates)
+    eligible=[row for row in candidates if row[0]>=peak-identity_band-1e-9]
+    return max(eligible,key=lambda row:(editor_quality_rank(row[5],row[6],row[8]),row[0],row[1]))

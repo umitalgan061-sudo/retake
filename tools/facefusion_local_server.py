@@ -982,7 +982,8 @@ def choose_composite(
     facefusion_dir: Path,
     centroid: list[float] | None,
     blends: list[tuple],
-    labels: list[str] | None = None
+    labels: list[str] | None = None,
+    measure=None
 ) -> Path:
     """The blend closest to the person among those that look like a photograph.
 
@@ -1007,7 +1008,8 @@ def choose_composite(
                    if not isinstance(naturalness[path], (int, float)) or naturalness[path] >= floor]
         if natural:
             allowed = natural
-    scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
+    probes = [path for path, _ in allowed]
+    scores = measure(probes) if measure is not None else score_identity(facefusion_dir, centroid, probes)
     scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
     if not scored:
         return blends[0][0]
@@ -1734,7 +1736,7 @@ def process_swap(
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         if not blends:
             raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
-        chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
+        chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels, measure=measure_identity)
         used_real_face = chosen_blend in transplanted
         used_lower_face = transplanted.get(chosen_blend) == "lower"
         used_full_face = transplanted.get(chosen_blend) == "full"
@@ -2874,6 +2876,8 @@ def run_ultra_search(
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
     skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
+    if skip_flux_once:
+        print('[Ultra] FLUX ölçülen kazanım yetersiz; sıradaki ek finalist yerel aramaya ayrıldı.', flush=True)
     extra_attempts = 0
     extra_specs = set()
     if needs_extra_finalist(best_headers):

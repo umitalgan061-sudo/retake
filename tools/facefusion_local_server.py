@@ -41,7 +41,7 @@ try:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
+        identity_aspiration, identity_gain, needs_extra_finalist, extra_search_reason, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -68,7 +68,7 @@ except ImportError:
         ULTRA_VARIATIONS, ULTRA_MIN_SECONDS, ULTRA_SEARCH_BUDGET_SECONDS, ULTRA_REALISM_TIE_LOSS,
         prefer_ultra_candidate, score_from_headers, should_continue_ultra, with_variation,
         identity_acceptable, identity_sufficiency, is_identity_sufficient, realism_order, sufficiency_from_level, finishing_identity_floor,
-        identity_aspiration, identity_gain, needs_extra_finalist, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
+        identity_aspiration, identity_gain, needs_extra_finalist, extra_search_reason, choose_extra_variations, defer_flux_retry, plan_extra_spec, judge_quality_guard, verified_candidate_score,
         ULTRA_EXTRA_START_BUDGET_SECONDS, ULTRA_DEPTHS, ULTRA_DEFAULT_DEPTH, ultra_depth, depth_summary,
         RefinePlanner, with_refinement, normalize_refinement, finalist_specs, REALISM_SEED_BASE,
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
@@ -2883,12 +2883,14 @@ def run_ultra_search(
         print('[Ultra] FLUX ölçülen kazanım yetersiz; sıradaki ek finalist yerel aramaya ayrıldı.', flush=True)
     extra_attempts = 0
     extra_specs = set()
-    if needs_extra_finalist(best_headers):
+    extra_reasons = []
+    if extra_search_reason(best_headers, depth.name):
         for _ in range(depth.extra_finalists):
-            if not needs_extra_finalist(best_headers) or clock() - extra_started >= depth.extra_start_seconds:
+            reason = extra_search_reason(best_headers, depth.name)
+            if not reason or clock() - extra_started >= depth.extra_start_seconds:
                 break
             plan = plan_extra_spec(round_scores,best_spec,FACE_SWAP_VARIATIONS,records,
-                                   extra_specs,editor_attempted,schedule,skip_flux_once,has_nim,local_attempted)
+                                   extra_specs,editor_attempted,schedule,skip_flux_once or reason != "identity",has_nim,local_attempted)
             if plan is None:
                 break
             spec,local_only=plan
@@ -2900,6 +2902,8 @@ def run_ultra_search(
                 local_attempted.add(spec)
             finalist_attempts += 1
             extra_attempts += 1
+            extra_reasons.append(reason)
+            print(f'[Ultra] Ek arama nedeni: {reason}.', flush=True)
             skip_flux_once = False
             extra_caches = {**(caches or {}), "realism": None}
             if local_only:
@@ -3064,6 +3068,7 @@ def run_ultra_search(
         **best_headers,
         **flux_diagnostics,
         "X-Retake-Finalist-Attempts": str(finalist_attempts),
+        "X-Retake-Extra-Search-Reasons": ",".join(extra_reasons),
         "X-Retake-Identity-Aspiration": "" if target is None else f"{target:.4f}",
         "X-Retake-Identity-Gain": "" if gain is None else f"{gain:.4f}",
         "X-Retake-Identity-Sufficient": (
@@ -3359,7 +3364,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra-Realism-Policy, X-Retake-Face-Changed-Ratio, X-Retake-Face-Mean-Delta, X-Retake-NIM-Editor, "
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, X-Retake-FLUX-Skin-Gain, "
-            "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
+            "X-Retake-Finalist-Attempts, X-Retake-Extra-Search-Reasons, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
             "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Retry-Attempts, X-Retake-NVIDIA-Judge-Votes, "
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "

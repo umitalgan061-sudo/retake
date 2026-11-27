@@ -265,7 +265,7 @@ def check_background(ctx: Context) -> list[Check]:
         state = str(task.get("state") or "?")
         last = task.get("last_result")
         status = "ok" if state == "Running" else "warn"
-        detail = f"Son çalışma sonucu: {last}." if last not in (None, "") else ""
+        detail = f"Son çalışma sonucu: {task_result(last)}." if last not in (None, "") else ""
         fix = "" if state == "Running" else ".\\tools\\install_retake_autostart.ps1 -Action Start"
         if task.get("working_dir_matches") is False:
             status = "fail"
@@ -313,6 +313,28 @@ def check_background(ctx: Context) -> list[Check]:
         else:
             checks.append(Check("Gizli motor", "info", f"Başlatıcı durumu: {name} ({_age(age)} önce güncellendi)."))
     return checks
+
+
+# Task Scheduler LastTaskResult values worth a name (others: the raw code).
+TASK_RESULTS = {
+    0: "başarılı",
+    267009: "görev şu an çalışıyor",          # SCHED_S_TASK_RUNNING
+    267011: "görev henüz hiç çalışmadı",      # SCHED_S_TASK_HAS_NOT_RUN
+    267014: "görev kullanıcı tarafından durduruldu",  # SCHED_S_TASK_TERMINATED
+    1: "motor hata koduyla kapandı (1)",
+    2147750687: "görev zaten çalışıyordu",    # SCHED_E_ALREADY_RUNNING
+    2147946720: "kullanıcı oturumu yok",      # 0x800710E0
+    3221225786: "motor Ctrl+C / kapatmayla durdu",  # STATUS_CONTROL_C_EXIT
+}
+
+
+def task_result(value) -> str:
+    try:
+        code = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    code &= 0xFFFFFFFF
+    return TASK_RESULTS.get(code, f"kod {code} (0x{code:08X})")
 
 
 def _age(seconds: float) -> str:

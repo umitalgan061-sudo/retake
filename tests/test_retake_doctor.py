@@ -384,6 +384,21 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(steps.count("adım-1"), 1)
         self.assertNotIn("bilgi adımı", steps)
 
+    def test_model_ids_stay_readable_but_tokens_do_not(self):
+        self.assertEqual(doctor.redact("Panel: nemotron-3-nano-omni-30b-a3b-reasoning, llama-3.2-90b-vision-instruct", {}),
+                         "Panel: nemotron-3-nano-omni-30b-a3b-reasoning, llama-3.2-90b-vision-instruct")
+        for secret in (PAIRING, PROJECT, "f" * 40, "q8Zr2vX0b9yTq8Zr2vX0b9yTq8Zr2vX0b9yT", "abcdefghijklmnopqrstuvwxyz0123456789"):
+            self.assertEqual(doctor.redact(f"x {secret} y", {}), "x <gizli> y", secret)
+
+    def test_task_results_are_named(self):
+        self.assertEqual(doctor.task_result(267009), "görev şu an çalışıyor")
+        self.assertEqual(doctor.task_result(0), "başarılı")
+        self.assertEqual(doctor.task_result(-2147020576), "kullanıcı oturumu yok")
+        self.assertEqual(doctor.task_result(5), "kod 5 (0x00000005)")
+        windows = {"task": {"exists": True, "state": "Running", "last_result": 267009, "working_dir_matches": True}}
+        titles = [check.detail for check in doctor.check_background(self.context(windows=windows))]
+        self.assertIn("Son çalışma sonucu: görev şu an çalışıyor.", titles)
+
     def test_redact_uses_word_boundaries(self):
         env = {"USERNAME": "ali", "COMPUTERNAME": "PC-01"}
         self.assertEqual(doctor.redact("kalite ali PC-01", env), "kalite <kullanıcı> <bilgisayar>")

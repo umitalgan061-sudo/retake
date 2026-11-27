@@ -84,8 +84,15 @@ def warp_piecewise_affine(
         dst_tri = target_points[[a, b, c]].astype(np.float32)
         src_tri = source_points[[a, b, c]].astype(np.float32)
         u, v = dst_tri[1] - dst_tri[0], dst_tri[2] - dst_tri[0]
-        area = abs(float(u[0] * v[1] - u[1] * v[0]))
-        if area < 0.5:
+        signed_dst = float(u[0] * v[1] - u[1] * v[0])
+        u, v = src_tri[1] - src_tri[0], src_tri[2] - src_tri[0]
+        signed_src = float(u[0] * v[1] - u[1] * v[0])
+        # A collapsed source triangle gives OpenCV a singular affine matrix;
+        # a folded triangle mirrors features. Neither is real texture evidence.
+        # Keep these areas uncovered so compositing retains the identity base.
+        if (not math.isfinite(signed_src) or not math.isfinite(signed_dst)
+                or abs(signed_dst) < 0.5 or abs(signed_src) < 0.5
+                or signed_src * signed_dst <= 0):
             continue
         x, y, w, h = cv2.boundingRect(dst_tri)
         x0, y0 = max(0, x), max(0, y)
@@ -109,7 +116,12 @@ def warp_piecewise_affine(
         blurred = cv2.GaussianBlur(warped * coverage[:, :, None], (0, 0), 1.0).reshape(height, width, channels)
         norm = cv2.GaussianBlur(coverage, (0, 0), 1.0)
         filled = blurred / np.maximum(norm, 1e-4)[:, :, None]
-        ok = gaps & (norm > 0.05)
+        # Repair rasterization pinholes, not large unobserved mesh regions.
+        # Limiting to an enclosed one-pixel gap avoids growing a fabricated
+        # texture field across an invalid source triangle.
+        enclosed = cv2.morphologyEx((coverage > 0).astype(np.uint8),
+                                   cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)) > 0
+        ok = gaps & enclosed & (norm > 0.05)
         warped[ok] = filled[ok]
         coverage[ok] = 1.0
     return (warped[:, :, 0] if channels == 1 else warped), coverage

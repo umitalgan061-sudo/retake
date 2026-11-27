@@ -146,7 +146,7 @@ class ThroatTransferTest(unittest.TestCase):
         lower = np.zeros(swap.shape[:2], np.float32)
         with patch("tools.lower_face_transfer._prepare_candidate", return_value=(swap.astype(np.float32), np.ones_like(lower), np.ones_like(lower))), \
                 patch("tools.lower_face_transfer.lower_face_mask", return_value=np.ones_like(lower)), \
-                patch("tools.lower_face_transfer.candidate_fit", return_value={"score": 1.0, "structure": 1.0}), \
+                patch("tools.lower_face_transfer.candidate_fit", return_value={"score": 1.0, "structure": 1.0, "light": 0.0}), \
                 patch("tools.lower_face_transfer.transfer_throat", side_effect=fake_throat):
             result, _, _ = choose_and_transfer_lower_face(swap, self.target, [(self.reference, self.reference_points)],
                                                           self.points, 124, strength=0.8)

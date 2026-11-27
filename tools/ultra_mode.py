@@ -60,7 +60,7 @@ def score_from_headers(headers: dict[str, str]) -> float | None:
 def verified_candidate_score(headers):
     # An explicit failed detail gate is never compatible with a valid
     # candidate. The absent field is retained for older internal callers.
-    if headers.get("X-Retake-Detail-Gate") not in (None,"passed"):
+    if headers.get("X-Retake-Detail-Gate") not in (None, "passed", "soft-original"):
         return None
     return score_from_headers(headers)
 

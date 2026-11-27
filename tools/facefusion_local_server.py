@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
+    from .nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
     from .ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from .nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -47,7 +47,7 @@ try:
         REALISM_SEED_STRIDE, format_ultra_timing, reference_appearance_from_headers, fine_quality_from_headers
     )
 except ImportError:
-    from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain
+    from nim_photo_edit import configured_editors, candidate_from_editor, interior_texture_gain, editor_quality_rank, select_editor_candidate
     from ultra_calibration import CalibrationStore, bank_key, schedule_signature
     from nvidia_judge import (
         MAX_CANDIDATES as JUDGE_MAX_CANDIDATES, build_judge, face_crop_jpeg, judge_headers,
@@ -2084,6 +2084,7 @@ def process_swap(
         flux_strength = None
         flux_blend_mode = ''
         flux_skin_gain = None
+        flux_diagnostic_rank = None
         if nim_editors and centroid:
             indices = sorted((i for i in range(len(weights)) if i != exact_index and i not in outlier_indices), key=lambda i: (-weights[i], i))
             nim_refs = [reference_paths[i] for i in indices]
@@ -2129,12 +2130,16 @@ def process_swap(
                             continue
                         delta = value - result_similarity
                         detail_delta = detail - base_detail if detail is not None and base_detail is not None else None
-                        if model == flux_model and (flux_delta is None or delta > flux_delta):
+                        identity_ok = (value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity"))
+                                       and delta >= -ULTRA_REALISM_TIE_LOSS)
+                        diagnostic_rank = (identity_ok, editor_quality_rank(delta, detail_delta, skin_gain))
+                        if model == flux_model and (flux_diagnostic_rank is None or diagnostic_rank > flux_diagnostic_rank):
+                            flux_diagnostic_rank = diagnostic_rank
                             flux_delta, flux_detail_delta, flux_strength = delta, detail_delta, strength
                             flux_blend_mode = blend_mode
                             flux_skin_gain = skin_gain
                             flux_status = "identity-loss" if delta < -ULTRA_REALISM_TIE_LOSS or value < finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) else "detail-gain-insufficient"
-                        if value >= finishing_identity_floor(result_similarity,identity_report.get("photo_level_similarity")) and delta >= -ULTRA_REALISM_TIE_LOSS and (
+                        if identity_ok and (
                             delta > .001 or (detail_delta is not None and detail_delta > .06)
                             or (skin_gain is not None and skin_gain > .05 and detail_delta is not None and detail_delta >= -.01)
                         ):
@@ -2146,7 +2151,7 @@ def process_swap(
                         flux_status = "worker-error"
                     print(f"[NIM] {model}: yerel aday kullanılamadı ({type(error).__name__}).", flush=True)
             if nim_candidates:
-                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = max(nim_candidates, key=lambda row: (row[0], row[1]))
+                result_similarity, _, nim_used, path, strength, delta, detail_delta, blend_mode, skin_gain = select_editor_candidate(nim_candidates, ULTRA_REALISM_TIE_LOSS)
                 shutil.copyfile(path, final_output)
                 verified_probe=visible_probes.get(path)
                 if nim_used == flux_model:

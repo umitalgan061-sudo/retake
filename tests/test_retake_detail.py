@@ -360,3 +360,20 @@ class ReferenceCandidateResilienceTest(unittest.TestCase):
             self.assertEqual(len(fits),1)
             with self.assertRaises(ValueError):
                 choose_and_transplant(target,target,refs[:1],points,140,complete_face=True)
+
+
+class MeshGeometryResilienceTest(unittest.TestCase):
+    def test_collapsed_source_triangles_never_claim_texture_coverage(self):
+        points=synthetic_mesh()
+        collapsed=np.repeat(points[:1],len(points),axis=0)
+        warped,coverage=warp_piecewise_affine(textured(1),collapsed,points,(SIZE,SIZE))
+        self.assertEqual(np.count_nonzero(coverage),0)
+        self.assertEqual(np.count_nonzero(warped),0)
+
+    def test_folded_source_mesh_does_not_mirror_features(self):
+        points=synthetic_mesh()
+        reflected=points.copy()
+        reflected[:,0]=SIZE-1-reflected[:,0]
+        warped,coverage=warp_piecewise_affine(textured(1),reflected,points,(SIZE,SIZE))
+        self.assertEqual(np.count_nonzero(coverage),0)
+        self.assertEqual(np.count_nonzero(warped),0)

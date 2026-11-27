@@ -584,6 +584,22 @@ class DistinctAttemptLedgerTest(unittest.TestCase):
         self.assertNotIn(spec,seen)
 
 
+class VisualSearchBudgetTest(unittest.TestCase):
+    def test_measured_deficits_trigger_only_deep_or_max_visual_search(self):
+        from tools.ultra_mode import extra_search_reason
+        good={**score(.90),"X-Retake-Detail-Gate":"passed",
+              "X-Retake-Identity-Photo-Level":".89","X-Retake-Naturalness":"81",
+              "X-Retake-Naturalness-Checks":"border=62,tone=88,grain=95"}
+        self.assertEqual(extra_search_reason(good,"max"),"border")
+        self.assertEqual(extra_search_reason(good,"deep"),"border")
+        self.assertEqual(extra_search_reason(good,"standard"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness-Checks":"border=nan"},"max"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness":"92","X-Retake-Reference-Appearance":".71"},"max"),"reference-appearance")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Naturalness":"92","X-Retake-Reference-Appearance":".90"},"max"),"")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Similarity":".82"},"max"),"identity")
+        self.assertEqual(extra_search_reason({**good,"X-Retake-Detail-Gate":"failed"},"max"),"")
+
+
 class OriginalIdentityPriorityTest(unittest.TestCase):
     def test_visual_preference_cannot_undo_attained_original_identity(self):
         from tools.ultra_mode import prefer_ultra_candidate, judge_quality_guard
@@ -603,3 +619,22 @@ class OriginalIdentityPriorityTest(unittest.TestCase):
         self.assertIsNone(original_identity_priority(score(.88),strong))
         self.assertIsNone(original_identity_priority({**score(.88),"X-Retake-Similarity-Before":".84"},strong))
         self.assertIsNone(original_identity_priority({**score(.885),**base},{**score(.89),**base}))
+
+
+class CumulativeFinishingBudgetTest(unittest.TestCase):
+    def test_one_budget_across_realism_editor_and_local_finishing(self):
+        from tools.ultra_mode import advance_finishing_floor
+        floor=advance_finishing_floor(None,.74,None,.21)
+        self.assertAlmostEqual(floor,.736)
+        floor=advance_finishing_floor(floor,.7385,None,.21)
+        self.assertAlmostEqual(floor,.736)
+        self.assertLess(.7359,floor)
+        floor=advance_finishing_floor(floor,.80,None,.21)
+        self.assertAlmostEqual(floor,.796)
+        self.assertAlmostEqual(advance_finishing_floor(floor,.797,None,.21),.796)
+
+    def test_attained_original_is_protected_without_impossible_floor(self):
+        from tools.ultra_mode import advance_finishing_floor
+        self.assertAlmostEqual(advance_finishing_floor(None,.90,.89,.90),.898)
+        self.assertAlmostEqual(advance_finishing_floor(None,.885,.89,.90),.881)
+        self.assertAlmostEqual(advance_finishing_floor(.881,.90,.89,.90),.898)

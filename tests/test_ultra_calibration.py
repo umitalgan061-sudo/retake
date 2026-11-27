@@ -212,3 +212,114 @@ class GridObservationIntegrityTest(unittest.TestCase):
             self.assertEqual(set(stats),{"0","3"})
             self.assertEqual(stats["0"]["proxy"]["n"],1)
             self.assertAlmostEqual(stats["0"]["proxy"]["mean"],.8)
+
+
+class BalancedLearningTest(unittest.TestCase):
+    def test_identity_deficit_cannot_be_hidden_by_sharp_texture(self):
+        def measured(identity, natural, detail):
+            return {**proxy(detail), "X-Retake-Similarity":str(identity),
+                    "X-Retake-Naturalness":str(natural), "X-Retake-Identity-Photo-Level":".89"}
+        weak=measured(.66,95,.98)
+        strong=measured(.88,84,.85)
+        self.assertEqual(uc.round_quality(strong)[0],"balanced")
+        self.assertGreater(uc.round_quality(strong)[1],uc.round_quality(weak)[1])
+        self.assertEqual(uc.round_quality({**strong,"X-Retake-Naturalness":"nan"})[0],"proxy")
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="balanced")
+            for _ in range(3):
+                store.record("bank",[(0,weak),(1,strong)])
+            order,mode,total=store.schedule("bank",range(2))
+            self.assertEqual((order,mode,total),([1,0],"learned-balanced",6))
+            self.assertIn("balanced",store.summary("bank")["banks"]["bank"]["variants"]["1"])
+            for _ in range(3):
+                store.record("bank",[(0,fid(.97,1)),(1,fid(.6,8))],self_test=True)
+            self.assertEqual(store.schedule("bank",range(2))[1],"learned-fidelity")
+            self.assertEqual(store.schedule("bank",range(2))[0][0],0)
+
+
+class LearningRobustnessTest(unittest.TestCase):
+    def test_short_jobs_keep_best_first_and_explore_under_sampled_variants(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="explore")
+            for _ in range(6):
+                store.record("bank",[(0,proxy(.98)),(1,proxy(.15))])
+            explored=set()
+            for _ in range(12):
+                order,mode,total=store.schedule("bank",range(8))
+                self.assertEqual(mode,"learned-proxy")
+                self.assertEqual(order[0],0)
+                self.assertEqual(sorted(order),list(range(8)))
+                self.assertNotEqual(order[1],1)
+                explored.add(order[1])
+                store.record("bank",[(0,proxy(.98)),(order[1],proxy(.30))])
+            self.assertEqual(explored,set(range(2,8)))
+
+    def test_corrupt_nested_slots_do_not_block_learning_or_bias_order(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"c.json"
+            path.write_text(json.dumps({"version":1,"signature":"clean","banks":{
+                "bank":{"jobs":"broken","self_tests":None,"updated":"invalid","variants":{
+                    "0":{"proxy":{"n":6,"sum":5.4,"sq":4.86}},
+                    "1":{"proxy":{"n":6,"sum":60,"sq":600}},
+                    "2":{"balanced":{"n":8,"sum":4,"sq":0}},
+                    "3":"broken","24":{"proxy":{"n":6,"sum":5.4,"sq":4.86}}}},
+                "bad":"not a bank"}}),encoding="utf-8")
+            store=uc.CalibrationStore(path,signature="clean")
+            summary=store.summary()
+            self.assertEqual(set(summary["banks"]),{"bank"})
+            self.assertEqual(set(summary["banks"]["bank"]["variants"]),{"0"})
+            self.assertEqual(store.schedule("bank",range(4))[0][0],0)
+            self.assertEqual(store.record("bank",[(3,proxy(.8))]),1)
+            self.assertEqual(store.summary("bank")["banks"]["bank"]["jobs"],1)
+            self.assertIn("3",store.summary("bank")["banks"]["bank"]["variants"])
+
+    def test_stats_reject_inconsistent_moments(self):
+        for bad in ({"n":2,"sum":1,"sq":.1},{"n":2,"sum":1,"sq":1.2},
+                    {"n":0,"sum":.00001,"sq":0},{"n":4,"sum":True,"sq":1},
+                    {"n":2,"sum":float("inf"),"sq":1}):
+            self.assertFalse(uc._valid_stats(bad))
+        self.assertTrue(uc._valid_stats({"n":2,"sum":1.6,"sq":1.28}))
+
+
+class PoseContextLearningTest(unittest.TestCase):
+    def test_coverage_uses_third_nearest_excluding_exact_and_invalid(self):
+        self.assertIsNone(uc.pose_learning_context({}))
+        self.assertIsNone(uc.pose_learning_context({"poseDistances":[0,.01]+[None]*23}))
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.07]+[.4]*22}),"near")
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.12]+[.4]*22}),"workable")
+        self.assertEqual(uc.pose_learning_context({"poseDistances":[.01,.04,.12]+[.4]*22,"exactReferenceIndex":0}),"sparse")
+        self.assertIsNone(uc.pose_learning_context({"poseDistances":[True,.01,float("nan"),.02]+[None]*21}))
+
+    def test_context_can_learn_different_winners_without_erasing_general_history(self):
+        def measured(value):
+            return {**proxy(value),"X-Retake-Similarity":str(value),
+                    "X-Retake-Naturalness":str(value*100),"X-Retake-Detail-Gate":"passed"}
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/"c.json"
+            store=uc.CalibrationStore(path,signature="context")
+            for _ in range(3):
+                store.record("bank",[(0,measured(.91)),(1,measured(.65))],context="near")
+            self.assertEqual(store.schedule("bank",range(2),context="near"),([0,1],"learned-context-balanced",6))
+            self.assertEqual(store.schedule("bank",range(2),context="sparse")[1],"learned-balanced")
+            for _ in range(3):
+                store.record("bank",[(0,measured(.62)),(1,measured(.94))],context="sparse")
+            self.assertEqual(store.schedule("bank",range(2),context="sparse"),([1,0],"learned-context-balanced",6))
+            again=uc.CalibrationStore(path,signature="context")
+            self.assertEqual(again.schedule("bank",range(2),context="near")[0],[0,1])
+            summary=again.summary("bank")["banks"]["bank"]
+            self.assertEqual(summary["jobs"],6)
+            self.assertEqual(summary["contexts"]["near"]["jobs"],3)
+            self.assertEqual(summary["contexts"]["sparse"]["measured_variants"],2)
+            self.assertEqual(summary["variants"]["0"]["balanced"]["n"],6)
+            store.record("bank",[(0,measured(.8))],context="unknown")
+            self.assertNotIn("unknown",store.summary("bank")["banks"]["bank"]["contexts"])
+            self.assertNotIn("poseDistances",path.read_text())
+
+    def test_context_requires_multiple_jobs_and_validated_measurements(self):
+        with tempfile.TemporaryDirectory() as folder:
+            store=uc.CalibrationStore(Path(folder)/"c.json",signature="context")
+            for _ in range(3):
+                store.record("bank",[(0,proxy(.95)),(1,proxy(.5))],context="near")
+            self.assertEqual(store.schedule("bank",range(2),context="near")[1],"learned-proxy")
+            store.record("bank",[(0,fid(.9,1)),(1,fid(.8,1))],self_test=True,context="sparse")
+            self.assertNotIn("context",store.schedule("bank",range(2),context="sparse")[1])

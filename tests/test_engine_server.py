@@ -571,6 +571,20 @@ class CachedPipelineTest(unittest.TestCase):
         self.assertEqual(headers["X-Retake-Similarity"],"0.7400")
         self.assertFalse(np.all(self.last_result[250,195,:3]==60))
 
+    def test_realism_and_fine_refinement_share_one_identity_budget(self):
+        self.render_scores=[.70,.79]
+        self.candidate_scores={"retake-verified-realism.png":.7385,"retake-fine-features.png":.7359}
+        applied={"status":"applied","quality_before":.70,"quality_after":.82,
+                 "catchlights_restored":1,"features":{"eye_r":{"before":.61,"after":.97,"action":"restore","shift":[0,0]}}}
+        mesh={"targetLandmarks":[[195.0,250.0]]*478}
+        with patch.object(srv,"refine_fine_features_file",self.fine_refiner(applied)), \
+                patch.object(srv,"repair_dark_rim_file",return_value={"corrected_pixels":0}):
+            headers=self.run_swap(0,[],realism={"python":Path("py"),"models":Path("m")},extra_metadata=mesh)
+        self.assertEqual(headers["X-Retake-Realism"],"on")
+        self.assertEqual(headers["X-Retake-Fine-Features"],"identity-loss")
+        self.assertEqual(headers["X-Retake-Similarity"],"0.7385")
+        self.assertEqual(headers["X-Retake-Finishing-Floor"],"0.7360")
+
     def test_realism_render_that_loses_the_person_is_not_used(self):
         self.render_scores = [0.61, 0.70]
         headers = self.run_swap(0, [], realism={"python": Path("py"), "models": Path("m")})

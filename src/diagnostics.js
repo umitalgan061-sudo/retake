@@ -96,6 +96,11 @@ export function buildDiagnosticReport({ headers = {}, health = null, depth = "",
   if (depth) lines.push(`Seçilen derinlik: ${scrub(depth)}`);
   const timing = describeUltraTiming(headers["x-retake-ultra-timing"]);
   if (timing) lines.push(timing);
+  const reasons = String(headers["x-retake-extra-search-reasons"] || "").split(",").filter(Boolean);
+  const names = {identity:"kimlik hedefi",border:"yüz kenarı",tone:"renk tonu",grain:"cilt dokusu",detail:"ayrıntı",light:"ışık","reference-appearance":"referans alt yüz uyumu"};
+  if (reasons.length && reasons.length <= 4 && reasons.every(reason => Object.hasOwn(names,reason))) {
+    lines.push("Ek arama nedenleri: " + reasons.map(reason=>names[reason]).join(" · "));
+  }
   const evidence = summarizeQualityEvidence(headers);
   if (evidence) lines.push(evidence);
   const reuse=describeIdentityScoreCache(headers["x-retake-identity-score-cache"]);

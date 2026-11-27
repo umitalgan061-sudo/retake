@@ -43,8 +43,11 @@ DELTA_E_WEIGHT = 0.02
 REINFORCED_PROXY_PENALTY = 0.05
 MIN_FIDELITY_SAMPLES = 3
 MIN_PROXY_SAMPLES = 6
-EXPLORATION = {"fidelity": 0.06, "proxy": 0.04}
+MIN_BALANCED_SAMPLES = 6
+EXPLORATION = {"fidelity": 0.06, "balanced": 0.04, "proxy": 0.04}
 MAX_BANKS = 8
+POSE_CONTEXTS = ("near", "workable", "sparse")
+MIN_CONTEXT_JOBS = 3
 _SELF_FIDELITY = re.compile(r"^ssim:(-?\d+(?:\.\d+)?),deltaE:(\d+(?:\.\d+)?)$")
 
 
@@ -52,6 +55,24 @@ def bank_key(reference_bytes: Iterable[bytes], weights: Sequence[int] | None = N
     """Stable identifier of the person's reference bank (never stored in reverse)."""
     return digest("retake-ultra-calibration", *(bytes(item) for item in reference_bytes),
                   ",".join(str(int(w)) for w in (weights or ())))[:32]
+
+
+def pose_learning_context(metadata):
+    """Coarse reference coverage, not a pose or identity estimate.
+
+    Use the third nearest usable reference, excluding the exact target.
+    Threshold .18 matches the existing reference-warp eligibility limit.
+    No raw distances or geometry are persisted.
+    """
+    distances=metadata.get("poseDistances")
+    if not isinstance(distances,list) or len(distances)!=25:
+        return None
+    exact=metadata.get("exactReferenceIndex")
+    valid=sorted(v for i,v in enumerate(distances) if i!=exact
+                 and type(v) in (int,float) and 0<=v<=10)
+    if len(valid)<3:
+        return None
+    return "near" if valid[2]<=.09 else "workable" if valid[2]<=.18 else "sparse"
 
 
 def schedule_signature(profile_version: str, variations: Sequence[int]) -> str:
@@ -69,8 +90,37 @@ def parse_self_fidelity(value: Any) -> tuple[float, float] | None:
     return ssim, delta_e
 
 
+def _metric(headers, key, low, high):
+    try:
+        value = float(headers.get(key, ""))
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and low <= value <= high else None
+
+
+def balanced_proxy(headers, detail):
+    """Scheduling heuristic only, not a biometric or acceptance score."""
+    identity = _metric(headers, "X-Retake-Similarity", -1, 1)
+    natural = _metric(headers, "X-Retake-Naturalness", 0, 100)
+    if identity is None or natural is None:
+        return None
+    identity = max(0., identity)
+    terms = [(0.55, identity), (0.20, detail), (0.25, natural/100.)]
+    appearance = _metric(headers, "X-Retake-Reference-Appearance", 0, 1)
+    if appearance is not None:
+        terms.append((0.10, appearance))
+    rim = _metric(headers, "X-Retake-Rim-Fraction", 0, 1)
+    if rim is not None:
+        terms.append((0.10, 1-rim))
+    reward = sum(w*v for w,v in terms)/sum(w for w,_ in terms)
+    level = _metric(headers, "X-Retake-Identity-Photo-Level", .40, .99)
+    if level is not None:
+        reward -= .75*max(0., min(.92, level-.02)-identity)
+    return max(0., min(1., reward))
+
+
 def round_quality(headers: Mapping[str, str]) -> tuple[str, float] | None:
-    """('fidelity'|'proxy', value in 0..1) for one verified round, or None."""
+    """(fidelity, balanced or proxy; value in 0..1) for one verified round."""
     fidelity = parse_self_fidelity(headers.get("X-Retake-Self-Fidelity"))
     if fidelity is not None:
         ssim, delta_e = fidelity
@@ -83,7 +133,9 @@ def round_quality(headers: Mapping[str, str]) -> tuple[str, float] | None:
         return None
     if headers.get("X-Retake-Identity-Reinforced") == "on":
         detail -= REINFORCED_PROXY_PENALTY
-    return "proxy", max(0.0, min(1.0, detail))
+    detail = max(0.0, min(1.0, detail))
+    balanced = balanced_proxy(headers, detail)
+    return ("balanced", balanced) if balanced is not None else ("proxy", detail)
 
 
 def _empty_stats() -> dict[str, float]:
@@ -91,10 +143,67 @@ def _empty_stats() -> dict[str, float]:
 
 
 def _valid_stats(value: Any) -> bool:
-    return (
-        isinstance(value, dict) and type(value.get("n")) is int and 0 <= value["n"] <= 1_000_000
-        and all(isinstance(value.get(k), (int, float)) and math.isfinite(value[k]) for k in ("sum", "sq"))
-    )
+    if not (isinstance(value, dict) and type(value.get("n")) is int and 0 <= value["n"] <= 1_000_000
+            and all(type(value.get(k)) in (int,float) and 0<=value[k]<=1_000_001 for k in ("sum","sq"))):
+        return False
+    n,total,squares=value["n"],value["sum"],value["sq"]
+    eps=1e-7*max(1,n)
+    return (0<=total<=n+eps and 0<=squares<=total+eps
+            and (n==0 or squares+eps>=total*total/n)
+            and (n!=0 or (total==0 and squares==0)))
+
+
+def _counter(value):
+    return value if type(value) is int and 0<=value<=1_000_000 else 0
+
+
+def _clean_entry(entry):
+    if not isinstance(entry,dict) or not isinstance(entry.get("variants"),dict):
+        return None
+    variants={}
+    for variant,slot in entry["variants"].items():
+        if variant not in {str(i) for i in range(24)} or not isinstance(slot,dict):
+            continue
+        row={kind:{k:stats[k] for k in ("n","sum","sq")} for kind,stats in slot.items()
+             if kind in EXPLORATION and _valid_stats(stats) and stats["n"]>0}
+        if row: variants[variant]=row
+    updated=entry.get("updated",0)
+    if type(updated) not in (int,float) or not 0<=updated<=1e12:
+        updated=0
+    return {"variants":variants,"jobs":_counter(entry.get("jobs")),
+            "self_tests":_counter(entry.get("self_tests")),"updated":updated}
+
+
+def _clean_banks(banks):
+    """Reject malformed nested slots without dropping valid sibling statistics."""
+    clean={}
+    for key,entry in banks.items():
+        bank=_clean_entry(entry)
+        if bank is None:
+            continue
+        contexts=entry.get("contexts")
+        if isinstance(contexts,dict):
+            bank["contexts"]={name:valid for name in POSE_CONTEXTS
+                              if (valid:=_clean_entry(contexts.get(name))) is not None}
+        clean[key]=bank
+    return clean
+
+
+def _add_rows(entry,rows,self_test):
+    for variation,(kind,value) in rows:
+        slot=entry["variants"].setdefault(str(variation),{})
+        stats=slot.get(kind)
+        if not _valid_stats(stats):
+            stats=_empty_stats()
+        if stats["n"]>=1_000_000:
+            stats={"n":500_000,"sum":stats["sum"]*.5,"sq":stats["sq"]*.5}
+        stats["n"]+=1
+        stats["sum"]+=value
+        stats["sq"]+=value*value
+        slot[kind]=stats
+    entry["jobs"]=min(1_000_000,_counter(entry.get("jobs"))+1)
+    entry["self_tests"]=min(1_000_000,_counter(entry.get("self_tests"))+(1 if self_test else 0))
+    entry["updated"]=time.time()
 
 
 class CalibrationStore:
@@ -109,6 +218,9 @@ class CalibrationStore:
     # ---- persistence -------------------------------------------------
     def _load(self) -> dict[str, Any]:
         try:
+            # The bounded numeric store is tiny; ignore unexpectedly large files.
+            if self.path.stat().st_size>2*1024*1024:
+                raise ValueError("calibration store too large")
             data = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return {"version": STORE_VERSION, "signature": self.signature, "banks": {}}
@@ -117,6 +229,7 @@ class CalibrationStore:
             or data.get("signature") != self.signature or not isinstance(data.get("banks"), dict)
         ):
             return {"version": STORE_VERSION, "signature": self.signature, "banks": {}}
+        data["banks"]=_clean_banks(data["banks"])
         return data
 
     def _save(self, data: dict[str, Any]) -> None:
@@ -138,7 +251,7 @@ class CalibrationStore:
             raise
 
     # ---- learning ----------------------------------------------------
-    def record(self, bank: str, observations: Sequence[tuple[int, Mapping[str, str]]], self_test: bool = False) -> int:
+    def record(self, bank: str, observations: Sequence[tuple[int, Mapping[str, str]]], self_test: bool = False, context: str | None = None) -> int:
         """Add verified rounds of one job; returns how many were usable."""
         if not self.enabled or not bank:
             return 0
@@ -149,7 +262,7 @@ class CalibrationStore:
         for variation, headers in observations:
             if type(variation) is not int or not 0 <= variation < 24 or variation in seen:
                 continue
-            if headers.get("X-Retake-Detail-Gate") not in (None, "passed"):
+            if headers.get("X-Retake-Detail-Gate") not in (None, "passed", "soft-original"):
                 continue
             quality = round_quality(headers)
             if quality is None:
@@ -170,18 +283,10 @@ class CalibrationStore:
             entry = data["banks"].setdefault(bank, {"variants": {}, "jobs": 0, "self_tests": 0})
             if not isinstance(entry.get("variants"), dict):
                 entry["variants"] = {}
-            for variation, (kind, value) in rows:
-                slot = entry["variants"].setdefault(str(variation), {})
-                stats = slot.get(kind)
-                if not _valid_stats(stats):
-                    stats = _empty_stats()
-                stats["n"] += 1
-                stats["sum"] += value
-                stats["sq"] += value * value
-                slot[kind] = stats
-            entry["jobs"] = int(entry.get("jobs", 0)) + 1
-            entry["self_tests"] = int(entry.get("self_tests", 0)) + (1 if self_test else 0)
-            entry["updated"] = time.time()
+            _add_rows(entry,rows,self_test)
+            if context in POSE_CONTEXTS:
+                scoped=entry.setdefault("contexts",{}).setdefault(context,{"variants":{},"jobs":0,"self_tests":0})
+                _add_rows(scoped,rows,self_test)
             self._save(data)
         return len(rows)
 
@@ -190,13 +295,25 @@ class CalibrationStore:
             entry = self._load()["banks"].get(bank)
         return entry if isinstance(entry, dict) and isinstance(entry.get("variants"), dict) else {"variants": {}}
 
-    def schedule(self, bank: str, variations: Sequence[int]) -> tuple[list[int], str, int]:
-        """(order, mode, samples). mode: learned-fidelity | learned-proxy | default."""
+    def schedule(self, bank: str, variations: Sequence[int], context: str | None = None) -> tuple[list[int], str, int]:
+        """(order, mode, samples). mode: learned-fidelity | learned-balanced | learned-proxy | default."""
         order = list(variations)
         if not self.enabled or not bank:
             return order, "default", 0
-        variants = self._bank(bank)["variants"]
-        for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
+        entry=self._bank(bank)
+        scoped=entry.get("contexts",{}).get(context) if context in POSE_CONTEXTS else None
+        if scoped and scoped.get("jobs",0)>=MIN_CONTEXT_JOBS and len(scoped["variants"])>=2:
+            ranked,mode,total=self._rank_schedule(scoped,order)
+            # Context-specific evidence must be at least balanced. Sparse
+            # legacy detail-only observations fall back to general history.
+            if mode in ("learned-fidelity","learned-balanced"):
+                return ranked,mode.replace("learned-","learned-context-",1),total
+        return self._rank_schedule(entry,order)
+
+    @staticmethod
+    def _rank_schedule(entry,order):
+        variants = entry["variants"]
+        for kind, minimum in (("fidelity", MIN_FIDELITY_SAMPLES), ("balanced", MIN_BALANCED_SAMPLES), ("proxy", MIN_PROXY_SAMPLES)):
             stats = {
                 v: variants.get(str(v), {}).get(kind) for v in order
             }
@@ -215,6 +332,23 @@ class CalibrationStore:
                 return mean + bonus * math.sqrt(log_total / (n + 1))
 
             ranked = sorted(order, key=lambda v: (-upper(v), order.index(v)))
+            # Exploration is deliberate, not an accidental first-slot
+            # promotion from the optimistic prior of an unmeasured variant.
+            incumbent = max(stats, key=lambda v: (stats[v]["sum"]/stats[v]["n"],
+                                                  stats[v]["n"], -order.index(v)))
+            ranked.remove(incumbent)
+            ranked.insert(0, incumbent)
+            # A fixed UCB bonus may never outrank a strong incumbent, even
+            # after many short jobs. Reserve only the second slot for an
+            # under-tested setting, keeping the proven best first. Rotate
+            # candidates on recorded jobs so one failing setting cannot
+            # monopolize exploration. All acceptance gates remain unchanged.
+            if len(ranked)>2:
+                under=[v for v in ranked[1:] if stats.get(v,{}).get("n",0)<2]
+                if under:
+                    challenger=under[_counter(entry.get("jobs")) % len(under)]
+                    ranked.remove(challenger)
+                    ranked.insert(1,challenger)
             return ranked, "learned-" + kind, total
         return order, "default", 0
 
@@ -232,7 +366,7 @@ class CalibrationStore:
                 if not isinstance(slot, dict):
                     continue
                 row = {}
-                for kind in ("fidelity", "proxy"):
+                for kind in ("fidelity", "balanced", "proxy"):
                     stats = slot.get(kind)
                     if _valid_stats(stats) and stats["n"] > 0:
                         row[kind] = {"n": stats["n"], "mean": round(stats["sum"] / stats["n"], 4)}
@@ -241,6 +375,8 @@ class CalibrationStore:
             out["banks"][key] = {
                 "jobs": int(entry.get("jobs", 0) or 0), "self_tests": int(entry.get("self_tests", 0) or 0),
                 "variants": rows,
+                "contexts": {name:{"jobs":scoped["jobs"],"self_tests":scoped["self_tests"],
+                    "measured_variants":len(scoped["variants"])} for name,scoped in entry.get("contexts",{}).items()},
             }
         return out
 

@@ -349,6 +349,38 @@ def needs_extra_finalist(headers):
     score = score_from_headers(headers)
     return target is not None and score is not None and score < target - ULTRA_SCORE_EPS
 
+def extra_search_reason(headers, depth_name):
+    """Aspirations schedule work; they never override candidate acceptance."""
+    if verified_candidate_score(headers) is None:
+        return ""
+    if needs_extra_finalist(headers):
+        return "identity"
+    if depth_name not in ("deep", "max"):
+        return ""
+    # Treat missing evidence as unknown, not an artificial quality deficit.
+    natural = naturalness_from_headers(headers)
+    if natural is not None and natural < 85:
+        checks = {}
+        for part in str(headers.get("X-Retake-Naturalness-Checks", "")).split(","):
+            name, sep, raw = part.partition("=")
+            if not sep or name not in ("border", "tone", "grain", "detail", "light"):
+                continue
+            try:
+                value = float(raw)
+            except ValueError:
+                continue
+            if math.isfinite(value) and 0 <= value <= 100:
+                checks[name] = value
+        if checks:
+            weakest = min(checks, key=checks.get)
+            if checks[weakest] < 70:
+                return weakest
+    appearance = reference_appearance_from_headers(headers)
+    if appearance is not None and appearance < .75:
+        return "reference-appearance"
+    return ""
+
+
 def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALISTS, fallback=None):
     """Try a different verified variation, then a distinct geometry/weight.
 
@@ -674,6 +706,20 @@ def finishing_identity_floor(anchor, reference_level):
     """One loss allowance for the whole finishing pipeline."""
     level=sufficiency_from_level(reference_level)
     return max(anchor-.004,level) if level is not None and anchor>=level else anchor-.004
+
+
+def advance_finishing_floor(previous, accepted, reference_level, original=None):
+    """An accepted improvement raises the shared floor; no stage can lower it.
+
+    Preserve an attained original-photo baseline using the existing near-tie
+    band, without requiring an unachievable original score from every input.
+    """
+    floor=finishing_identity_floor(accepted,reference_level)
+    if original is not None and math.isfinite(original) and -1<=original<=1:
+        threshold=original-ULTRA_REALISM_TIE_LOSS
+        if accepted>=threshold-1e-9:
+            floor=max(floor,threshold)
+    return floor if previous is None else max(previous,floor)
 
 
 def plan_extra_spec(round_scores, winner_spec, grid, records, attempted, editor_attempted,

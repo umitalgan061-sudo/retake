@@ -58,13 +58,14 @@ test("result revision is not silently replaced by a newer connected motor", asyn
   const {EXPECTED_QUALITY_REVISION,describeQualityCompatibility}=await import("../src/diagnostics.js");
   const old="portrait-quality-20261125-r2";
   assert.equal(describeQualityCompatibility(EXPECTED_QUALITY_REVISION),"");
+  assert.match(describeQualityCompatibility("portrait-quality-20261127-r12"),/eski kalite paketi/);
   assert.match(describeQualityCompatibility("portrait-quality-20261126-r11"),/eski kalite paketi/);
   assert.match(describeQualityCompatibility(old),/eski kalite paketi/);
   assert.match(describeQualityCompatibility(undefined),/doğrulanamadı/);
   const report=buildDiagnosticReport({headers:{"x-retake-quality-revision":old,"x-retake-token":"private"},
     health:{quality_revision:EXPECTED_QUALITY_REVISION,flux_texture_alternatives:true}});
   assert.match(report,/Sonucu üreten kalite sürümü: portrait-quality-20261125-r2/);
-  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261127-r12/);
+  assert.match(report,/Şu an bağlı motorun kalite sürümü: portrait-quality-20261127-r13/);
   assert.match(report,/güncel motor durumu bu sonucun kanıtı değildir/);
   assert.match(report,/flux_texture_alternatives: true/);
   assert.doesNotMatch(report,/private|x-retake-token/);
@@ -158,4 +159,15 @@ test("ArcFace reuse diagnostics show actual counters and reject malformed values
 test("finishing floor diagnostic is numeric and not a calibrated percentage", () => {
   assert.match(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"0.7360"}}),/ortak kosinüs alt sınırı: 0,7360/);
   assert.doesNotMatch(buildDiagnosticReport({headers:{"x-retake-finishing-floor":"NaN"}}),/ortak kosinüs alt sınırı/);
+});
+
+
+test("web and local engine declare the same quality revision", async () => {
+  const {readFileSync}=await import("node:fs");
+  const {EXPECTED_QUALITY_REVISION,WEB_QUALITY_REVISION}=await import("../src/diagnostics.js");
+  const motor=readFileSync(new URL("../tools/facefusion_local_server.py",import.meta.url),"utf8");
+  const revision=motor.match(/^QUALITY_PIPELINE_REVISION = "([^"]+)"$/m)?.[1];
+  assert.ok(revision,"engine must declare an independently readable quality revision");
+  assert.equal(revision,EXPECTED_QUALITY_REVISION);
+  assert.equal(WEB_QUALITY_REVISION,revision);
 });

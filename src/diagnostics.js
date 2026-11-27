@@ -13,7 +13,7 @@ const HEALTH_KEYS = Object.freeze([
 ]);
 const SECRET_NAME = /token|secret|key|pairing|auth|cookie|password/i;
 const MAX_VALUE = 300;
-export const EXPECTED_QUALITY_REVISION = "portrait-quality-20261127-r12";
+export const EXPECTED_QUALITY_REVISION = "portrait-quality-20261127-r13";
 export const WEB_QUALITY_REVISION = EXPECTED_QUALITY_REVISION;
 
 // Windows/POSIX paths and file names never leave the device.

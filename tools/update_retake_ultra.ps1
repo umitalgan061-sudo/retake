@@ -134,7 +134,7 @@ try {
             if (-not $verified) { throw "Managed engine restart requested, but quality revision $expected was not verified. Run .\tools\install_retake_autostart.ps1 -Action Status." }
             Write-Host "Managed Retake engine verified: $expected" -ForegroundColor Green
         } else {
-            Write-Warning "Engine restart requested; quality revision could not be verified."
+            throw "Managed engine restart requested, but the local quality revision declaration was not found. Verification failed."
         }
         return
     }

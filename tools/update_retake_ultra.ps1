@@ -111,19 +111,7 @@ if (-not $managedTask) {
         if ($manualHealth.busy -ne $false) { Write-Warning "-Force: manual photo processing may be interrupted." }
     }
 }
-Push-Location $Root
-try {
-    if (-not (Test-Path ".git")) {
-        throw "Bu dosyayi Retake GitHub deposu icinden calistir: $Root"
-    }
-    if (-not $SkipPull) {
-        Write-Host "Retake GitHub main guncellemesi..." -ForegroundColor Cyan
-        git pull --ff-only origin main
-        if ($LASTEXITCODE -ne 0) {
-            throw "Git pull basarisiz. Yerel degisikliklerinizi kontrol edin; otomatik overwrite yapilmadi."
-        }
-    }
-
+function Publish-VerifiedRetakeWeb {
     if (-not $SkipDeploy) {
         if (-not (Get-Command firebase -ErrorAction SilentlyContinue)) {
             throw "Firebase CLI bulunamadi; web yayini yapilmadi."
@@ -151,6 +139,20 @@ try {
             Write-Host "Firebase yayini dogrulandi: app.js, diagnostics.js, sw.js (SHA256)." -ForegroundColor Green
         } finally { Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue }
     }
+}
+
+Push-Location $Root
+try {
+    if (-not (Test-Path ".git")) {
+        throw "Bu dosyayi Retake GitHub deposu icinden calistir: $Root"
+    }
+    if (-not $SkipPull) {
+        Write-Host "Retake GitHub main guncellemesi..." -ForegroundColor Cyan
+        git pull --ff-only origin main
+        if ($LASTEXITCODE -ne 0) {
+            throw "Git pull basarisiz. Yerel degisikliklerinizi kontrol edin; otomatik overwrite yapilmadi."
+        }
+    }
 
     if ($managedTask) {
         # Do not start a competing manual server; the registered task keeps its options.
@@ -175,10 +177,13 @@ try {
             if (-not $verified) { throw "Managed engine restart requested, but quality revision $expected was not verified. Run .\tools\install_retake_autostart.ps1 -Action Status." }
             Write-Host "Managed Retake engine verified: $expected" -ForegroundColor Green
         } else {
-            Write-Warning "Engine restart requested; quality revision could not be verified."
+            throw "Managed engine restart requested, but the local quality revision declaration was not found. Verification failed."
         }
+        Publish-VerifiedRetakeWeb
         return
     }
+
+    Publish-VerifiedRetakeWeb
 
     # Stop just the Python command with the Retake bridge, not arbitrary
     # applications using Python, CUDA or port 8765.

@@ -284,6 +284,12 @@ class CalibrationStore:
                 return mean + bonus * math.sqrt(log_total / (n + 1))
 
             ranked = sorted(order, key=lambda v: (-upper(v), order.index(v)))
+            # Exploration is deliberate, not an accidental first-slot
+            # promotion from the optimistic prior of an unmeasured variant.
+            incumbent = max(stats, key=lambda v: (stats[v]["sum"]/stats[v]["n"],
+                                                  stats[v]["n"], -order.index(v)))
+            ranked.remove(incumbent)
+            ranked.insert(0, incumbent)
             # A fixed UCB bonus may never outrank a strong incumbent, even
             # after many short jobs. Reserve only the second slot for an
             # under-tested setting, keeping the proven best first. Rotate

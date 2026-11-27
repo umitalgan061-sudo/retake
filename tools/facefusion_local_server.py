@@ -2903,11 +2903,11 @@ def run_ultra_search(
             jury_seen.add(spec)
             jury_retry_attempts += 1
             finalist_attempts += 1
-            if on_finalist is not None:
-                on_finalist()
-            phase("extra", jury_retry_attempts, jury_retry_limit)
             step_started = clock()
             try:
+                if on_finalist is not None:
+                    on_finalist()
+                phase("extra", jury_retry_attempts, jury_retry_limit)
                 retry_image, retry_headers = process_swap(
                     facefusion_dir, pixel_boost, enhancer_enabled,
                     with_refinement(parsed, spec[0], spec[1]), lambda *_a, **_k: None,
@@ -3293,7 +3293,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Naturalness, X-Retake-Naturalness-Checks, X-Retake-Identity-Model, "
             "X-Retake-FLUX-Status, X-Retake-FLUX-Identity-Delta, X-Retake-FLUX-Detail-Delta, X-Retake-FLUX-Strength, X-Retake-FLUX-Blend-Mode, X-Retake-FLUX-Skin-Gain, "
             "X-Retake-Finalist-Attempts, X-Retake-Identity-Aspiration, X-Retake-Identity-Gain, X-Retake-Photo-Balance, X-Retake-Detail-Gate, "
-            "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Votes, "
+            "X-Retake-NVIDIA-Judge, X-Retake-NVIDIA-Judge-Finalists, X-Retake-NVIDIA-Judge-Retry-Attempts, X-Retake-NVIDIA-Judge-Votes, "
             "X-Retake-NVIDIA-Judge-Agreement, X-Retake-NVIDIA-Judge-Models, X-Retake-NVIDIA-Judge-Error, X-Retake-NVIDIA-Judge-Reason, "
             "X-Retake-Identity-Reinforced, X-Retake-Reinforce-Guard, "
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "

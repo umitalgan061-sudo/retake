@@ -27,7 +27,7 @@ try:
         judge_status, judge_transport, judged_winner
     )
     from .facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
-    from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from .retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest, IdentityScoreCache
     from .identity_scorer import PersistentIdentityScorer
     from .identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from .photo_realism_gate import check_render_file
@@ -54,7 +54,7 @@ except ImportError:
         judge_status, judge_transport, judged_winner
     )
     from facefusion_quality import PIXEL_BOOST_FALLBACKS, is_near_noop, measure_final_face_edit
-    from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest
+    from retake_cache import IdentityReportCache, PassCache, StageTimings, references_digest, IdentityScoreCache
     from identity_scorer import PersistentIdentityScorer
     from identity_selection import plan_identity_source_sets, select_texture_reference, choose_identity_pool, strict_self_test_pools
     from photo_realism_gate import check_render_file
@@ -982,7 +982,8 @@ def choose_composite(
     facefusion_dir: Path,
     centroid: list[float] | None,
     blends: list[tuple],
-    labels: list[str] | None = None
+    labels: list[str] | None = None,
+    measure=None
 ) -> Path:
     """The blend closest to the person among those that look like a photograph.
 
@@ -1007,7 +1008,8 @@ def choose_composite(
                    if not isinstance(naturalness[path], (int, float)) or naturalness[path] >= floor]
         if natural:
             allowed = natural
-    scores = score_identity(facefusion_dir, centroid, [path for path, _ in allowed])
+    probes = [path for path, _ in allowed]
+    scores = measure(probes) if measure is not None else score_identity(facefusion_dir, centroid, probes)
     scored = [(value, path, border) for (path, border), value in zip(allowed, scores) if value is not None]
     if not scored:
         return blends[0][0]
@@ -1535,6 +1537,12 @@ def process_swap(
         print(f"Kimlik profili geçişi tamamlandı ({identity_boost}).", flush=True)
 
         centroid = identity_report.get("centroid")
+        score_cache = caches.get("identity_scores")
+
+        def measure_identity(paths):
+            measure = lambda probes: score_identity(facefusion_dir, centroid, probes)
+            return score_cache.score(centroid, paths, measure) if score_cache is not None else measure(paths)
+
         identity_source_paths = weighted_identity_paths
         identity_source = identity_output
         identity_pool = "all-25"
@@ -1553,9 +1561,7 @@ def process_swap(
                     # candidate runs out of VRAM or fails face detection.
                     print(f"Ek {name} kimlik adayı atlandı: {error}", flush=True)
             if len(candidates) > 1:
-                candidate_scores = score_identity(
-                    facefusion_dir, centroid, [path for _, path, _, _ in candidates]
-                )
+                candidate_scores = measure_identity([path for _, path, _, _ in candidates])
                 best_index = choose_identity_pool(candidate_scores, variation)
                 identity_pool, identity_source, identity_source_paths, identity_boost = candidates[best_index]
                 print(
@@ -1575,7 +1581,7 @@ def process_swap(
             reinforced_output = temp_dir / "retake-identity-reinforced.png"
             try:
                 cached_pass(REINFORCE_STAGE, identity_source_paths, reinforced_output, REINFORCE_MODEL, identity_source)
-                single, double = score_identity(facefusion_dir, centroid, [identity_source, reinforced_output])
+                single, double = measure_identity([identity_source, reinforced_output])
                 wanted, why = reinforcement_wanted(
                     single, double, sufficiency_from_level(identity_report.get("photo_level_similarity"))
                 )
@@ -1598,7 +1604,7 @@ def process_swap(
                         # verified like the plain reinforcement.
                         fused_output = temp_dir / "retake-identity-reinforced-detail.png"
                         sigma = fuse_reinforcement_detail(identity_source, reinforced_output, fused_output, metadata["faceBounds"])
-                        fused_score = score_identity(facefusion_dir, centroid, [fused_output])[0]
+                        fused_score = measure_identity([fused_output])[0]
                         fused_wanted, _ = reinforcement_wanted(
                             single, fused_score, sufficiency_from_level(identity_report.get("photo_level_similarity"))
                         )
@@ -1730,7 +1736,7 @@ def process_swap(
                 labels.append(f"gerçek referans dokusu {harmonize:g}")
         if not blends:
             raise NoOpSwapError('Yapay zekâ ve gerçek referans adaylarının hiçbirinde yeterli yüz içi değişim oluşmadı.')
-        chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels)
+        chosen_blend = choose_composite(facefusion_dir, centroid, blends, labels, measure=measure_identity)
         used_real_face = chosen_blend in transplanted
         used_lower_face = transplanted.get(chosen_blend) == "lower"
         used_full_face = transplanted.get(chosen_blend) == "full"
@@ -1892,7 +1898,7 @@ def process_swap(
                 except (ValueError,OSError,cv2.error):
                     continue
             if prepared:
-                for idx,value in zip(indices,score_identity(facefusion_dir,centroid,prepared)):
+                for idx,value in zip(indices,measure_identity(prepared)):
                     values[idx]=value
             return values
 
@@ -2608,7 +2614,9 @@ def run_ultra_search(
     timing: dict[str, list[float]] = {"search": [], "refine": [], "realism": [], "extra": []}
     judge_seconds = 0.0
     hold_seconds = 0.0
-    pass_cache = (caches or {}).get("passes")
+    score_cache = IdentityScoreCache()
+    caches = {**(caches or {}), "identity_scores": score_cache}
+    pass_cache = caches.get("passes")
     cache_start = pass_cache.describe() if hasattr(pass_cache, "describe") else None
     scorer_start = dict(IDENTITY_SCORER.stats) if IDENTITY_SCORER is not None else None
     best_result: bytes | None = None
@@ -2868,6 +2876,8 @@ def run_ultra_search(
     # repeating the expensive multi-render diffusion pipeline.
     extra_started = clock()
     skip_flux_once = defer_flux_retry(flux_outcome, flux_diagnostics)
+    if skip_flux_once:
+        print('[Ultra] FLUX ölçülen kazanım yetersiz; sıradaki ek finalist yerel aramaya ayrıldı.', flush=True)
     extra_attempts = 0
     extra_specs = set()
     if needs_extra_finalist(best_headers):
@@ -3073,6 +3083,7 @@ def run_ultra_search(
         "X-Retake-Ultra-Realism-Finalists": str(realism_finalists),
         "X-Retake-Ultra-Timing": format_ultra_timing(timing, judge_seconds, hold_seconds, clock() - started),
         "X-Retake-Engine-Stats": engine_stats(pass_cache, cache_start, scorer_start),
+        "X-Retake-Identity-Score-Cache": f"hits:{score_cache.hits},measured:{score_cache.measured},failed:{score_cache.failed}",
     }
     learn()
     print(
@@ -3349,7 +3360,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "X-Retake-Ultra-Depth, X-Retake-Ultra-Search-Budget, X-Retake-Ultra-Refinements, "
             "X-Retake-Ultra-Realism-Finalists, X-Retake-Variation-Params, X-Retake-Variation-Refined, "
             "X-Retake-Fine-Features, X-Retake-Fine-Detail, X-Retake-Catchlights, X-Retake-Sclera, "
-            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats, X-Retake-NVIDIA-Judge-Layout"
+            "X-Retake-Fine-Quality, X-Retake-Ultra-Timing, X-Retake-Engine-Stats, X-Retake-Identity-Score-Cache, X-Retake-NVIDIA-Judge-Layout"
         )
         self.send_header("Access-Control-Allow-Private-Network", "true")
         self.send_header("Cache-Control", "no-store")
@@ -3410,6 +3421,7 @@ class RetakeFaceFusionHandler(BaseHTTPRequestHandler):
             "model": HYBRID_PROFILE_VERSION,
             "quality_revision": QUALITY_PIPELINE_REVISION,
             "visible_identity_verification": True,
+            "job_local_identity_score_cache": True,
             "finishing_identity_guard": True,
             "flux_texture_alternatives": True,
             "distinct_extra_search": True,

@@ -79,3 +79,71 @@ class StageTimingsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdentityScoreCacheTest(unittest.TestCase):
+    def test_exact_bytes_are_reused_across_paths_and_reference_scope_isolated(self):
+        from tools.retake_cache import IdentityScoreCache
+        with tempfile.TemporaryDirectory() as directory:
+            a,b,c=[Path(directory)/n for n in ("a.png","b.png","c.png")]
+            a.write_bytes(b"same");b.write_bytes(b"same");c.write_bytes(b"other")
+            cache=IdentityScoreCache()
+            calls=[]
+            def measure(paths):
+                calls.append(list(paths))
+                return [.81 if path.read_bytes()==b"same" else .72 for path in paths]
+            self.assertEqual(cache.score([1.0,0.0],[a,b,c],measure),[.81,.81,.72])
+            self.assertEqual(calls,[[a,c]])
+            self.assertEqual(cache.score([1.0,0.0],[b,c],measure),[.81,.72])
+            self.assertEqual(len(calls),1)
+            self.assertEqual(cache.describe(),{"hits":3,"measured":2,"failed":0,"entries":2})
+            cache.score([0.0,1.0],[a],measure)
+            self.assertEqual(len(calls),2)
+            b.write_bytes(b"new")
+            self.assertEqual(cache.score([1.0,0.0],[b],measure),[.72])
+            self.assertEqual(len(calls),3)
+
+    def test_failed_invalid_and_mutated_measurements_are_never_reused(self):
+        from tools.retake_cache import IdentityScoreCache
+        with tempfile.TemporaryDirectory() as directory:
+            a=Path(directory)/"probe.png";a.write_bytes(b"original")
+            cache=IdentityScoreCache()
+            for invalid in (None,[],[None],[float("nan")],[True],[1.1]):
+                self.assertEqual(cache.score([1.0],[a],lambda _:invalid),[None])
+                self.assertEqual(cache.describe()["entries"],0)
+            def mutate(_):
+                a.write_bytes(b"changed")
+                return [.95]
+            self.assertEqual(cache.score([1.0],[a],mutate),[None])
+            self.assertEqual(cache.score([1.0],[a],lambda _:[.75]),[.75])
+            self.assertEqual(cache.score([1.0],[a],lambda _:self.fail("must reuse")),[.75])
+            self.assertEqual(cache.score([1.0],[a.with_name("missing")],lambda _:self.fail("no image")),[None])
+
+    def test_cache_is_bounded_and_does_not_share_data_with_next_job(self):
+        from tools.retake_cache import IdentityScoreCache
+        with tempfile.TemporaryDirectory() as directory:
+            a,b=[Path(directory)/n for n in ("a","b")]
+            a.write_bytes(b"a");b.write_bytes(b"b")
+            cache=IdentityScoreCache(max_entries=1)
+            self.assertEqual(cache.score([1.0],[a,b],lambda _:[.8,.7]),[.8,.7])
+            self.assertEqual(cache.describe()["entries"],1)
+            self.assertEqual(cache.score([1.0],[a],lambda _:[.81]),[.81])
+            self.assertEqual(IdentityScoreCache().score([1.0],[a],lambda _:[.82]),[.82])
+
+
+    def test_mutated_duplicate_and_cached_alias_are_not_returned(self):
+        from tools.retake_cache import IdentityScoreCache
+        with tempfile.TemporaryDirectory() as directory:
+            a,b,c,d=[Path(directory)/n for n in ("a","b","c","d")]
+            a.write_bytes(b"same"); b.write_bytes(b"same")
+            c.write_bytes(b"cached"); d.write_bytes(b"cached")
+            cache=IdentityScoreCache()
+            self.assertEqual(cache.score([1.0],[c],lambda _:[.91]),[.91])
+            def measure(paths):
+                self.assertEqual(paths,[a])
+                b.write_bytes(b"mutated")
+                d.write_bytes(b"mutated again")
+                return [.81]
+            self.assertEqual(cache.score([1.0],[a,b,d],measure),[.81,None,None])
+            self.assertEqual(cache.describe()["hits"],0)
+            self.assertEqual(cache.describe()["failed"],2)

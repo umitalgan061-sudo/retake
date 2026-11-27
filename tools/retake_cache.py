@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import threading
 from collections import OrderedDict
@@ -192,3 +193,90 @@ class StageTimings:
             return None
         left = sum(self.seconds[stage] for stage in stages[current:])
         return max(0.0, left - max(0.0, elapsed_in_current))
+
+
+class IdentityScoreCache:
+    """Job-local, bounded reuse of successful measurements of identical bytes.
+
+    A score is scoped to the exact reference centroid and image bytes.
+    Never retain image bytes, embeddings, paths or failed measurements.
+    The caller constructs one instance per Ultra job, including all phases.
+    """
+    def __init__(self, max_entries=1024):
+        self.max_entries=max(1,min(4096,int(max_entries)))
+        self._entries=OrderedDict()
+        self.hits=0
+        self.measured=0
+        self.failed=0
+
+    def score(self, centroid, paths, measure):
+        values=[None]*len(paths)
+        if not centroid:
+            return values
+        try:
+            scope=json.dumps(centroid,separators=(",",":"),allow_nan=False)
+        except (ValueError,TypeError):
+            return values
+        groups={}
+        reused={}
+        def unchanged(index,key):
+            try:
+                return digest(scope,Path(paths[index]).read_bytes())==key
+            except OSError:
+                return False
+        for index,path in enumerate(paths):
+            try:
+                key=digest(scope,Path(path).read_bytes())
+            except OSError:
+                self.failed+=1
+                continue
+            if key in self._entries:
+                self._entries.move_to_end(key)
+                self.hits+=1
+                values[index]=self._entries[key]
+                reused[index]=key
+            else:
+                groups.setdefault(key,[]).append(index)
+        def verify_reused():
+            for index,key in reused.items():
+                if not unchanged(index,key):
+                    self.hits-=1
+                    self.failed+=1
+                    values[index]=None
+            return values
+        if not groups:
+            return verify_reused()
+        keys=list(groups)
+        probes=[paths[groups[key][0]] for key in keys]
+        self.measured+=len(probes)
+        try:
+            scores=measure(probes)
+        except Exception:
+            self.failed+=len(probes)
+            return verify_reused()
+        if not isinstance(scores,(tuple,list)) or len(scores)!=len(probes):
+            self.failed+=len(probes)
+            return verify_reused()
+        for key,value in zip(keys,scores):
+            indices=groups[key]
+            if type(value) not in (float,int) or not math.isfinite(value) or not -1<=value<=1:
+                self.failed+=len(indices)
+                continue
+            # The measurement must belong to the unchanged bytes we keyed.
+            if not unchanged(indices[0],key):
+                self.failed+=len(indices)
+                continue
+            self._entries[key]=float(value)
+            for position,idx in enumerate(indices):
+                if position and not unchanged(idx,key):
+                    self.failed+=1
+                    continue
+                if position:
+                    self.hits+=1
+                values[idx]=float(value)
+            while len(self._entries)>self.max_entries:
+                self._entries.popitem(last=False)
+        return verify_reused()
+
+    def describe(self):
+        return {"hits":self.hits,"measured":self.measured,"failed":self.failed,"entries":len(self._entries)}

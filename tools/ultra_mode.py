@@ -356,15 +356,27 @@ def choose_extra_variations(round_scores, winner_round, count=ULTRA_EXTRA_FINALI
 
 
 def defer_flux_retry(outcome, diagnostics):
-    """Spend the first extra finalist on identity instead of repeated bad diffusion."""
-    if outcome != "identity-loss":
+    """Reserve the next finalist for local search when diffusion shows no gain.
+
+    Only measured lack of improvement triggers a deferral; missing data does
+    not establish failure. This skips one editor retry, not the whole job.
+    """
+    if outcome not in ("identity-loss", "detail-gain-insufficient"):
         return False
     try:
         identity = float(diagnostics.get("X-Retake-FLUX-Identity-Delta", ""))
         detail = float(diagnostics.get("X-Retake-FLUX-Detail-Delta", ""))
     except (TypeError,ValueError):
         return False
-    return math.isfinite(identity) and math.isfinite(detail) and identity < -.03 and detail <= 0
+    if not math.isfinite(identity) or not math.isfinite(detail):
+        return False
+    if outcome == "identity-loss":
+        return identity < -.03 and detail <= 0
+    try:
+        skin = float(diagnostics.get("X-Retake-FLUX-Skin-Gain", ""))
+    except (TypeError,ValueError):
+        return False
+    return math.isfinite(skin) and identity <= .001 and detail <= .005 and skin <= .005
 
 
 # --- Quality depth (v23) ---------------------------------------------------

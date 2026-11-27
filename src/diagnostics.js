@@ -9,7 +9,7 @@ const HEALTH_KEYS = Object.freeze([
   "realism", "personal_model", "cuda", "ultra_learning", "self_test_benchmark",
   "neck_harmonization", "last_job_cleanup", "quality_revision", "regional_edit_evidence",
   "lower_face_texture_evidence", "native_input_recovery", "reference_appearance_tiebreak",
-  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard", "visible_identity_verification"
+  "finishing_identity_guard", "flux_texture_alternatives", "distinct_extra_search", "jury_local_quality_guard", "visible_identity_verification", "job_local_identity_score_cache"
 ]);
 const SECRET_NAME = /token|secret|key|pairing|auth|cookie|password/i;
 const MAX_VALUE = 300;
@@ -98,6 +98,8 @@ export function buildDiagnosticReport({ headers = {}, health = null, depth = "",
   if (timing) lines.push(timing);
   const evidence = summarizeQualityEvidence(headers);
   if (evidence) lines.push(evidence);
+  const reuse=describeIdentityScoreCache(headers["x-retake-identity-score-cache"]);
+  if(reuse)lines.push(reuse);
   const resultRevision = validQualityRevision(headers["x-retake-quality-revision"]);
   const currentRevision = validQualityRevision(health?.quality_revision);
   lines.push(`Sonucu üreten kalite sürümü: ${resultRevision || "doğrulanamadı (eski motor veya sonuç)"}`);
@@ -270,4 +272,14 @@ export function compareQualityBaseline(baseline,current) {
   if(Number.isFinite(baseline.metrics.seconds)&&Number.isFinite(current.metrics.seconds))
     lines.push("süre "+baseline.metrics.seconds+" → "+current.metrics.seconds+" sn");
   return "Yerel ölçüm kıyası (görsel kalite veya kimlik garantisi değil): "+lines.join(" · ");
+}
+
+
+export function describeIdentityScoreCache(value) {
+  if(typeof value!=="string")return "";
+  const match=/^hits:(\d{1,6}),measured:(\d{1,6}),failed:(\d{1,6})$/.exec(value);
+  if(!match)return "";
+  const [hits,measured,failed]=match.slice(1).map(Number);
+  return "ArcFace ölçüm önbelleği: "+hits+" tekrar ölçümü önlendi · "+
+    measured+" benzersiz ölçüm isteği · "+failed+" geçersiz/başarısız sonuç";
 }

@@ -331,3 +331,32 @@ class CandidateChoiceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReferenceCandidateResilienceTest(unittest.TestCase):
+    def test_structural_screening_precedes_total_score_ranking(self):
+        from unittest.mock import patch
+        points=synthetic_mesh()
+        target=textured(1)
+        refs=[(textured(2),points),(textured(3),points)]
+        with patch("tools.retake_detail.candidate_fit",side_effect=[
+            {"structure":.29,"light":1.,"score":.49},
+            {"structure":.36,"light":0.,"score":.36}]):
+            _,chosen,fits=choose_and_transplant(target,target,refs,points,140,
+                                              min_fit=.30,complete_face=True)
+        self.assertEqual(chosen,1)
+        self.assertEqual(len(fits),2)
+
+    def test_bad_reference_does_not_discard_valid_runner_up(self):
+        from unittest.mock import patch
+        points=synthetic_mesh()
+        target=textured(1)
+        invalid=points.copy();invalid[10,0]=float("nan")
+        refs=[(textured(2),invalid),(textured(3),points)]
+        with patch("tools.retake_detail.candidate_fit",return_value={"structure":.8,"light":.5,"score":.9}):
+            _,chosen,fits=choose_and_transplant(target,target,refs,points,140,
+                                              complete_face=True)
+            self.assertEqual(chosen,1)
+            self.assertEqual(len(fits),1)
+            with self.assertRaises(ValueError):
+                choose_and_transplant(target,target,refs[:1],points,140,complete_face=True)
